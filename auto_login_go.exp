@@ -1,0 +1,35 @@
+#!/usr/bin/expect -f
+set host [lindex $argv 0]
+set port [lindex $argv 1]
+set user [lindex $argv 2]
+set password [lindex $argv 3]
+set oath [lindex $argv 4]
+
+set timeout 20
+
+spawn ssh -p $port $user@$host
+match_max 100000
+
+expect {
+    "*assword*"
+    {
+    	 send -- "$password\n";exp_continue
+    }
+    "*passphrase*"
+    {
+    	send -- "$password\n";
+    }
+    "continue connecting"
+    {
+    	send -- "yes\n";exp_continue
+    }
+    "Last login"
+    {	
+	 #send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
+    }
+    "*MFA auth*"
+    {
+    	send -- "$oath\n"
+    }
+}
+interact

@@ -1,0 +1,55 @@
+#!/usr/bin/expect -f
+set host [lindex $argv 0]
+set port [lindex $argv 1]
+set user [lindex $argv 2]
+set password [lindex $argv 3]
+
+set s_host [lindex $argv 4]
+set s_port [lindex $argv 5]
+set s_user [lindex $argv 6]
+set s_password [lindex $argv 7]
+
+set level 0
+
+set timeout 20
+
+spawn ssh -p $port $user@$host
+match_max 100000
+
+expect {
+    "*assword*"
+    {
+       if {$level == 0} {
+            send -- "$password\n";
+		exp_continue
+        } else {
+            send -- "$s_password\n";exp_continue
+        }
+    }
+    "*passphrase*"
+    {
+        if {$level == 0} {
+            send -- "$password\n";exp_continue
+        } else {
+            send -- "$s_password\n";exp_continue
+        }
+    }
+    "continue connecting"
+    {
+        send -- "yes\n";exp_continue
+    }
+    "Last login"
+    {
+        if {$level == 0} {
+            if {$s_host == ""} {
+               # send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
+            } else {
+                set level 1
+                send -- "ssh -p $s_port $s_user@$s_host\n";exp_continue
+            }
+        } else {
+            #send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
+        }
+    }
+}
+interact
