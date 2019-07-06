@@ -55,6 +55,8 @@ brew install oath-toolkit
 # 命名(所谓关键字查找) screet 方式 
 ha Y3ZYADXJGLFJR6U2 totp
 ```
-
+#### 更新记录
+* 20190705 在sshgo原有的基础上增加MFA的支持 MFA 和pem 无法同时存在，后期考虑优化
+* 20190706 host文件中将#后面的文字作为选项备注显示在屏幕上 
 
 

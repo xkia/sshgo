@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import os,sys,re
+import os,sys
 import curses
 import locale
 import math
@@ -132,8 +132,14 @@ class SSHGO:
             node_user = node_infos[1] if len(node_infos) >= 2 else ''
             node_pass = node_infos[2] if len(node_infos) >= 3 else ''
             node_id_file = node_infos[3] if len(node_infos) == 4 else ''
+            node_name =  node_infos[4] if len(node_infos) == 5 else node_infos[0]
 
-            new_node = {'nest_parent':None,'level':tree_level,'expanded':expand,'line_number':line_number,'line':node_host,'user':node_user,'password':node_pass,'id_file':node_id_file,'sub_lines':[]}
+            # 如果host文件中包含注释的内容，则将注释的内容拼到选项中
+            if (node_host != node_name) :
+                node_name = node_host + '(' + node_name + ')'
+
+            # line 对象用于显示名称 
+            new_node = {'nest_parent':None,'level':tree_level,'expanded':expand,'line_number':line_number,'line':node_name,'user':node_user,'password':node_pass,'id_file':node_id_file,'host':node_host,'sub_lines':[]}
             nodes_pool.append(new_node)
             parent = find_parent_line(new_node)
 
@@ -350,7 +356,7 @@ class SSHGO:
             if nest_parent:
                 ssh = script_nest
 
-            host_info = re.split(':', node['line'].strip())
+            host_info = re.split(':', node['host'].strip())
 
             port = '22'
             host = ''
@@ -363,7 +369,7 @@ class SSHGO:
 
 
             if nest_parent:
-                nest_host_info = re.split(':', nest_parent['line'].strip())
+                nest_host_info = re.split(':', nest_parent['host'].strip())
 
                 nest_port = '22'
                 nest_host = ''
