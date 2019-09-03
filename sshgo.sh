@@ -1,4 +1,4 @@
 #!/bin/sh
 cd "`dirname $0`"
 BASE_HOME=`pwd`
-python3 ./sshgo_py3
+python3 ./sshgo3
