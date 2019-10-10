@@ -29,9 +29,6 @@ Refer to [ssh-auto-login](https://github.com/liaohuqiu/ssh-auto-login) and [sshg
  * alias sshgo='/path/to/ssh-auto-login-manage/sshgo'
 5. enjoy the `sshgo`.
 
-###screenshot
-![screenshot](https://github.com/upton/ssh-auto-login-manage/blob/master/screenshot.png)
-
 -----
 ### 说明
 
@@ -59,4 +56,5 @@ ha Y3ZYADXJGLFJR6U2 totp
 * 20190705 在sshgo原有的基础上增加MFA的支持 MFA 和pem 无法同时存在，后期考虑优化
 * 20190706 host文件中将#后面的文字作为选项备注显示在屏幕上 
 * 20190903 增加ssgho3对python3的支持，因系统安装的python为2版本，增加sshgo.sh文件来调整运行环境
+* 20191010 增加sftp的支持
 

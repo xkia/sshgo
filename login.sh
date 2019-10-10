@@ -10,6 +10,9 @@ id_file=$5
 if [ "$5" == "MFA" ]; then
 	oath=`./oath.sh`
 	./auto_login_go.exp $host $port $user $password $oath
+elif [ "$5" == "SFTP" ]; then
+	oath=`./oath.sh`
+	./auto_login_sftp.exp $host $port $user $password $oath
 elif [ $5 ] ; then
     	./auto_login_with_id_file.exp $host $port $user $id_file
 else
