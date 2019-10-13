@@ -13,6 +13,8 @@ if [ "$5" == "MFA" ]; then
 elif [ "$5" == "SFTP" ]; then
 	oath=`./oath.sh`
 	./auto_login_sftp.exp $host $port $user $password $oath
+elif [ "$5" == "TELNET" ]; then
+    	./auto_telnet.exp $host $port $user $id_file
 elif [ $5 ] ; then
     	./auto_login_with_id_file.exp $host $port $user $id_file
 else
