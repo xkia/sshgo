@@ -49,12 +49,12 @@ brew install oath-toolkit
 * 多screet维护在MFS.list文件中
 
 ```shell
-# 命名(所谓关键字查找) screet 方式 
+# 命名(所谓关键字查找) screet 方式
 ha Y3ZYADXJGLFJR6U2 totp
 ```
 #### 更新记录
 * 20190705 在sshgo原有的基础上增加MFA的支持 MFA 和pem 无法同时存在，后期考虑优化
-* 20190706 host文件中将#后面的文字作为选项备注显示在屏幕上 
+* 20190706 host文件中将#后面的文字作为选项备注显示在屏幕上
 * 20190903 增加ssgho3对python3的支持，因系统安装的python为2版本，增加sshgo.sh文件来调整运行环境
 * 20191010 增加sftp的支持
-* 20200301 增加jumpper跳板机直接登录到子服务器,修改node_name的获取方式以"# " 进行分割，获取"# "后面内容
+* 20200301 增加jumpper跳板机直接登录到子服务器,修改node_name的获取方式以"#"进行分割，如果长度大于等于2，获取下标为1的作为node_name,反之取node_host

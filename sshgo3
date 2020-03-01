@@ -51,8 +51,8 @@ def _get_known_hosts():
     return _dedup(hosts)
 
 def _get_host_name(line_con, node_host):
-    node_infos = line_con.split('# ', 1)
-    node_name = node_infos[1] if len(node_infos) == 2 else node_host
+    node_infos = line_con.split('#')
+    node_name = node_infos[1] if len(node_infos) >= 2 else node_host
     # 如果host文件中包含注释的内容，则将注释的内容拼到选项中
     if (node_host != node_name) :
         node_name = node_host + ' (' + node_name.strip() + ')'
@@ -386,7 +386,6 @@ class SSHGO:
                 exe_args = [ssh, nest_host, nest_port, nest_parent['user'], nest_parent['password'], nest_parent['id_file'], host, port, node['user'], node['password']]
             else:
                 exe_args = [ssh, host, port, node['user'], node['password'], node['id_file']]
-            # print(exe_args)
             os.execvp(ssh, exe_args)
 
     def render_screen(self):
