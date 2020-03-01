@@ -4,7 +4,7 @@ BASE_HOME=`pwd`
 g_list="./MFA.list"
 if [ $# -ne 1 ]
 then
-    n=ha
+	n=ha
 else
 	n=$1
 fi
@@ -14,9 +14,9 @@ code=`echo $line|awk '{print $2}'`
 type=`echo $line|awk '{print $3}'`
 if [ "$fix" == "$n" ]
 then
-	pwd=$(oathtool --${type} -b -d 6 ${code}) 
+	pwd=$(oathtool --${type} -b -d 6 ${code})
 	echo $pwd
-else 
+else
 	echo "not find !"
 fi
 exit 0

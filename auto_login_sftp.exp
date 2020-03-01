@@ -9,7 +9,6 @@ set host [lindex $argv 0]
 set port [lindex $argv 1]
 set user [lindex $argv 2]
 set password [lindex $argv 3]
-set oath [lindex $argv 4]
 
 set timeout 20
 
@@ -17,9 +16,9 @@ spawn sftp -P $port $user@$host
 match_max 100000
 
 expect {
-    "*assword*"
+    "*password:"
     {
-    	 send -- "$password\n";exp_continue
+    	send -- "$password\n";exp_continue
     }
     "*passphrase*"
     {
@@ -30,11 +29,12 @@ expect {
     	send -- "yes\n";exp_continue
     }
     "Last login"
-    {	
-	 #send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
-    }
-    "*MFA auth*"
     {
+    	#send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
+    }
+    "*MFA auth]"
+    {
+    	set oath [exec sh -c {./oath.sh}]
     	send -- "$oath\n"
     }
 }

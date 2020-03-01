@@ -16,8 +16,8 @@ match_max 100000
 
 expect {
     "Escape character*"
-    {	
-	 #send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
+    {
+    	#send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
     }
 }
 interact

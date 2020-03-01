@@ -17,14 +17,13 @@ set s_user [lindex $argv 6]
 set s_password [lindex $argv 7]
 
 set level 0
-
 set timeout 20
 
 spawn ssh -p $port $user@$host
 match_max 100000
 
 expect {
-    "*assword*"
+    "*password:"
     {
        if {$level == 0} {
             send -- "$password\n";

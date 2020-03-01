@@ -14,8 +14,7 @@ s_user=$8
 s_password=$9
 
 if [ "$type" == "MFA" ]; then
-    oath=`./oath.sh`
-    ./auto_go.exp $host $port $user $password $oath $s_host $s_user
+    ./auto_go.exp $host $port $user $password $s_host $s_user
 else
     ./auto_login_jumper.exp $host $port $user $password $s_host $s_port $s_user $s_password
 fi

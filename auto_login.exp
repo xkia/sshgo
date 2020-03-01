@@ -17,9 +17,9 @@ spawn ssh -p $port $user@$host
 match_max 100000
 
 expect {
-    "*assword*"
+    "*password:"
     {
-    	 send -- "$password\n";
+    	send -- "$password\n";
     }
     "*passphrase*"
     {
@@ -30,8 +30,8 @@ expect {
     	send -- "yes\n";exp_continue
     }
     "Last login"
-    {	
-	 #send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
+    {
+    	#send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
     }
 }
 interact
