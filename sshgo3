@@ -50,6 +50,14 @@ def _get_known_hosts():
         fp.close()
     return _dedup(hosts)
 
+def _get_host_name(line_con, node_host):
+    node_infos = line_con.split('# ', 1)
+    node_name = node_infos[1] if len(node_infos) == 2 else node_host
+    # 如果host文件中包含注释的内容，则将注释的内容拼到选项中
+    if (node_host != node_name) :
+        node_name = node_host + ' (' + node_name.strip() + ')'
+    return node_name
+
 class SSHGO:
 
     UP = -1
@@ -81,7 +89,7 @@ class SSHGO:
 
     def _parse_tree_from_config_file(self, config_file):
         tree = {'line_number':None,'expanded':True,'line':None,'sub_lines':[]}
-        
+
         def find_parent_line(new_node):
             line_number = new_node['line_number']
             level = new_node['level']
@@ -126,19 +134,13 @@ class SSHGO:
                 _assert(line_level <= tree_level
                         or line_level == tree_level + 1, 'invalid indent,line:' + str(line_number))
             tree_level = line_level
-
             node_infos = re.split(r'\s+', line_con.strip())
             node_host = node_infos[0] if len(node_infos) >= 2 else line_con
             node_user = node_infos[1] if len(node_infos) >= 2 else ''
             node_pass = node_infos[2] if len(node_infos) >= 3 else ''
             node_id_file = node_infos[3] if len(node_infos) == 4 else ''
-            node_name =  node_infos[4] if len(node_infos) == 5 else node_infos[0]
-
-            # 如果host文件中包含注释的内容，则将注释的内容拼到选项中
-            if (node_host != node_name) :
-                node_name = node_host + '(' + node_name + ')'
-
-            # line 对象用于显示名称 
+            node_name = _get_host_name(line_con, node_host)
+            # line 对象用于显示名称
             new_node = {'nest_parent':None,'level':tree_level,'expanded':expand,'line_number':line_number,'line':node_name,'user':node_user,'password':node_pass,'id_file':node_id_file,'host':node_host,'sub_lines':[]}
             nodes_pool.append(new_node)
             parent = find_parent_line(new_node)
@@ -152,6 +154,7 @@ class SSHGO:
             parent['sub_lines'].append(new_node)
 
         return tree, nodes_pool
+
 
 
     def __init__(self, config_file):
@@ -380,10 +383,10 @@ class SSHGO:
                 else:
                     nest_host = nest_host_info[0]
 
-                exe_args = [ssh, nest_host, nest_port, nest_parent['user'], nest_parent['password'], host, port, node['user'], node['password']]
+                exe_args = [ssh, nest_host, nest_port, nest_parent['user'], nest_parent['password'], nest_parent['id_file'], host, port, node['user'], node['password']]
             else:
                 exe_args = [ssh, host, port, node['user'], node['password'], node['id_file']]
-            
+            # print(exe_args)
             os.execvp(ssh, exe_args)
 
     def render_screen(self):

@@ -57,4 +57,4 @@ ha Y3ZYADXJGLFJR6U2 totp
 * 20190706 host文件中将#后面的文字作为选项备注显示在屏幕上 
 * 20190903 增加ssgho3对python3的支持，因系统安装的python为2版本，增加sshgo.sh文件来调整运行环境
 * 20191010 增加sftp的支持
-
+* 20200301 增加jumpper跳板机直接登录到子服务器
