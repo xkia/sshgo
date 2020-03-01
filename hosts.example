@@ -2,6 +2,7 @@ deploy
     1.1.1.1  user1  password1
     2.2.2.2  user2  #use Public key authentication
     3.3.3.3  user3 -i /path/to/id_file.pem  #use id file to login
+    7.7.7.7  user4  password2 MFA # MFA方式进行验证
 Online-1
     4.4.4.4 user password #the first node will default as the below server's jumper server,if below server with section of indent
     intenal.server # below servers will use 4.4.4.4 as the jumper server
