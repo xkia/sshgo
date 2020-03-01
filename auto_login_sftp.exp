@@ -1,6 +1,4 @@
 #!/usr/bin/expect -f
-# 捕获 WINCH 信号，并传递给 Spawned 出来的 Children，
-# 这样 ssh 的 TTY 就能随着窗口 resize 而适应。
 trap {
     set rows [stty rows]
     set cols [stty columns]
@@ -13,13 +11,14 @@ set user [lindex $argv 2]
 set password [lindex $argv 3]
 
 set timeout 20
-spawn ssh -p $port $user@$host
+
+spawn sftp -P $port $user@$host
 match_max 100000
 
 expect {
     "*password:"
     {
-    	send -- "$password\n";
+    	send -- "$password\n";exp_continue
     }
     "*passphrase*"
     {
@@ -32,6 +31,11 @@ expect {
     "Last login"
     {
     	#send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
+    }
+    "*MFA auth]"
+    {
+    	set oath [exec sh -c {./oath.sh}]
+    	send -- "$oath\n"
     }
 }
 interact
