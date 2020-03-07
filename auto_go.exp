@@ -32,7 +32,7 @@ expect {
     }
     "*MFA auth]"
     {
-    	#set oath [exec sh -c {./oath.sh}]
+	#set oath [exec oathtool --totp -b -d 6 $secret]
     	set oath [exec python ./auth.py $secret]
     	send -- "$oath\n";exp_continue
     }
