@@ -60,3 +60,4 @@ ha Y3ZYADXJGLFJR6U2 totp
 * 20200301 
     * 增加jumpper跳板机直接登录到子服务器,修改node_name的获取方式以"#"进行分割，如果长度大于等于2，获取下标为1的作为node_name,反之取node_host
     * 调整MFA秘钥获取时机，变相在多层级网络时实现了MFA重新获取
+* 20200308 增加python计算mfa，避免依赖oath-toolkit, 以及可secret配置在host文件中

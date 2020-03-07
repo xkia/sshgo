@@ -9,8 +9,9 @@ set host [lindex $argv 0]
 set port [lindex $argv 1]
 set user [lindex $argv 2]
 set password [lindex $argv 3]
-set s_host [lindex $argv 4]
-set s_user [lindex $argv 5]
+set secret [lindex $argv 4]
+set s_host [lindex $argv 5]
+set s_user [lindex $argv 6]
 
 set timeout 20
 spawn ssh -p $port $user@$host
@@ -29,13 +30,10 @@ expect {
     {
     	send -- "yes\n";exp_continue
     }
-    "Last login"
-    {
-       #send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
-    }
     "*MFA auth]"
     {
-    	set oath [exec sh -c {./oath.sh}]
+    	#set oath [exec sh -c {./oath.sh}]
+    	set oath [exec python ./auth.py $secret]
     	send -- "$oath\n";exp_continue
     }
     "Opt>"
@@ -45,6 +43,10 @@ expect {
     "ID>"
     {
     	send -- "$s_user\n";exp_continue
+    }
+    "Last login"
+    {
+       #send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
     }
 }
 interact
