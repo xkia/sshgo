@@ -13,8 +13,6 @@ if [[ "$type" =~ ^MFA* ]]; then
 elif [[ "$type" =~ ^SFTP* ]]; then
 	secret=${type#*SFTP:}
 	./auto_login.exp $host $port $user $password "sftp" $secret
-elif [ "$type" == "TELNET" ]; then
-	./auto_telnet.exp $host $port
 elif [ $type ] ; then
 	./auto_login_with_id_file.exp $host $port $user $type
 else
