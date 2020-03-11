@@ -30,7 +30,7 @@ expect {
     {
     	send -- "yes\n";exp_continue
     }
-    "*MFA auth]"
+    "MFA auth"
     {
 	#set oath [exec oathtool --totp -b -d 6 $secret]
     	set oath [exec python ./auth.py $secret]
@@ -45,8 +45,8 @@ expect {
     	send -- "$s_user\n";exp_continue
     }
     "Last login"
-    {
-       #send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
+    {	
+       # send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
     }
 }
 interact

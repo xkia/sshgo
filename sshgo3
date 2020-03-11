@@ -51,7 +51,7 @@ def _get_known_hosts():
     return _dedup(hosts)
 
 def _get_host_name(line_con, node_host):
-    node_infos = line_con.split('#')
+    node_infos = line_con.split('# ')
     node_name = node_infos[1] if len(node_infos) >= 2 else node_host
     # 如果host文件中包含注释的内容，则将注释的内容拼到选项中
     if (node_host != node_name) :
