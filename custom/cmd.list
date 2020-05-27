@@ -1,2 +1,5 @@
-dohko_cd:cd /hualalalog/dohko-volume
-online_cd:cd /home/logs
+dc:cd /hualalalog/dohko-volume
+dcc:cd /hualalalog/dohko-volume/shop-crm-service21
+dcd:cd /hualalalog/dohko-volume/shop-crm-document
+oc:cd /home/logs
+ol:cd /logs

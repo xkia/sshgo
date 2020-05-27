@@ -12,7 +12,7 @@ locale.setlocale(locale.LC_ALL, '')
 script = sys.path[0] + "/login.sh"
 script_nest = sys.path[0] + "/login_nest.sh"
 sshHosts = sys.path[0] + "/hosts"
-
+sarg = ''
 def _assert(exp, err):
     if not exp:
         print(err, file=sys.stderr)
@@ -383,7 +383,7 @@ class SSHGO:
                 else:
                     nest_host = nest_host_info[0]
 
-                exe_args = [ssh, nest_host, nest_port, nest_parent['user'], nest_parent['password'], nest_parent['id_file'], host, port, node['user'], node['password']]
+                exe_args = [ssh, nest_host, nest_port, nest_parent['user'], nest_parent['password'], nest_parent['id_file'], host, port, node['user'], node['password'], sarg]
             else:
                 exe_args = [ssh, host, port, node['user'], node['password'], node['id_file']]
             os.execvp(ssh, exe_args)
@@ -502,5 +502,7 @@ if __name__ == '__main__':
         print('hosts is not found, create it', file=sys.stderr)
         fp = open(host_file, 'w')
         fp.close()
+    if len(args) > 1:
+        sarg = args[1]
 
     sshgo = SSHGO(host_file)
