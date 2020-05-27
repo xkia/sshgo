@@ -12,6 +12,7 @@ set password [lindex $argv 3]
 set secret [lindex $argv 4]
 set s_host [lindex $argv 5]
 set s_user [lindex $argv 6]
+set s_password [lindex $argv 7]
 
 set timeout 20
 spawn ssh -p $port $user@$host
@@ -46,6 +47,8 @@ expect {
     }
     "Last login"
     {	
+	set cmd [exec ./custom/fcmd.sh $s_password]
+	send -- "$cmd\n"
        # send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
     }
 }

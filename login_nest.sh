@@ -15,7 +15,7 @@ s_password=$9
 
 if [[ "$type" =~ ^MFA* ]]; then
     secret=${type#*MFA:}
-    ./auto_go.exp $host $port $user $password $secret $s_host $s_user 
+    ./auto_go.exp $host $port $user $password $secret $s_host $s_user $s_password
 else
     ./auto_login_jumper.exp $host $port $user $password $s_host $s_port $s_user $s_password
 fi
