@@ -1,5 +1,5 @@
-dc:cd /hualalalog/dohko-volume
-dcc:cd /hualalalog/dohko-volume/shop-crm-service21
-dcd:cd /hualalalog/dohko-volume/shop-crm-document
+dv:cd /hualalalog/dohko-volume
+dcs:cd /hualalalog/dohko-volume/shop-crm-service21 && ll -rt
+dcd:cd /hualalalog/dohko-volume/shop-crm-document && ll -rt
 oc:cd /home/logs
 ol:cd /logs
