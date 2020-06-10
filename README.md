@@ -32,3 +32,4 @@ SSH auto login without password and managing ssh hosts list on Mac OSX & Linux.
 brew install oath-toolkit
 ```
 增加python计算mfa，避免依赖oath-toolkit, 以及可secret配置在host文件中
+jumper模式，增加命令行参数命令，可从cmd.list中查找，在系统登录完成后执行该命令。
