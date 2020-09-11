@@ -11,15 +11,22 @@ set host [lindex $argv 0]
 set port [lindex $argv 1]
 set user [lindex $argv 2]
 set password [lindex $argv 3]
+set ssh_type [lindex $argv 4]
+set secret [lindex $argv 5]
 
 set timeout 20
-spawn ssh -p $port $user@$host
+if {$ssh_type eq "sftp"} {
+    spawn sftp -P $port $user@$host
+} else {
+    spawn ssh -p $port $user@$host
+}
 match_max 100000
 
 expect {
     "*password:"
     {
     	send -- "$password\n";
+	exp_continue
     }
     "*passphrase*"
     {
@@ -28,6 +35,12 @@ expect {
     "continue connecting"
     {
     	send -- "yes\n";exp_continue
+    }
+    "MFA auth"
+    {
+	#set oath [exec oathtool --totp -b -d 6 $secret]
+	set oath [exec python ./auth.py $secret]
+	send -- "$oath\n";
     }
     "Last login"
     {
