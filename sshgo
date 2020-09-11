@@ -12,17 +12,17 @@ locale.setlocale(locale.LC_ALL, '')
 script = sys.path[0] + "/login.sh"
 script_nest = sys.path[0] + "/login_nest.sh"
 sshHosts = sys.path[0] + "/hosts"
-
+sarg = ''
 def _assert(exp, err):
     if not exp:
-        print >>sys.stderr,err
+        print(err, file=sys.stderr)
         sys.exit(1)
 
 def _dedup(ls):
     table = {}
     for item in ls:
         table[item] = None
-    ls_dedup = table.keys()
+    ls_dedup = list(table.keys())
     ls_dedup.sort()
     return ls_dedup
 
@@ -49,6 +49,14 @@ def _get_known_hosts():
     finally:
         fp.close()
     return _dedup(hosts)
+
+def _get_host_name(line_con, node_host):
+    node_infos = line_con.split('# ')
+    node_name = node_infos[1] if len(node_infos) >= 2 else node_host
+    # 如果host文件中包含注释的内容，则将注释的内容拼到选项中
+    if (node_host != node_name) :
+        node_name = node_host + ' (' + node_name.strip() + ')'
+    return node_name
 
 class SSHGO:
 
@@ -81,7 +89,7 @@ class SSHGO:
 
     def _parse_tree_from_config_file(self, config_file):
         tree = {'line_number':None,'expanded':True,'line':None,'sub_lines':[]}
-        
+
         def find_parent_line(new_node):
             line_number = new_node['line_number']
             level = new_node['level']
@@ -126,19 +134,13 @@ class SSHGO:
                 _assert(line_level <= tree_level
                         or line_level == tree_level + 1, 'invalid indent,line:' + str(line_number))
             tree_level = line_level
-
             node_infos = re.split(r'\s+', line_con.strip())
             node_host = node_infos[0] if len(node_infos) >= 2 else line_con
             node_user = node_infos[1] if len(node_infos) >= 2 else ''
             node_pass = node_infos[2] if len(node_infos) >= 3 else ''
             node_id_file = node_infos[3] if len(node_infos) == 4 else ''
-            node_name =  node_infos[4] if len(node_infos) == 5 else node_infos[0]
-
-            # 如果host文件中包含注释的内容，则将注释的内容拼到选项中
-            if (node_host != node_name) :
-                node_name = node_host + '(' + node_name + ')'
-
-            # line 对象用于显示名称 
+            node_name = _get_host_name(line_con, node_host)
+            # line 对象用于显示名称
             new_node = {'nest_parent':None,'level':tree_level,'expanded':expand,'line_number':line_number,'line':node_name,'user':node_user,'password':node_pass,'id_file':node_id_file,'host':node_host,'sub_lines':[]}
             nodes_pool.append(new_node)
             parent = find_parent_line(new_node)
@@ -152,6 +154,7 @@ class SSHGO:
             parent['sub_lines'].append(new_node)
 
         return tree, nodes_pool
+
 
 
     def __init__(self, config_file):
@@ -380,10 +383,9 @@ class SSHGO:
                 else:
                     nest_host = nest_host_info[0]
 
-                exe_args = [ssh, nest_host, nest_port, nest_parent['user'], nest_parent['password'], host, port, node['user'], node['password']]
+                exe_args = [ssh, nest_host, nest_port, nest_parent['user'], nest_parent['password'], nest_parent['id_file'], host, port, node['user'], node['password'], sarg]
             else:
                 exe_args = [ssh, host, port, node['user'], node['password'], node['id_file']]
-            
             os.execvp(ssh, exe_args)
 
     def render_screen(self):
@@ -442,7 +444,7 @@ class SSHGO:
                 self.screen.addstr(index, 0, prefix, curses.color_pair(self.COLOR_RED_HIGH))
                 self.screen.addstr(index, len(prefix), line, curses.color_pair(self.COLOR_HIGHLIGHT))
         #render scroll bar
-        for i in xrange(screen_lines):
+        for i in range(screen_lines):
             self.screen.addstr(i, screen_cols - 2, '|', curses.color_pair(self.COLOR_WBG))
 
         scroll_top = int(math.ceil((self.top_line_number + 1.0) / max(len(all_nodes), screen_lines) * screen_lines - 1))
@@ -497,8 +499,10 @@ if __name__ == '__main__':
     if options.config is not None:
         host_file = options.config
     if not os.path.exists(host_file):
-        print >>sys.stderr,'hosts is not found, create it'
+        print('hosts is not found, create it', file=sys.stderr)
         fp = open(host_file, 'w')
         fp.close()
+    if len(args) > 1:
+        sarg = args[1]
 
     sshgo = SSHGO(host_file)
