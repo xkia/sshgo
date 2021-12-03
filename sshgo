@@ -6,6 +6,7 @@ import curses
 import locale
 import math
 import re
+import linecache
 from optparse import OptionParser
 locale.setlocale(locale.LC_ALL, '')
 
@@ -488,6 +489,19 @@ class SSHGO:
     def __del__(self):
         self.restore_screen()
 
+def login_main_host(host_file, sarg):
+    # 解析文件,获取第二行相关配置, 默认第二行为默认配置
+    # TODO 优化node info获取节点的名称,目前含义有些模糊
+    default_conf_line = linecache.getline(host_file, 2)
+    default_node_infos = re.split(r'\s+', default_conf_line.strip())
+    default_node_host = default_node_infos[0] if len(default_node_infos) >= 2 else default_conf_line
+    default_node_user = default_node_infos[1] if len(default_node_infos) >= 2 else ''
+    default_node_pass = default_node_infos[2] if len(default_node_infos) >= 3 else ''
+    default_node_id_file = default_node_infos[3] if len(default_node_infos) == 4 else ''
+    default_host_info = re.split(':', default_node_host.strip())
+    ssh = script
+    exe_args = [ssh, default_host_info[0], default_host_info[1], default_node_user, default_node_pass, default_node_id_file, sarg]
+    os.execvp(ssh, exe_args)
 
 if __name__ == '__main__':
     parser = OptionParser()
@@ -504,5 +518,10 @@ if __name__ == '__main__':
         fp.close()
     if len(args) > 1:
         sarg = args[1]
-
-    sshgo = SSHGO(host_file)
+        if re.match("\d+\.\d+", str(sarg), flags=0) is not None:
+            # 如果匹配到输入的是ip格式(包含完整或者一部分的ipv4, 即 xxx.xxx)
+            login_main_host(host_file, sarg)
+        else:
+            sshgo = SSHGO(host_file)
+    else:
+        sshgo = SSHGO(host_file)
