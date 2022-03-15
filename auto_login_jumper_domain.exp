@@ -13,6 +13,7 @@ set user [lindex $argv 2]
 set password [lindex $argv 3]
 set ssh_type [lindex $argv 4]
 set secret [lindex $argv 5]
+set sarg [lindex $argv 6]
 
 set timeout 20
 if {$ssh_type eq "sftp"} {
@@ -40,7 +41,11 @@ expect {
     {
 	#set oath [exec oathtool --totp -b -d 6 $secret]
 	set oath [exec python3 ./auth.py $secret]
-	send -- "$oath\n";
+	send -- "$oath\n";exp_continue
+    }
+    "Opt>"
+    {
+    	send -- "$sarg\n";
     }
     "Last login"
     {
