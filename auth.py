@@ -1,4 +1,5 @@
-#!/usr/bin/python
+#! /usr/bin/python3
+# -*- coding: utf-8 -*
 
 import hmac, base64, struct, hashlib, time, json, os, sys
 

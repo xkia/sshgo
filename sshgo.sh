@@ -2,4 +2,4 @@
 cd "`dirname $0`"
 BASE_HOME=`pwd`
 
-python3 ./sshgo $1
+python3 ./sshgo.py $1
