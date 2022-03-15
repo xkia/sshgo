@@ -13,7 +13,6 @@ set secret [lindex $argv 4]
 set s_host [lindex $argv 5]
 set s_user [lindex $argv 6]
 set s_password [lindex $argv 7]
-set s_arg [lindex $argv 8]
 
 set timeout 20
 spawn ssh -p $port $user@$host
@@ -35,7 +34,7 @@ expect {
     "MFA auth"
     {
 	#set oath [exec oathtool --totp -b -d 6 $secret]
-    	set oath [exec python ./auth.py $secret]
+    	set oath [exec python3 ./auth.py $secret]
     	send -- "$oath\n";exp_continue
     }
     "Opt>"
@@ -48,10 +47,6 @@ expect {
     }
     "Last login"
     {
- 	set cmd [exec ./custom/fcmd.sh $s_arg]
-	if {$cmd != ""} {
-	    send -- "$cmd\n"
-	}
        # send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
     }
 }
