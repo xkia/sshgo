@@ -25,11 +25,11 @@ SSH auto login without password and managing ssh hosts list on Mac OSX & Linux.
 -----
 ### 说明
 * 针对部分服务器登录后的最后一句话非"Last login"，因此将需要jumper和直连的进行了拆分:auto_login.exp(直连方式)，auto_login_jumper.exp (跳板方式)
-* 其次，增加了部分服务器对MFA验证的支持，引入"[oath-toolkit](https://www.nongnu.org/oath-toolkit/)"工具，进行二次登录验证码的获取，实现脚本文件为"oath.sh"，维护多screet
+* 其次，增加了部分服务器对MFA验证的支持，引入"[oath-toolkit](https://www.nongnu.org/oath-toolkit/)"工具，进行二次登录验证码的获取，维护多screet
+* 增加python计算二次登陆验证码,可减少安装的依赖,auth.py
 
 ```shell
 # aoth-toolkit 工具的安装可借助brew进行安装
 brew install oath-toolkit
 ```
 增加python计算mfa，避免依赖oath-toolkit, 以及可secret配置在host文件中
-jumper模式，增加命令行参数命令，可从cmd.list中查找，在系统登录完成后执行该命令。
