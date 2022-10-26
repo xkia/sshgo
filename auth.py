@@ -1,7 +1,7 @@
 #! /usr/bin/python3
 # -*- coding: utf-8 -*
 
-import hmac, base64, struct, hashlib, time, json, os, sys
+import hmac, base64, struct, hashlib, time, sys
 
 def get_hotp_token(secret, intervals_no):
 	"""This is where the magic happens."""
