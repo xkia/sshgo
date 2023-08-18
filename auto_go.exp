@@ -18,7 +18,11 @@ set timeout 20
 spawn ssh -p $port $user@$host
 match_max 100000
 
+
 expect {
+    "*没有资产*" {
+        # 命中此部分,则终止匹配,交由用户介入
+    }
     "*password:"
     {
     	send -- "$password\n";exp_continue
@@ -33,7 +37,6 @@ expect {
     }
     "MFA auth"
     {
-	#set oath [exec oathtool --totp -b -d 6 $secret]
     	set oath [exec python3 ./auth.py $secret]
     	send -- "$oath\n";exp_continue
     }
