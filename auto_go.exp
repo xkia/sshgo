@@ -40,6 +40,11 @@ expect {
     	set oath [exec python3 ./auth.py $secret]
     	send -- "$oath\n";exp_continue
     }
+    "*OTP Code*"
+    {
+    	set oath [exec python3 ./auth.py $secret]
+    	send -- "$oath\n";exp_continue
+    }
     "Opt>"
     {
     	send -- "$s_host\n";exp_continue
