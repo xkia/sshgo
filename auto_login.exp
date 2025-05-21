@@ -42,6 +42,12 @@ expect {
 	set oath [exec python3 ./auth.py $secret]
 	send -- "$oath\n";
     }
+    "*OTP Code*"
+    {
+	#set oath [exec oathtool --totp -b -d 6 $secret]
+	set oath [exec python3 ./auth.py $secret]
+	send -- "$oath\n";
+    }
     "Last login"
     {
     	#send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"

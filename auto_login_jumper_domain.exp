@@ -43,6 +43,12 @@ expect {
 	set oath [exec python3 ./auth.py $secret]
 	send -- "$oath\n";exp_continue
     }
+    "*OTP Code*"
+    {
+	#set oath [exec oathtool --totp -b -d 6 $secret]
+	set oath [exec python3 ./auth.py $secret]
+	send -- "$oath\n";exp_continue
+    }
     "Opt>"
     {
     	send -- "$sarg\n";

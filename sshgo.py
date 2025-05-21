@@ -14,7 +14,7 @@ locale.setlocale(locale.LC_ALL, "")
 script = sys.path[0] + "/login.sh"
 script_nest = sys.path[0] + "/login_nest.sh"
 sshHosts = sys.path[0] + "/hosts"
-
+ipv4_two_nodes_pattern = r'\b(?:[0-9]{1,3}\.){1,2}[0-9]{1,3}\b'
 
 def _assert(exp, err):
     if not exp:
@@ -614,7 +614,7 @@ if __name__ == "__main__":
         fp.close()
     if len(args) > 1:
         sarg = args[1]
-        if re.match("\d+\.\d+", str(sarg), flags=0) is not None:
+        if re.findall(ipv4_two_nodes_pattern, str(sarg)) is not None:
             # 如果匹配到输入的是ip格式(包含完整或者一部分的ipv4, 即 xxx.xxx)
             login_main_host(host_file, sarg)
         else:
