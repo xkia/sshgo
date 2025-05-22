@@ -80,7 +80,6 @@ expect {
     "Last login"
     {
         # 登录成功标志，继续等待后续输出，避免提前结束 expect
-        exp_continue
     }
 }
 
