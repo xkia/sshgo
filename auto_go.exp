@@ -1,20 +1,29 @@
 #!/usr/bin/expect -f
+
+# 自动根据窗口大小调整 SSH TTY
 trap {
     set rows [stty rows]
     set cols [stty columns]
     stty rows $rows columns $cols < $spawn_out(slave,name)
 } WINCH
 
-set host [lindex $argv 0]
-set port [lindex $argv 1]
-set user [lindex $argv 2]
-set password [lindex $argv 3]
-set secret [lindex $argv 4]
-set s_host [lindex $argv 5]
-set s_user [lindex $argv 6]
+set host       [lindex $argv 0]
+set port       [lindex $argv 1]
+set user       [lindex $argv 2]
+set password   [lindex $argv 3]
+set secret     [lindex $argv 4]
+set s_host     [lindex $argv 5]
+set s_user     [lindex $argv 6]
 set s_password [lindex $argv 7]
 
+set script_dir [file dirname [file normalize [info script]]]
+set auth_py [file join $script_dir "auth.py"]
+
+# 控制变量
 set timeout 20
+set opt_sent 0
+set id_sent 0
+
 spawn ssh -p $port $user@$host
 match_max 100000
 
@@ -25,37 +34,46 @@ expect {
     }
     "*password:"
     {
-    	send -- "$password\n";exp_continue
+        send -- "$password\r"
+        exp_continue
     }
     "*passphrase*"
     {
-    	send -- "$password\n";
+        send -- "$password\r"
     }
     "continue connecting"
     {
-    	send -- "yes\n";exp_continue
+        send -- "yes\r"
+        exp_continue
     }
-    "MFA auth"
+    -re "(?i)(MFA auth|OTP Code)" 
     {
-    	set oath [exec python3 ./auth.py $secret]
-    	send -- "$oath\n";exp_continue
+        # MFA 或 OTP，合并处理，获取 auth.py 路径
+        set oath [exec python3 $auth_py $secret]
+        send -- "$oath\r"
+        exp_continue
     }
-    "*OTP Code*"
+    "Opt>" 
     {
-    	set oath [exec python3 ./auth.py $secret]
-    	send -- "$oath\n";exp_continue
+        # 处理自定义选项提示，发送选项参数，确保只发送一次
+        if {$opt_sent == 0} {
+            send -- "$sarg\r"
+            set opt_sent 1
+        }
+        exp_continue
     }
-    "Opt>"
+    "ID>" 
     {
-    	send -- "$s_host\n";exp_continue
-    }
-    "ID>"
-    {
-    	send -- "$s_user\n";exp_continue
+        # 处理 ID 选择提示，发送固定选项，确保只发送一次
+        if {$id_sent == 0} {
+            send -- "1\r"
+            set id_sent 1
+        }
+        exp_continue
     }
     "Last login"
     {
-       # send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
+       # send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\r"
     }
 }
 interact

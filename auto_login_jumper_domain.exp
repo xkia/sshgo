@@ -1,21 +1,30 @@
 #!/usr/bin/expect -f
-# 捕获 WINCH 信号，并传递给 Spawned 出来的 Children，
-# 这样 ssh 的 TTY 就能随着窗口 resize 而适应。
+
+# 自动根据窗口大小调整 SSH TTY
 trap {
     set rows [stty rows]
     set cols [stty columns]
     stty rows $rows columns $cols < $spawn_out(slave,name)
 } WINCH
 
-set host [lindex $argv 0]
-set port [lindex $argv 1]
-set user [lindex $argv 2]
+# 参数读取
+set host     [lindex $argv 0]
+set port     [lindex $argv 1]
+set user     [lindex $argv 2]
 set password [lindex $argv 3]
 set ssh_type [lindex $argv 4]
-set secret [lindex $argv 5]
-set sarg [lindex $argv 6]
+set secret   [lindex $argv 5]
+set sarg     [lindex $argv 6]
 
+set script_dir [file dirname [file normalize [info script]]]
+set auth_py [file join $script_dir "auth.py"]
+
+# 控制变量
 set timeout 20
+set opt_sent 0
+set id_sent 0
+
+# 启动 SSH 或 SFTP
 if {$ssh_type eq "sftp"} {
     spawn sftp -P $port $user@$host
 } else {
@@ -23,39 +32,57 @@ if {$ssh_type eq "sftp"} {
 }
 match_max 100000
 
+# 主匹配逻辑
 expect {
     "*password:"
     {
-    	send -- "$password\n";
-	exp_continue
+        # 处理密码提示，发送密码
+        send -- "$password\r"
+        exp_continue
     }
     "*passphrase*"
     {
-    	send -- "$password\n";
+        # 处理私钥口令提示，发送密码
+        send -- "$password\r"
+        exp_continue
     }
     "continue connecting"
     {
-    	send -- "yes\n";exp_continue
+        # 首次连接时确认主机指纹
+        send -- "yes\r"
+        exp_continue
     }
-    "MFA auth"
+    -re "(?i)(MFA auth|OTP Code)"
     {
-	#set oath [exec oathtool --totp -b -d 6 $secret]
-	set oath [exec python3 ./auth.py $secret]
-	send -- "$oath\n";exp_continue
-    }
-    "*OTP Code*"
-    {
-	#set oath [exec oathtool --totp -b -d 6 $secret]
-	set oath [exec python3 ./auth.py $secret]
-	send -- "$oath\n";exp_continue
+        # MFA 或 OTP，合并处理，获取 auth.py 路径
+        set oath [exec python3 $auth_py $secret]
+        send -- "$oath\r"
+        exp_continue
     }
     "Opt>"
     {
-    	send -- "$sarg\n";
+        # 处理自定义选项提示，发送选项参数，确保只发送一次
+        if {$opt_sent == 0} {
+            send -- "$sarg\r"
+            set opt_sent 1
+        }
+        exp_continue
+    }
+    "ID>"
+    {
+        # 处理 ID 选择提示，发送固定选项，确保只发送一次
+        if {$id_sent == 0} {
+            send -- "1\r"
+            set id_sent 1
+        }
+        exp_continue
     }
     "Last login"
     {
-    	#send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
+        # 登录成功标志，继续等待后续输出，避免提前结束 expect
+        exp_continue
     }
 }
+
+# 进入交互模式
 interact

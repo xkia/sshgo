@@ -23,42 +23,31 @@ def _assert(exp, err):
 
 
 def _dedup(ls):
-    table = {}
-    for item in ls:
-        table[item] = None
-    ls_dedup = list(table.keys())
-    ls_dedup.sort()
-    return ls_dedup
+    return sorted(set(ls))
 
 
 def _get_known_hosts():
     fn = os.path.expanduser(sshHosts)
-
     hosts = []
     if not os.path.exists(fn):
         return hosts
 
-    fp = open(fn, "r")
-    try:
-        lines = fp.readlines()
-        for line in lines:
-            host = line.split(" ")[0]
-            if host is None or len(host) == 0:
+    with open(fn, "r") as fp:
+        for line in fp:
+            parts = line.strip().split(" ")
+            if not parts:
                 continue
-            if len(host.split(",")) == 2:
-                # hostname,ip
-                host = host[0]
-                continue
-            hosts.append(host)
-    finally:
-        fp.close()
+            host = parts[0]
+            if "," in host:
+                host = host.split(",", 1)[0]
+            if host:
+                hosts.append(host)
     return _dedup(hosts)
 
 
 def _get_host_name(line_con, node_host):
-    node_infos = line_con.split("# ")
-    node_name = node_infos[1] if len(node_infos) >= 2 else node_host
-    # 如果host文件中包含注释的内容，则将注释的内容拼到选项中
+    _, sep, comment = line_con.partition("# ")
+    node_name = comment if sep else node_host
     if node_host != node_name:
         node_name = node_host + " (" + node_name.strip() + ")"
     return node_name
@@ -585,11 +574,13 @@ def login_main_host(host_file, sarg):
     default_node_pass = default_node_infos[2] if len(default_node_infos) >= 3 else ""
     default_node_id_file = default_node_infos[3] if len(default_node_infos) == 4 else ""
     default_host_info = re.split(":", default_node_host.strip())
+    host = default_host_info[0]
+    port = default_host_info[1] if len(default_host_info) == 2 else "22"
     ssh = script
     exe_args = [
         ssh,
-        default_host_info[0],
-        default_host_info[1],
+        host,
+        port,
         default_node_user,
         default_node_pass,
         default_node_id_file,
@@ -610,8 +601,8 @@ if __name__ == "__main__":
         host_file = options.config
     if not os.path.exists(host_file):
         print("hosts is not found, create it", file=sys.stderr)
-        fp = open(host_file, "w")
-        fp.close()
+        with open(host_file, "w"):
+            pass
     if len(args) > 1:
         sarg = args[1]
         if re.findall(ipv4_two_nodes_pattern, str(sarg)) is not None:
