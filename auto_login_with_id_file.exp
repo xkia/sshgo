@@ -1,12 +1,15 @@
 #!/usr/bin/expect -f
+
+# 自动根据窗口大小调整 SSH TTY
 trap {
     set rows [stty rows]
     set cols [stty columns]
     stty rows $rows columns $cols < $spawn_out(slave,name)
 } WINCH
-set host [lindex $argv 0]
-set port [lindex $argv 1]
-set user [lindex $argv 2]
+
+set host    [lindex $argv 0]
+set port    [lindex $argv 1]
+set user    [lindex $argv 2]
 set id_file [lindex $argv 3]
 
 set timeout 30
@@ -18,7 +21,7 @@ match_max 100000
 expect {
     "continue connecting"
     {
-        send -- "yes\n"
+        send -- "yes\r"
     }
 }
 interact

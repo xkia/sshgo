@@ -1,18 +1,21 @@
 #!/usr/bin/expect -f
-# 捕获 WINCH 信号，并传递给 Spawned 出来的 Children，
-# 这样 ssh 的 TTY 就能随着窗口 resize 而适应。
+
+# 自动根据窗口大小调整 SSH TTY
 trap {
     set rows [stty rows]
     set cols [stty columns]
     stty rows $rows columns $cols < $spawn_out(slave,name)
 } WINCH
 
-set host [lindex $argv 0]
-set port [lindex $argv 1]
-set user [lindex $argv 2]
+set host     [lindex $argv 0]
+set port     [lindex $argv 1]
+set user     [lindex $argv 2]
 set password [lindex $argv 3]
 set ssh_type [lindex $argv 4]
-set secret [lindex $argv 5]
+set secret   [lindex $argv 5]
+
+set script_dir [file dirname [file normalize [info script]]]
+set auth_py [file join $script_dir "auth.py"]
 
 set timeout 20
 if {$ssh_type eq "sftp"} {
@@ -25,32 +28,33 @@ match_max 100000
 expect {
     "*password:"
     {
-    	send -- "$password\n";
-	exp_continue
+        # 密码交互，回车需为 \r
+        send -- "$password\r"
+        exp_continue
     }
     "*passphrase*"
     {
-    	send -- "$password\n";
+        # 密钥短语
+        send -- "$password\r"
     }
     "continue connecting"
     {
-    	send -- "yes\n";exp_continue
+        # 首次连接确认
+        send -- "yes\r"
+        exp_continue
     }
-    "MFA auth"
+    -re "(?i)(MFA auth|OTP Code)"
     {
-	#set oath [exec oathtool --totp -b -d 6 $secret]
-	set oath [exec python3 ./auth.py $secret]
-	send -- "$oath\n";
-    }
-    "*OTP Code*"
-    {
-	#set oath [exec oathtool --totp -b -d 6 $secret]
-	set oath [exec python3 ./auth.py $secret]
-	send -- "$oath\n";
+        # MFA 或 OTP，合并处理，获取 auth.py 路径
+        # 调试: 输出当前目录及 auth.py 路径
+        # puts "DEBUG: Using auth.py at $auth_py"
+        set oath [exec python3 $auth_py $secret]
+        send -- "$oath\r"
     }
     "Last login"
     {
-    	#send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
+        # 登录成功
+        #send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\r"
     }
 }
 interact

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import hmac, base64, struct, hashlib, time, sys
+import hmac, base64, struct, hashlib, time, argparse, sys
 
 
 def get_hotp_token(secret, intervals_no):
@@ -24,6 +24,8 @@ def get_totp_token(secret):
 def normalize(key):
     """Normalizes secret by removing spaces and padding with = to a multiple of 8"""
     k2 = key.strip().replace(" ", "")
+    if not k2:
+        raise ValueError("Secret key cannot be empty after normalization.")
     # k2 = k2.upper()	# skipped b/c b32decode has a foldcase argument
     if len(k2) % 8 != 0:
         k2 += "=" * (8 - len(k2) % 8)
@@ -32,12 +34,15 @@ def normalize(key):
 
 def prefix0(h):
     """Prefixes code with leading zeros if missing."""
-    if len(h) < 6:
-        h = "0" * (6 - len(h)) + h
-    return h
+    return h.zfill(6)
 
 
 if __name__ == "__main__":
-    values = sys.argv
-    if len(values) > 1:
-        print(get_totp_token(values[1]))
+    parser = argparse.ArgumentParser(description='Generate TOTP token from secret key.')
+    parser.add_argument('secret', type=str, help='Base32 encoded secret key')
+    args = parser.parse_args()
+    try:
+        print(get_totp_token(args.secret))
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
