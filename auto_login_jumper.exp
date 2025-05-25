@@ -1,60 +1,70 @@
 #!/usr/bin/expect -f
 
+# 自动根据窗口大小调整 SSH TTY
 trap {
     set rows [stty rows]
     set cols [stty columns]
     stty rows $rows columns $cols < $spawn_out(slave,name)
 } WINCH
 
-set host [lindex $argv 0]
-set port [lindex $argv 1]
-set user [lindex $argv 2]
-set password [lindex $argv 3]
-
-set s_host [lindex $argv 4]
-set s_port [lindex $argv 5]
-set s_user [lindex $argv 6]
+set host       [lindex $argv 0]
+set port       [lindex $argv 1]
+set user       [lindex $argv 2]
+set password   [lindex $argv 3]
+set s_host     [lindex $argv 4]
+set s_port     [lindex $argv 5]
+set s_user     [lindex $argv 6]
 set s_password [lindex $argv 7]
 
 set level 0
 set timeout 20
 
+# Print connection details for debugging
+puts "Connecting to $user@$host on port $port"
+
 spawn ssh -p $port $user@$host
 match_max 100000
 
 expect {
+    # Handle password and passphrase prompts
     "*password:"
     {
-       if {$level == 0} {
-            send -- "$password\n";
-		exp_continue
+        if {$level == 0} {
+            send -- "$password\r"
         } else {
-            send -- "$s_password\n";exp_continue
+            send -- "$s_password\r"
         }
+        exp_continue
     }
     "*passphrase*"
     {
         if {$level == 0} {
-            send -- "$password\n";exp_continue
+            send -- "$password\r"
         } else {
-            send -- "$s_password\n";exp_continue
+            send -- "$s_password\r"
         }
+        exp_continue
     }
+    # Handle SSH host key verification prompt
     "continue connecting"
     {
-        send -- "yes\n";exp_continue
+        send -- "yes\r"
+        exp_continue
     }
+    # After successful login
     "Last login"
     {
         if {$level == 0} {
             if {$s_host == ""} {
-               # send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
+                # No secondary host, do nothing
             } else {
+                # Connect to secondary host
                 set level 1
-                send -- "ssh -p $s_port $s_user@$s_host\n";exp_continue
+                send -- "ssh -p $s_port $s_user@$s_host\r"
+                exp_continue
             }
         } else {
-            #send -- "echo 'Welcome to '`hostname`'. Enjoy with sshgo...'\n"
+            # Secondary host login, do nothing
         }
     }
 }
