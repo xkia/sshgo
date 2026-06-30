@@ -1,0 +1,241 @@
+#!/usr/bin/expect
+
+# Unified SSH Login Script for sshgo
+
+# Default values
+set host ""
+set user ""
+set port "22"
+set jumper ""
+set id_file ""
+set jumper_id_file ""
+set mfa_secret ""
+set jumper_mfa_secret ""
+set jumper_pass ""
+set target_pass ""
+set remote_command ""
+set jump_mfa_used 0
+set host_key_checking "accept-new"
+set has_tty [expr {![catch {exec sh -c {test -t 0}}]}]
+
+# Argument parser
+for {set i 0} {$i < $argc} {incr i} {
+    set arg [lindex $argv $i]
+    set value [lindex $argv [expr $i+1]]
+    switch -exact -- $arg {
+        "-h"   { set host $value }
+        "-u"   { set user $value }
+        "-p"   { set port $value }
+        "-J"   { set jumper $value }
+        "-i"   { set id_file $value }
+        "-j-i" { set jumper_id_file $value }
+        "-c"   { set remote_command $value }
+        "-host-key-checking" { set host_key_checking $value }
+    }
+}
+
+if {$host == "" || $user == ""} {
+    puts "Usage: login.exp -h <host> -u <user> ..."
+    exit 1
+}
+
+if {[info exists env(SSHGO_TARGET_PASS)]} {
+    set target_pass $env(SSHGO_TARGET_PASS)
+    unset env(SSHGO_TARGET_PASS)
+}
+if {[info exists env(SSHGO_JUMPER_PASS)]} {
+    set jumper_pass $env(SSHGO_JUMPER_PASS)
+    unset env(SSHGO_JUMPER_PASS)
+}
+if {[info exists env(SSHGO_MFA_SECRET)]} {
+    set mfa_secret $env(SSHGO_MFA_SECRET)
+    unset env(SSHGO_MFA_SECRET)
+}
+if {[info exists env(SSHGO_JUMPER_MFA_SECRET)]} {
+    set jumper_mfa_secret $env(SSHGO_JUMPER_MFA_SECRET)
+    unset env(SSHGO_JUMPER_MFA_SECRET)
+}
+
+# Create a queue of passwords to be sent
+set password_queue [list]
+if {$jumper_pass != ""} {
+    lappend password_queue $jumper_pass
+}
+if {$target_pass != ""} {
+    lappend password_queue $target_pass
+}
+
+if {$remote_command != ""} {
+    puts "Executing on $user@$host: $remote_command"
+} else {
+    # puts "Connecting to $user@$host..."
+}
+
+# Get auth.py path
+set script_dir [file dirname [file normalize [info script]]]
+set auth_py [file join $script_dir "auth.py"]
+
+proc cleanup {} {
+    global has_tty
+    if {$has_tty} {
+        catch {stty echo}
+    }
+}
+
+proc fail {message code} {
+    cleanup
+    puts $message
+    exit $code
+}
+
+proc shell_quote {value} {
+    set escaped [string map {"'" "'\\''"} $value]
+    return "'$escaped'"
+}
+
+proc proxy_command {jumper jumper_id_file host_key_checking} {
+    set proxy_jumper $jumper
+    set proxy_port ""
+    if {[regexp {^(.+):([0-9]+)$} $jumper -> base port]} {
+        set proxy_jumper $base
+        set proxy_port $port
+    }
+
+    set parts [list ssh -o ConnectTimeout=10]
+    if {$host_key_checking == "no"} {
+        lappend parts -o StrictHostKeyChecking=no
+        lappend parts -o UserKnownHostsFile=/dev/null
+    } else {
+        lappend parts -o StrictHostKeyChecking=$host_key_checking
+    }
+    if {$proxy_port != ""} {
+        lappend parts -p $proxy_port
+    }
+    if {$jumper_id_file != ""} {
+        lappend parts -i $jumper_id_file
+    }
+    lappend parts -W %h:%p $proxy_jumper
+
+    set quoted [list]
+    foreach part $parts {
+        lappend quoted [shell_quote $part]
+    }
+    return [join $quoted " "]
+}
+
+# Adjust window size on WINCH signal
+trap {
+    set rows [stty rows]
+    set cols [stty columns]
+    stty rows $rows columns $cols < $spawn_out(slave,name)
+} WINCH
+
+# Construct the SSH command
+set cmd [list ssh -o ConnectTimeout=10]
+if {$host_key_checking == "no"} {
+    lappend cmd -o StrictHostKeyChecking=no
+    lappend cmd -o UserKnownHostsFile=/dev/null
+} else {
+    lappend cmd -o StrictHostKeyChecking=$host_key_checking
+}
+if {$port != ""} { lappend cmd -p $port }
+if {$id_file != ""} { lappend cmd -i $id_file }
+if {$jumper != ""} {
+    lappend cmd -o "ProxyCommand=[proxy_command $jumper $jumper_id_file $host_key_checking]"
+}
+lappend cmd "$user@$host"
+
+set timeout 20
+
+# Disable terminal echo to prevent password/username leakage when a TTY exists.
+if {$has_tty} {
+    stty -echo
+}
+
+# Print a clean connection message
+puts "Connecting to $user@$host..."
+
+# Spawn the SSH process
+# Temporarily disable logging to hide the spawn command itself
+log_user 0
+spawn {*}$cmd
+# Re-enable logging to show the user the remote shell
+log_user 1
+
+# Main expect loop
+expect {
+    -re {Are you sure you want to continue connecting.*yes/no} {
+        send "yes\r"
+        exp_continue
+    }
+    -re {(?i)(password|passphrase)[: ]*$} {
+        if {[llength $password_queue] > 0} {
+            set pass_to_send [lindex $password_queue 0]
+            send "$pass_to_send\r"
+            # Remove the password we just used
+            set password_queue [lrange $password_queue 1 end]
+            exp_continue
+        } else {
+            # No more passwords configured, let user interact
+            interact
+        }
+    }
+    -re {(?i)(MFA|OTP|Verification code).*:} {
+        # Jump host MFA first (only on first MFA prompt)
+        if {$jumper_mfa_secret != "" && $jump_mfa_used == 0} {
+            set oath [exec python3 $auth_py - << $jumper_mfa_secret]
+            send "$oath\r"
+            set jump_mfa_used 1
+            exp_continue
+        }
+        # Generate TOTP code when the prompt arrives to avoid expiration.
+        if {$mfa_secret != ""} {
+            set oath [exec python3 $auth_py - << $mfa_secret]
+            send "$oath\r"
+            exp_continue
+        }
+        interact
+    }
+    -re {(?i)Operation timed out} {
+        fail "\nError: Connection to host timed out." 1
+    }
+    "Permission denied" {
+        fail "\n\nAuthentication failed (Permission denied).\n" 1
+    }
+    "Connection timed out" {
+        fail "\n\nConnection timed out.\n" 1
+    }
+    timeout {
+        fail "\n\nConnection timed out.\n" 1
+    }
+    eof {
+        fail "\n\nConnection closed unexpectedly.\n" 1
+    }
+    # Success condition: match a shell prompt
+    -re {[$#%>] ?$} {
+        if {$remote_command != ""} {
+            # Scenario: An initial command is provided.
+            send "$remote_command"
+            send "\r"
+            # Wait for the echo to ensure receipt.
+            expect "$remote_command"
+            # Wait for the next prompt to ensure execution is complete.
+            expect -re {[$#%>] ?$}
+            # Start interactive session.
+            interact {
+                eof {
+                    return
+                }
+            }
+        } else {
+            # Scenario: No initial command, go straight to interactive.
+            interact {
+                eof {
+                    return
+                }
+            }
+        }
+    }
+}
+
+cleanup
