@@ -26,7 +26,6 @@ def normalize(key):
     k2 = key.strip().replace(" ", "")
     if not k2:
         raise ValueError("Secret key cannot be empty after normalization.")
-    # k2 = k2.upper()	# skipped b/c b32decode has a foldcase argument
     if len(k2) % 8 != 0:
         k2 += "=" * (8 - len(k2) % 8)
     return k2
@@ -38,11 +37,16 @@ def prefix0(h):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Generate TOTP token from secret key.')
-    parser.add_argument('secret', type=str, help='Base32 encoded secret key')
+    parser = argparse.ArgumentParser(description="Generate TOTP token from secret key.")
+    parser.add_argument(
+        "secret",
+        type=str,
+        help="Base32 encoded secret key, or '-' to read it from stdin",
+    )
     args = parser.parse_args()
     try:
-        print(get_totp_token(args.secret))
+        secret = sys.stdin.read().strip() if args.secret == "-" else args.secret
+        print(get_totp_token(secret))
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
