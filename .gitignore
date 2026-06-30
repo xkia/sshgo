@@ -1,2 +1,7 @@
+.claude
+.DS_Store
+.venv/
+*.pyc
 hosts*
+*__pycache__*
 !hosts.example

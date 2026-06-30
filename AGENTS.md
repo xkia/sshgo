@@ -1,0 +1,117 @@
+# Agent Guide
+
+This file provides repository guidance for coding agents and maintainers working on sshgo. Keep it focused on stable project facts, local workflows, architecture boundaries, and verification commands.
+
+## Project Overview
+
+**sshgo** is a TUI-based SSH connection manager written in Python 3 (stdlib only, no external Python dependencies). It manages hosts/groups via a JSON config file, supports password/key/MFA authentication, nested jump hosts, and `~/.ssh/config` import.
+
+## Quick Reference
+
+| Action | Command |
+|--------|---------|
+| Run TUI | `./sshgo.sh` or `~/.venv/bin/python sshgo.py` |
+| Connect to host | `./sshgo.sh <alias>` |
+| Run remote command | `./sshgo.sh <alias> ls -la` |
+| Upload file | `./sshgo.sh <alias> upload <local> <remote>` |
+| Download file | `./sshgo.sh <alias> download <remote> <local>` |
+| Toggle encryption | `./sshgo.sh --toggle-encryption` |
+| Toggle language | `./sshgo.sh --toggle-language` |
+| Toggle detail pane | `./sshgo.sh --toggle-details` |
+| Use alternate config | `./sshgo.sh -e /path/to/hosts.json` |
+
+**Dependencies**: Only `expect` (system package, e.g. `brew install expect`). No Python pip packages needed.
+
+## Agent Workflow
+
+- Read existing code and docs before editing. Prefer the current stdlib-only Python style and avoid adding package dependencies.
+- Keep changes scoped to the requested behavior. Do not mix unrelated refactors, feature work, or formatting churn into the same change.
+- Treat `hosts.json`, `.venv/`, and local dot-directories as local environment/configuration unless explicitly asked to modify them.
+- Do not change accepted behavior that is documented in `docs/specs/*.md` without updating the matching spec documentation.
+- If a requested change conflicts with documented non-goals or accepted specs, surface the conflict before implementation.
+- Preserve the Expect handoff model unless a spec explicitly changes it. Python records start/exec-failure audit events and then uses `execve`; it does not supervise live SSH/SFTP sessions.
+- Run the narrowest meaningful verification before delivery and report anything not run.
+
+## Architecture
+
+### Module Layout
+
+| File | Responsibility |
+|------|---------------|
+| `sshgo.py` | Entry point: arg parsing, config path resolution, dispatches to TUI or shortcut commands |
+| `sshgo.sh` | Thin shell wrapper that `cd`s to script dir and invokes `python3 -B sshgo.py` |
+| `host_manager.py` | `HostManager` class — loads/parses `hosts.json` (JSONC), migrates stable node IDs, encrypt/decrypt credentials, CRUD for hosts/groups, validates and backs up config, builds SSH/SFTP command args with independent target/jump auth, records start audit events, then hands off to Expect |
+| `audit_logger.py` | `AuditLogger` class — manages runtime data dir (`~/.sshgo/` or `$SSHGO_DATA_DIR`), writes audit logs in JSONL format with node identity/endpoint fields and retention limits (history: 1000, audit-simple: 5000, audit-full: 2000) |
+| `tui.py` | `Tui` class — curses-based interactive interface (tree view, search, add/edit/delete forms, detail preview pane) |
+| `config_parser.py` | `SshConfigParser` — parses `~/.ssh/config` into sshgo host nodes |
+| `crypto.py` | PBKDF2-SHA256 key derivation + XOR cipher + Base64 encoding for optional credential encryption |
+| `auth.py` | TOTP/HOTP generation from Base32 secrets (for MFA/2FA) |
+| `i18n.py` | Simple English/Chinese string localization (`I18N` class, global `i18n` instance) |
+| `login.exp` | Expect script that handles interactive SSH login (password, passphrase, prompt-time MFA generation, jump host chaining) |
+| `sftp_login.exp` | Expect script for SFTP file transfer (upload/download) with same authentication logic as login.exp |
+| `hosts.json` | Project fallback config file: `{"config": {...}, "hosts": [...]}` with `group` and `host` nodes |
+
+### Config Format Support
+
+- **JSONC** (`hosts.json`): The only supported configuration format.
+- Supports `//` and `#` single-line comments plus trailing commas.
+- TOML and YAML are intentionally not supported to avoid Python package dependencies or project-maintained serializers.
+
+### Key Flows
+
+1. **Startup**: `sshgo.sh` → `sshgo.py:main()` → resolve config path (CLI arg > env var > `~/.config/sshgo/hosts.json` when present > default `hosts.json`) → `HostManager` loads JSONC config → optional `~/.ssh/config` import → dispatch to TUI or shortcut handler.
+
+2. **TUI**: `Tui.run()` enters curses main loop — render tree, handle keyboard input (j/k navigation, a/e/d CRUD, f search, h/l fold/unfold, q quit), forms for add/edit.
+
+3. **SSH Connection**: `HostManager.execute_interactive_connection()` builds args, stores password/MFA secrets only in the `SSHGO_*` environment copy, records a `started` audit event, then uses `os.execve()` to replace Python with `login.exp`. Target and jump host auth are computed independently; Expect uses `ProxyCommand` when a jump host is present so jump keys do not leak into target auth. The Expect script reads and unsets secret environment variables, spawns `ssh`, handles password/MFA prompts, then enters `interact`. Python does not wait for the SSH session and cannot record final duration or exit code.
+
+4. **SFTP Transfer**: `HostManager.build_sftp_command_args()` builds args, records `sftp_started`, and `execute_sftp_transfer()` uses `os.execve()` to replace Python with `sftp_login.exp`. The Expect script spawns `sftp`, authenticates (password/MFA/jump), then executes put/get commands.
+
+5. **Recent Resolution**: TUI builds the Recent group from audit history. It resolves current nodes by `node_id` first, then legacy name/endpoint fields, and only falls back to read-only history snapshots when the configured node no longer exists.
+
+6. **Encryption**: Toggle via `--toggle-encryption`. Uses PBKDF2 (260k iterations) + XOR + Base64. Master password prompted interactively, never stored.
+
+### Node Types in `hosts.json`
+
+- **group**: `{"id": "...", "type": "group", "name": "...", "expanded": bool, "children": [...]}`
+- **host**: `{"id": "...", "type": "host", "name": "...", "host": "addr:port", "user": "...", "password": "...", "id_file": "...", "mfa_secret": "...", "children": [...]}` — `children` on a host makes it a jump host. `id` is managed by sshgo and should be preserved across edits.
+
+### Config Priority
+
+1. `--extra-config <path>` CLI argument
+2. `SSHGO_CONFIG_PATH` environment variable
+3. `~/.config/sshgo/hosts.json` when present
+4. Default `hosts.json` next to script
+
+### Documentation Layers
+
+- `docs/vision.md`: product goals and non-goals.
+- `docs/roadmap.md`: milestones, exit criteria, and future candidates.
+- `docs/specs/*.md`: accepted behavior and implementation boundaries.
+- Verification commands live in this file; avoid adding separate per-spec test-plan status files.
+
+## Development Notes
+
+- **Python**: Uses only stdlib modules (`curses`, `json`, `argparse`, `getpass`, `hmac`, `hashlib`, `base64`, `struct`, `curses.textpad`). Run with `~/.venv/bin/python` per project rules.
+- **External dependency**: `expect` is the only required non-Python package for interactive SSH/SFTP prompt handling.
+- **Expect scripts**: `login.exp` and `sftp_login.exp` must be executable (`chmod +x`). The TUI ensures this at startup.
+- **MFA generation**: `login.exp` and `sftp_login.exp` generate TOTP codes when an MFA prompt arrives by invoking `auth.py` with the secret from the transient `SSHGO_*` environment copy. Secrets are not passed in argv.
+- **Process handoff**: Shortcut connections and transfers replace Python via `os.execve()`. The Python manager records start/exec failure events only; it does not supervise the live SSH/SFTP session.
+- **Audit logging**: JSONL files in `~/.sshgo/`. History and audit-simple are always written for SSH and SFTP starts; audit-full requires `--audit-full` flag. New records include `node_id`, `port`, and `endpoint`. Because of the execve handoff, final duration and exit code are not available in current audit records.
+- **Config saves**: HostManager writes JSON atomically and keeps best-effort backups at `hosts.json.bak`, `hosts.json.bak.1`, and `hosts.json.bak.2`.
+- **i18n**: All UI strings go through `i18n.get(key)`. New strings must be added to both `en` and `zh` dicts in `i18n.py`.
+- **Screen management**: TUI uses `curses` and must call `restore_screen()` on exit (handled via `finally` block in `sshgo.py`).
+- **JSONC support**: `hosts.json` supports `//` and `#` comments plus trailing commas via `HostManager._parse_jsonc()`.
+
+## Verification Commands
+
+Use the smallest set that matches the change. For broad code or documentation sync changes, run:
+
+```bash
+python3 -m unittest discover -s tests -p 'test*.py'
+python3 -m py_compile sshgo.py host_manager.py tui.py audit_logger.py auth.py crypto.py config_parser.py i18n.py tests/test_connection_auth_audit.py
+python3 sshgo.py --validate
+git diff --check
+```
+
+For TUI smoke checks, run `./sshgo.sh` in a terminal and press `q` to confirm startup and clean exit.
