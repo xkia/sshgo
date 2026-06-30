@@ -1,0 +1,443 @@
+#!/usr/bin/expect
+
+# Relay file transfer script for sshgo. This is not SFTP: files are copied
+# through a temporary path on the jump host.
+
+set host ""
+set user ""
+set port "22"
+set jump_host ""
+set jump_user ""
+set jump_port "22"
+set id_file ""
+set jumper_id_file ""
+set target_pass ""
+set jumper_pass ""
+set mfa_secret ""
+set jumper_mfa_secret ""
+set host_key_checking "accept-new"
+set action ""
+set local_path ""
+set remote_path ""
+set temp_path ""
+set print_command ""
+set has_tty [expr {![catch {exec sh -c {test -t 0}}]}]
+
+for {set i 0} {$i < $argc} {incr i} {
+    set arg [lindex $argv $i]
+    set value [lindex $argv [expr {$i + 1}]]
+    switch -exact -- $arg {
+        "-h" { set host $value }
+        "-u" { set user $value }
+        "-P" { set port $value }
+        "-J-host" { set jump_host $value }
+        "-J-user" { set jump_user $value }
+        "-J-port" { set jump_port $value }
+        "-i" { set id_file $value }
+        "-j-i" { set jumper_id_file $value }
+        "-action" { set action $value }
+        "-local" { set local_path $value }
+        "-remote" { set remote_path $value }
+        "-temp" { set temp_path $value }
+        "-host-key-checking" { set host_key_checking $value }
+        "-print-command" { set print_command $value }
+    }
+}
+
+if {$host == "" || $user == "" || $jump_host == "" || $action == "" || $local_path == "" || $remote_path == "" || $temp_path == ""} {
+    puts "Usage: relay_transfer.exp -h <host> -u <user> -J-host <jump> -action <upload|download> -local <path> -remote <path> -temp <path>"
+    exit 1
+}
+
+if {$action != "upload" && $action != "download"} {
+    puts "Error: action must be upload or download."
+    exit 1
+}
+
+if {[info exists env(SSHGO_TARGET_PASS)]} {
+    set target_pass $env(SSHGO_TARGET_PASS)
+    unset env(SSHGO_TARGET_PASS)
+}
+if {[info exists env(SSHGO_JUMPER_PASS)]} {
+    set jumper_pass $env(SSHGO_JUMPER_PASS)
+    unset env(SSHGO_JUMPER_PASS)
+}
+if {[info exists env(SSHGO_MFA_SECRET)]} {
+    set mfa_secret $env(SSHGO_MFA_SECRET)
+    unset env(SSHGO_MFA_SECRET)
+}
+if {[info exists env(SSHGO_JUMPER_MFA_SECRET)]} {
+    set jumper_mfa_secret $env(SSHGO_JUMPER_MFA_SECRET)
+    unset env(SSHGO_JUMPER_MFA_SECRET)
+}
+
+set script_dir [file dirname [file normalize [info script]]]
+set auth_py [file join $script_dir "auth.py"]
+set timeout 30
+
+proc cleanup_tty {} {
+    global has_tty
+    if {$has_tty} {
+        catch {stty echo}
+    }
+}
+
+proc fail {message code} {
+    cleanup_tty
+    catch {puts stderr $message}
+    exit $code
+}
+
+proc shell_quote {value} {
+    set escaped [string map {"'" "'\\''"} $value]
+    return "'$escaped'"
+}
+
+proc shell_join {parts} {
+    set quoted [list]
+    foreach part $parts {
+        lappend quoted [shell_quote $part]
+    }
+    return [join $quoted " "]
+}
+
+proc target_string {user host} {
+    if {$user == ""} {
+        return $host
+    }
+    return "$user@$host"
+}
+
+proc common_ssh_options {host_key_checking} {
+    set opts [list -o ConnectTimeout=10]
+    if {$host_key_checking == "no"} {
+        lappend opts -o StrictHostKeyChecking=no
+        lappend opts -o UserKnownHostsFile=/dev/null
+    } else {
+        lappend opts -o StrictHostKeyChecking=$host_key_checking
+    }
+    return $opts
+}
+
+proc auth_response {stage kind} {
+    global jumper_pass target_pass jumper_mfa_secret mfa_secret auth_py
+    if {$kind == "password"} {
+        if {$stage == "jump"} {
+            return $jumper_pass
+        } elseif {$stage == "target"} {
+            return $target_pass
+        }
+    } elseif {$kind == "mfa"} {
+        if {$stage == "jump" && $jumper_mfa_secret != ""} {
+            return [exec python3 $auth_py - << $jumper_mfa_secret]
+        } elseif {$stage == "target" && $mfa_secret != ""} {
+            return [exec python3 $auth_py - << $mfa_secret]
+        }
+    }
+    return ""
+}
+
+proc expect_auth_until_eof {stage {fatal 1}} {
+    expect {
+        -re {Are you sure you want to continue connecting.*yes/no} {
+            send "yes\r"
+            exp_continue
+        }
+        -re {(?i)(password|passphrase)[: ]*$} {
+            set pass_to_send [auth_response $stage "password"]
+            if {$pass_to_send != ""} {
+                send "$pass_to_send\r"
+                exp_continue
+            }
+            interact
+        }
+        -re {(?i)(MFA|OTP|Verification code).*:} {
+            set oath [auth_response $stage "mfa"]
+            if {$oath != ""} {
+                send "$oath\r"
+                exp_continue
+            }
+            interact
+        }
+        "Permission denied" {
+            if {$fatal} {
+                fail "\nAuthentication failed (Permission denied).\n" 1
+            }
+            puts "\nAuthentication failed (Permission denied).\n"
+            return 1
+        }
+        -re {No such file|not found|Permission denied|Connection closed|lost connection} {
+            if {$fatal} {
+                fail "\nRelay transfer failed.\n" 1
+            }
+            puts "\nRelay transfer failed.\n"
+            return 1
+        }
+        timeout {
+            if {$fatal} {
+                fail "\nRelay transfer timed out.\n" 1
+            }
+            puts "\nRelay transfer timed out.\n"
+            return 1
+        }
+        eof {
+            set wait_result [wait]
+            set exit_status [lindex $wait_result 3]
+            if {$exit_status != "0" && $fatal} {
+                fail "\nRelay command failed with exit status $exit_status.\n" 1
+            }
+            return $exit_status
+        }
+    }
+}
+
+proc run_local_command {cmd stage {fatal 1}} {
+    log_user 0
+    spawn {*}$cmd
+    log_user 1
+    return [expect_auth_until_eof $stage $fatal]
+}
+
+proc run_jump_command {command expects_target_auth fatal} {
+    global jump_host jump_user jump_port jumper_id_file host_key_checking
+    set jump_target [target_string $jump_user $jump_host]
+    set cmd [list ssh]
+    foreach opt [common_ssh_options $host_key_checking] {
+        lappend cmd $opt
+    }
+    if {$jump_port != "" && $jump_port != "22"} {
+        lappend cmd -p $jump_port
+    }
+    if {$jumper_id_file != ""} {
+        lappend cmd -i $jumper_id_file
+    }
+    lappend cmd $jump_target
+
+    log_user 0
+    spawn {*}$cmd
+    log_user 1
+
+    set stage "jump"
+    set marker "__SSHGO_RELAY_STATUS__"
+    set marker_pattern [format {%s:([0-9]+)} $marker]
+    expect {
+        -re {Are you sure you want to continue connecting.*yes/no} {
+            send "yes\r"
+            exp_continue
+        }
+        -re {(?i)(password|passphrase)[: ]*$} {
+            set pass_to_send [auth_response $stage "password"]
+            if {$pass_to_send != ""} {
+                send "$pass_to_send\r"
+                exp_continue
+            }
+            interact
+        }
+        -re {(?i)(MFA|OTP|Verification code).*:} {
+            set oath [auth_response $stage "mfa"]
+            if {$oath != ""} {
+                send "$oath\r"
+                exp_continue
+            }
+            interact
+        }
+        -re $marker_pattern {
+            set status $expect_out(1,string)
+            send "exit\r"
+            expect eof
+            if {$status != "0" && $fatal} {
+                fail "\nRelay command failed with exit status $status.\n" 1
+            }
+            return $status
+        }
+        -re {[$#%>] ?$} {
+            if {$stage == "jump"} {
+                if {$expects_target_auth} {
+                    set stage "target"
+                } else {
+                    set stage "none"
+                }
+                send "$command; printf '\\n$marker:%s\\n' \$?\r"
+            }
+            exp_continue
+        }
+        "Permission denied" {
+            if {$fatal} {
+                fail "\nAuthentication failed (Permission denied).\n" 1
+            }
+            return 1
+        }
+        -re {No such file|not found|Connection closed|lost connection} {
+            if {$fatal} {
+                fail "\nRelay command failed.\n" 1
+            }
+            return 1
+        }
+        timeout {
+            if {$fatal} {
+                fail "\nRelay command timed out.\n" 1
+            }
+            return 1
+        }
+        eof {
+            if {$fatal} {
+                fail "\nRelay command closed unexpectedly.\n" 1
+            }
+            return 1
+        }
+    }
+}
+
+proc build_local_scp_to_jump {source dest {legacy 0}} {
+    global jump_host jump_user jump_port jumper_id_file host_key_checking
+    set jump_target [target_string $jump_user $jump_host]
+    set cmd [list scp]
+    if {$legacy} {
+        lappend cmd -O
+    }
+    foreach opt [common_ssh_options $host_key_checking] {
+        lappend cmd $opt
+    }
+    if {$jump_port != "" && $jump_port != "22"} {
+        lappend cmd -P $jump_port
+    }
+    if {$jumper_id_file != ""} {
+        lappend cmd -i $jumper_id_file
+    }
+    lappend cmd $source "$jump_target:$dest"
+    return $cmd
+}
+
+proc build_local_scp_from_jump {source dest {legacy 0}} {
+    global jump_host jump_user jump_port jumper_id_file host_key_checking
+    set jump_target [target_string $jump_user $jump_host]
+    set cmd [list scp]
+    if {$legacy} {
+        lappend cmd -O
+    }
+    foreach opt [common_ssh_options $host_key_checking] {
+        lappend cmd $opt
+    }
+    if {$jump_port != "" && $jump_port != "22"} {
+        lappend cmd -P $jump_port
+    }
+    if {$jumper_id_file != ""} {
+        lappend cmd -i $jumper_id_file
+    }
+    lappend cmd "$jump_target:$source" $dest
+    return $cmd
+}
+
+proc target_scp_spec {path} {
+    global host user
+    return "[target_string $user $host]:$path"
+}
+
+proc target_scp_command {source dest} {
+    global port id_file host_key_checking
+    set parts [list scp]
+    foreach opt [common_ssh_options $host_key_checking] {
+        lappend parts $opt
+    }
+    if {$port != "" && $port != "22"} {
+        lappend parts -P $port
+    }
+    if {$id_file != ""} {
+        lappend parts -i $id_file
+    }
+    lappend parts $source $dest
+    return [shell_join $parts]
+}
+
+proc cleanup_temp_path {temp_path} {
+    set status [run_jump_command "rm -f [shell_quote $temp_path]" 0 0]
+    if {$status != "0"} {
+        catch {puts stderr "Warning: could not remove relay temp file: $temp_path"}
+    }
+    return $status
+}
+
+proc run_local_scp_with_legacy_fallback {normal_cmd legacy_cmd stage} {
+    set status [run_local_command $normal_cmd $stage 0]
+    if {$status != "0"} {
+        catch {puts stderr "Local scp failed; retrying with legacy scp protocol..."}
+        return [run_local_command $legacy_cmd $stage 1]
+    }
+    return $status
+}
+
+if {$print_command != ""} {
+    switch -exact -- $print_command {
+        "target-upload" {
+            puts [target_scp_command $temp_path [target_scp_spec $remote_path]]
+        }
+        "target-download" {
+            puts [target_scp_command [target_scp_spec $remote_path] $temp_path]
+        }
+        "local-to-jump" {
+            puts [shell_join [build_local_scp_to_jump $local_path $temp_path]]
+        }
+        "local-to-jump-legacy" {
+            puts [shell_join [build_local_scp_to_jump $local_path $temp_path 1]]
+        }
+        "jump-to-local" {
+            puts [shell_join [build_local_scp_from_jump $temp_path $local_path]]
+        }
+        "jump-to-local-legacy" {
+            puts [shell_join [build_local_scp_from_jump $temp_path $local_path 1]]
+        }
+        default {
+            puts "Error: unknown print command target."
+            exit 1
+        }
+    }
+    exit 0
+}
+
+if {$has_tty} {
+    stty -echo
+}
+
+puts "Starting relay $action through $jump_user@$jump_host..."
+
+if {$action == "upload" && ![file isfile $local_path]} {
+    fail "\nRelay transfer supports regular files only.\n" 1
+}
+
+set temp_dir [file dirname $temp_path]
+run_jump_command "mkdir -p [shell_quote $temp_dir]" 0 1
+
+if {$action == "upload"} {
+    run_local_scp_with_legacy_fallback \
+        [build_local_scp_to_jump $local_path $temp_path] \
+        [build_local_scp_to_jump $local_path $temp_path 1] \
+        "jump"
+    set remote_spec [target_scp_spec $remote_path]
+    set cmd [target_scp_command $temp_path $remote_spec]
+    set status [run_jump_command $cmd 1 0]
+    if {$status != "0"} {
+        cleanup_temp_path $temp_path
+        fail "\nRelay upload failed.\n" 1
+    }
+    cleanup_temp_path $temp_path
+} else {
+    set remote_spec [target_scp_spec $remote_path]
+    set cmd [target_scp_command $remote_spec $temp_path]
+    set status [run_jump_command $cmd 1 0]
+    if {$status != "0"} {
+        cleanup_temp_path $temp_path
+        fail "\nRelay download failed.\n" 1
+    }
+    set status [run_local_scp_with_legacy_fallback \
+        [build_local_scp_from_jump $temp_path $local_path] \
+        [build_local_scp_from_jump $temp_path $local_path 1] \
+        "jump"]
+    if {$status != "0"} {
+        cleanup_temp_path $temp_path
+        fail "\nRelay download failed while copying from jump host.\n" 1
+    }
+    cleanup_temp_path $temp_path
+}
+
+cleanup_tty
+catch {puts "Relay $action complete."}

@@ -561,8 +561,26 @@ class Tui:
                         "y": 11,
                         "x": 2,
                     },
-                    {"label": i18n.get("save"), "type": "button", "y": 13, "x": 2},
-                    {"label": i18n.get("cancel"), "type": "button", "y": 13, "x": 10},
+                    {
+                        "label": i18n.get("ssh_jump_mode"),
+                        "type": "radio",
+                        "name": "ssh_jump_mode",
+                        "options": ["default", "shell", "tunnel"],
+                        "value": "default",
+                        "y": 12,
+                        "x": 2,
+                    },
+                    {
+                        "label": i18n.get("transfer_jump_mode"),
+                        "type": "radio",
+                        "name": "transfer_jump_mode",
+                        "options": ["default", "tunnel", "relay"],
+                        "value": "default",
+                        "y": 15,
+                        "x": 2,
+                    },
+                    {"label": i18n.get("save"), "type": "button", "y": 19, "x": 2},
+                    {"label": i18n.get("cancel"), "type": "button", "y": 19, "x": 10},
                 ]
                 title = i18n.get("add_new_host")
             else:
@@ -610,6 +628,12 @@ class Tui:
                         "id_file": final_data.get("id_file", ""),
                         "mfa_secret": final_data.get("mfa_secret", ""),
                     }
+                    if final_data.get("ssh_jump_mode") != "default":
+                        new_node["ssh_jump_mode"] = final_data.get("ssh_jump_mode")
+                    if final_data.get("transfer_jump_mode") != "default":
+                        new_node["transfer_jump_mode"] = final_data.get(
+                            "transfer_jump_mode"
+                        )
                 else:
                     new_node = {
                         "type": "group",
@@ -736,8 +760,26 @@ class Tui:
                     "x": 2,
                     "value": selected_node.get("mfa_secret", ""),
                 },
-                {"label": i18n.get("save"), "type": "button", "y": 13, "x": 2},
-                {"label": i18n.get("cancel"), "type": "button", "y": 13, "x": 10},
+                {
+                    "label": i18n.get("ssh_jump_mode"),
+                    "type": "radio",
+                    "name": "ssh_jump_mode",
+                    "options": ["default", "shell", "tunnel"],
+                    "value": selected_node.get("ssh_jump_mode", "default"),
+                    "y": 12,
+                    "x": 2,
+                },
+                {
+                    "label": i18n.get("transfer_jump_mode"),
+                    "type": "radio",
+                    "name": "transfer_jump_mode",
+                    "options": ["default", "tunnel", "relay"],
+                    "value": selected_node.get("transfer_jump_mode", "default"),
+                    "y": 15,
+                    "x": 2,
+                },
+                {"label": i18n.get("save"), "type": "button", "y": 19, "x": 2},
+                {"label": i18n.get("cancel"), "type": "button", "y": 19, "x": 10},
             ]
             title = i18n.get("edit_host", name=original_name)
         else:  # group

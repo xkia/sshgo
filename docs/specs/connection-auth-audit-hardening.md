@@ -10,6 +10,7 @@
 - related_specs:
   - docs/specs/runtime-separation.md
   - docs/specs/security-hardening.md
+  - docs/specs/jump-host-connection-modes.md
 
 ## Product Review
 
@@ -67,7 +68,9 @@ HostManager computes auth material separately:
 
 Agent use is checked per node. A target may use agent while the jump host uses password/MFA, or the reverse.
 
-For jump hosts with separate key files, Expect constructs SSH/SFTP with `ProxyCommand` rather than plain `-J`. This allows:
+For nested interactive SSH, Expect logs in to the jump host first, then starts SSH to the target from the jump host shell. This supports jump hosts that disable TCP forwarding and reject `ProxyCommand` / `ssh -W`. The full operation-mode decision is captured in [jump-host-connection-modes.md](jump-host-connection-modes.md).
+
+For SFTP jump hosts with separate key files, Expect still constructs SFTP with `ProxyCommand` rather than plain `-J`. Nested SFTP therefore requires the jump host to allow TCP forwarding. This allows:
 
 - outer target command to use target `-i`
 - proxy jump command to use jump `-i`

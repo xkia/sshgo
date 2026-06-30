@@ -7,6 +7,7 @@ set host ""
 set user ""
 set port "22"
 set jumper ""
+set jump_mode "shell"
 set id_file ""
 set jumper_id_file ""
 set mfa_secret ""
@@ -15,6 +16,7 @@ set jumper_pass ""
 set target_pass ""
 set remote_command ""
 set jump_mfa_used 0
+set connection_stage "direct"
 set host_key_checking "accept-new"
 set has_tty [expr {![catch {exec sh -c {test -t 0}}]}]
 
@@ -27,6 +29,7 @@ for {set i 0} {$i < $argc} {incr i} {
         "-u"   { set user $value }
         "-p"   { set port $value }
         "-J"   { set jumper $value }
+        "-jump-mode" { set jump_mode $value }
         "-i"   { set id_file $value }
         "-j-i" { set jumper_id_file $value }
         "-c"   { set remote_command $value }
@@ -93,6 +96,32 @@ proc shell_quote {value} {
     return "'$escaped'"
 }
 
+proc common_ssh_options {host_key_checking} {
+    set opts [list -o ConnectTimeout=10]
+    if {$host_key_checking == "no"} {
+        lappend opts -o StrictHostKeyChecking=no
+        lappend opts -o UserKnownHostsFile=/dev/null
+    } else {
+        lappend opts -o StrictHostKeyChecking=$host_key_checking
+    }
+    return $opts
+}
+
+proc split_host_port {target default_port} {
+    if {[regexp {^(.+):([0-9]+)$} $target -> base port]} {
+        return [list $base $port]
+    }
+    return [list $target $default_port]
+}
+
+proc shell_join {parts} {
+    set quoted [list]
+    foreach part $parts {
+        lappend quoted [shell_quote $part]
+    }
+    return [join $quoted " "]
+}
+
 proc proxy_command {jumper jumper_id_file host_key_checking} {
     set proxy_jumper $jumper
     set proxy_port ""
@@ -115,12 +144,19 @@ proc proxy_command {jumper jumper_id_file host_key_checking} {
         lappend parts -i $jumper_id_file
     }
     lappend parts -W %h:%p $proxy_jumper
+    return [shell_join $parts]
+}
 
-    set quoted [list]
-    foreach part $parts {
-        lappend quoted [shell_quote $part]
+proc target_ssh_command {host port user id_file} {
+    set parts [list ssh]
+    if {$port != "" && $port != "22"} {
+        lappend parts -p $port
     }
-    return [join $quoted " "]
+    if {$id_file != ""} {
+        lappend parts -i $id_file
+    }
+    lappend parts "$user@$host"
+    return [shell_join $parts]
 }
 
 # Adjust window size on WINCH signal
@@ -130,20 +166,35 @@ trap {
     stty rows $rows columns $cols < $spawn_out(slave,name)
 } WINCH
 
-# Construct the SSH command
-set cmd [list ssh -o ConnectTimeout=10]
-if {$host_key_checking == "no"} {
-    lappend cmd -o StrictHostKeyChecking=no
-    lappend cmd -o UserKnownHostsFile=/dev/null
+# Construct the SSH command. Nested hosts use serial login: first connect to the
+# jump host, then run ssh to the target from the jump host shell. This supports
+# jump hosts that disable TCP forwarding.
+if {$jumper != "" && $jump_mode == "shell"} {
+    set connection_stage "jumper"
+    lassign [split_host_port $jumper "22"] jumper_target jumper_port
+    set cmd [list ssh]
+    foreach opt [common_ssh_options $host_key_checking] {
+        lappend cmd $opt
+    }
+    if {$jumper_port != "" && $jumper_port != "22"} {
+        lappend cmd -p $jumper_port
+    }
+    if {$jumper_id_file != ""} {
+        lappend cmd -i $jumper_id_file
+    }
+    lappend cmd $jumper_target
 } else {
-    lappend cmd -o StrictHostKeyChecking=$host_key_checking
+    set cmd [list ssh]
+    foreach opt [common_ssh_options $host_key_checking] {
+        lappend cmd $opt
+    }
+    if {$port != ""} { lappend cmd -p $port }
+    if {$id_file != ""} { lappend cmd -i $id_file }
+    if {$jumper != "" && $jump_mode == "tunnel"} {
+        lappend cmd -o "ProxyCommand=[proxy_command $jumper $jumper_id_file $host_key_checking]"
+    }
+    lappend cmd "$user@$host"
 }
-if {$port != ""} { lappend cmd -p $port }
-if {$id_file != ""} { lappend cmd -i $id_file }
-if {$jumper != ""} {
-    lappend cmd -o "ProxyCommand=[proxy_command $jumper $jumper_id_file $host_key_checking]"
-}
-lappend cmd "$user@$host"
 
 set timeout 20
 
@@ -153,7 +204,13 @@ if {$has_tty} {
 }
 
 # Print a clean connection message
-puts "Connecting to $user@$host..."
+if {$jumper != "" && $jump_mode == "shell"} {
+    puts "Connecting to $jumper, then $user@$host..."
+} elseif {$jumper != ""} {
+    puts "Connecting to $user@$host through $jumper..."
+} else {
+    puts "Connecting to $user@$host..."
+}
 
 # Spawn the SSH process
 # Temporarily disable logging to hide the spawn command itself
@@ -213,18 +270,32 @@ expect {
     }
     # Success condition: match a shell prompt
     -re {[$#%>] ?$} {
+        if {$connection_stage == "jumper"} {
+            set connection_stage "target"
+            set target_cmd [target_ssh_command $host $port $user $id_file]
+            send "$target_cmd\r"
+            exp_continue
+        }
+
         if {$remote_command != ""} {
             # Scenario: An initial command is provided.
             send "$remote_command"
             send "\r"
             # Wait for the echo to ensure receipt.
             expect "$remote_command"
-            # Wait for the next prompt to ensure execution is complete.
-            expect -re {[$#%>] ?$}
-            # Start interactive session.
-            interact {
+            # Wait for the next prompt to ensure execution is complete. If the
+            # command exits the SSH session, treat EOF as a clean handoff result.
+            expect {
+                -re {[$#%>] ?$} {
+                    interact {
+                        eof {
+                            return
+                        }
+                    }
+                }
                 eof {
-                    return
+                    cleanup
+                    exit 0
                 }
             }
         } else {

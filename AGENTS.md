@@ -44,11 +44,12 @@ This file provides repository guidance for coding agents and maintainers working
 | `audit_logger.py` | `AuditLogger` class — manages runtime data dir (`~/.sshgo/` or `$SSHGO_DATA_DIR`), writes audit logs in JSONL format with node identity/endpoint fields and retention limits (history: 1000, audit-simple: 5000, audit-full: 2000) |
 | `tui.py` | `Tui` class — curses-based interactive interface (tree view, search, add/edit/delete forms, detail preview pane) |
 | `config_parser.py` | `SshConfigParser` — parses `~/.ssh/config` into sshgo host nodes |
-| `crypto.py` | PBKDF2-SHA256 key derivation + XOR cipher + Base64 encoding for optional credential encryption |
+| `crypto.py` | PBKDF2-HMAC-SHA256 key derivation plus HMAC-authenticated stdlib stream encryption for optional credential encryption; legacy XOR+Base64 ciphertext remains readable |
 | `auth.py` | TOTP/HOTP generation from Base32 secrets (for MFA/2FA) |
 | `i18n.py` | Simple English/Chinese string localization (`I18N` class, global `i18n` instance) |
 | `login.exp` | Expect script that handles interactive SSH login (password, passphrase, prompt-time MFA generation, jump host chaining) |
 | `sftp_login.exp` | Expect script for SFTP file transfer (upload/download) with same authentication logic as login.exp |
+| `relay_transfer.exp` | Expect script for non-SFTP relay file transfer through a jump host using temporary jump-host storage and `scp` |
 | `hosts.json` | Project fallback config file: `{"config": {...}, "hosts": [...]}` with `group` and `host` nodes |
 
 ### Config Format Support
@@ -63,18 +64,18 @@ This file provides repository guidance for coding agents and maintainers working
 
 2. **TUI**: `Tui.run()` enters curses main loop — render tree, handle keyboard input (j/k navigation, a/e/d CRUD, f search, h/l fold/unfold, q quit), forms for add/edit.
 
-3. **SSH Connection**: `HostManager.execute_interactive_connection()` builds args, stores password/MFA secrets only in the `SSHGO_*` environment copy, records a `started` audit event, then uses `os.execve()` to replace Python with `login.exp`. Target and jump host auth are computed independently; Expect uses `ProxyCommand` when a jump host is present so jump keys do not leak into target auth. The Expect script reads and unsets secret environment variables, spawns `ssh`, handles password/MFA prompts, then enters `interact`. Python does not wait for the SSH session and cannot record final duration or exit code.
+3. **SSH Connection**: `HostManager.execute_interactive_connection()` builds args, stores password/MFA secrets only in the `SSHGO_*` environment copy, records a `started` audit event, then uses `os.execve()` to replace Python with `login.exp`. Target and jump host auth are computed independently. Nested interactive SSH supports `ssh_jump_mode=shell` (default, login to jump then run target SSH from the jump shell) and `ssh_jump_mode=tunnel` (OpenSSH `ProxyCommand` / `ssh -W`). Python does not wait for the SSH session and cannot record final duration or exit code.
 
-4. **SFTP Transfer**: `HostManager.build_sftp_command_args()` builds args, records `sftp_started`, and `execute_sftp_transfer()` uses `os.execve()` to replace Python with `sftp_login.exp`. The Expect script spawns `sftp`, authenticates (password/MFA/jump), then executes put/get commands.
+4. **File Transfer**: `execute_sftp_transfer()` keeps the public shortcut path but dispatches by `transfer_jump_mode`. `tunnel` (default) uses true local SFTP via `sftp_login.exp` and requires jump-host TCP forwarding. `relay` uses `relay_transfer.exp`, copies regular files through a temporary path on the jump host with `scp`, retries local-to-jump scp with legacy protocol when the default scp protocol is incompatible, is not SFTP, and reports final transfer/cleanup status in Expect output rather than Python audit.
 
 5. **Recent Resolution**: TUI builds the Recent group from audit history. It resolves current nodes by `node_id` first, then legacy name/endpoint fields, and only falls back to read-only history snapshots when the configured node no longer exists.
 
-6. **Encryption**: Toggle via `--toggle-encryption`. Uses PBKDF2 (260k iterations) + XOR + Base64. Master password prompted interactively, never stored.
+6. **Encryption**: Toggle via `--toggle-encryption`. Uses PBKDF2 (260k iterations) with an HMAC-authenticated stdlib stream format for new ciphertext, while preserving legacy XOR+Base64 read compatibility. Master password is prompted interactively and never stored.
 
 ### Node Types in `hosts.json`
 
 - **group**: `{"id": "...", "type": "group", "name": "...", "expanded": bool, "children": [...]}`
-- **host**: `{"id": "...", "type": "host", "name": "...", "host": "addr:port", "user": "...", "password": "...", "id_file": "...", "mfa_secret": "...", "children": [...]}` — `children` on a host makes it a jump host. `id` is managed by sshgo and should be preserved across edits.
+- **host**: `{"id": "...", "type": "host", "name": "...", "host": "addr:port", "user": "...", "password": "...", "id_file": "...", "mfa_secret": "...", "ssh_jump_mode": "shell|tunnel", "transfer_jump_mode": "tunnel|relay", "children": [...]}` — `children` on a host makes it a jump host. `id` is managed by sshgo and should be preserved across edits.
 
 ### Config Priority
 
@@ -88,14 +89,15 @@ This file provides repository guidance for coding agents and maintainers working
 - `docs/vision.md`: product goals and non-goals.
 - `docs/roadmap.md`: milestones, exit criteria, and future candidates.
 - `docs/specs/*.md`: accepted behavior and implementation boundaries.
+- `docs/specs/jump-host-connection-modes.md`: configurable SSH/transfer jump modes (`shell`, `tunnel`, `relay`).
 - Verification commands live in this file; avoid adding separate per-spec test-plan status files.
 
 ## Development Notes
 
 - **Python**: Uses only stdlib modules (`curses`, `json`, `argparse`, `getpass`, `hmac`, `hashlib`, `base64`, `struct`, `curses.textpad`). Run with `~/.venv/bin/python` per project rules.
 - **External dependency**: `expect` is the only required non-Python package for interactive SSH/SFTP prompt handling.
-- **Expect scripts**: `login.exp` and `sftp_login.exp` must be executable (`chmod +x`). The TUI ensures this at startup.
-- **MFA generation**: `login.exp` and `sftp_login.exp` generate TOTP codes when an MFA prompt arrives by invoking `auth.py` with the secret from the transient `SSHGO_*` environment copy. Secrets are not passed in argv.
+- **Expect scripts**: `login.exp`, `sftp_login.exp`, and `relay_transfer.exp` must be executable (`chmod +x`). HostManager ensures this before shortcut `execve`.
+- **MFA generation**: Expect scripts generate TOTP codes when an MFA prompt arrives by invoking `auth.py` with the secret from the transient `SSHGO_*` environment copy. Secrets are not passed in argv.
 - **Process handoff**: Shortcut connections and transfers replace Python via `os.execve()`. The Python manager records start/exec failure events only; it does not supervise the live SSH/SFTP session.
 - **Audit logging**: JSONL files in `~/.sshgo/`. History and audit-simple are always written for SSH and SFTP starts; audit-full requires `--audit-full` flag. New records include `node_id`, `port`, and `endpoint`. Because of the execve handoff, final duration and exit code are not available in current audit records.
 - **Config saves**: HostManager writes JSON atomically and keeps best-effort backups at `hosts.json.bak`, `hosts.json.bak.1`, and `hosts.json.bak.2`.

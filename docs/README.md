@@ -15,6 +15,7 @@
 | [runtime-separation.md](specs/runtime-separation.md) | Runtime data separation, history, audit, SSH agent |
 | [security-hardening.md](specs/security-hardening.md) | Secret handling, host key policy, Expect handoff |
 | [connection-auth-audit-hardening.md](specs/connection-auth-audit-hardening.md) | Target/jump auth independence, SFTP audit, atomic save |
+| [jump-host-connection-modes.md](specs/jump-host-connection-modes.md) | Configurable SSH/transfer jump modes |
 | [node-identity-recent-hardening.md](specs/node-identity-recent-hardening.md) | Stable node IDs, Recent resolution, config backups |
 
 ## Documentation Rules

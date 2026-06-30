@@ -64,7 +64,7 @@ def run_tui(host_manager):
             print("\nOperation cancelled.")
         sys.exit(0)
 
-    for script in ["login.exp", "sftp_login.exp"]:
+    for script in ["login.exp", "sftp_login.exp", "relay_transfer.exp"]:
         script_path = os.path.join(script_dir, script)
         try:
             os.chmod(script_path, 0o755)

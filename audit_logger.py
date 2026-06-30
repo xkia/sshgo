@@ -28,7 +28,7 @@ class AuditLogger:
     def record_login(self, name, host, user, auth, result,
                      command=None, duration_ms=None, exit_code=None,
                      jump_chain=None, full_mode=False, node_id=None,
-                     port=None, endpoint=None):
+                     port=None, endpoint=None, extra=None):
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         record = {
@@ -64,6 +64,8 @@ class AuditLogger:
                 full_record["exit_code"] = exit_code
             if jump_chain:
                 full_record["jump_chain"] = jump_chain
+            if extra:
+                full_record.update(extra)
             self._append(self.audit_full_path, full_record)
             self._trim(self.audit_full_path, self.AUDIT_FULL_MAX)
 

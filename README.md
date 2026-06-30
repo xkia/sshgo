@@ -202,6 +202,9 @@ Set `SSHGO_DATA_DIR` or `config.data_dir` to use a different runtime data direct
     "data_dir": null,
     "strict_host_key_checking": true,
     "recent_expanded": false,
+    "default_ssh_jump_mode": "shell",
+    "default_transfer_jump_mode": "tunnel",
+    "relay_temp_dir": "/tmp",
     "theme": {
       "highlight_fg": "white",
       "highlight_bg": "blue",
@@ -223,6 +226,9 @@ Important `config` fields:
 - `data_dir`: Runtime data directory for history and audit logs.
 - `strict_host_key_checking`: `true` uses OpenSSH `accept-new`; `false` restores the older loose mode with `UserKnownHostsFile=/dev/null`.
 - `recent_expanded`: Stores whether the TUI Recent group is expanded.
+- `default_ssh_jump_mode`: Default nested SSH mode, either `shell` or `tunnel`.
+- `default_transfer_jump_mode`: Default nested transfer mode, either `tunnel` or `relay`.
+- `relay_temp_dir`: Absolute temporary directory on the jump host for `transfer_jump_mode: "relay"`.
 - `theme`: Optional TUI colors. Supported color names are `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, and `default`.
 
 ### Node Types
@@ -256,13 +262,17 @@ Represents a connectable server. A `host` can also act as a **jump host** if it 
   "id_file": "~/.ssh/id_rsa",  // Required if not using a password
   "mfa_secret": "...",       // Optional: for TOTP authentication
   "use_ssh_agent": false,    // Optional: overrides config.use_ssh_agent
+  "ssh_jump_mode": "shell",  // Optional: shell or tunnel
+  "transfer_jump_mode": "tunnel", // Optional: tunnel or relay
   "children": [ ... ]        // Optional: makes this host a jump host
 }
 ```
 
 ### Jump Host Example
 
-To configure a jump host, simply place the target host(s) inside the `children` array of another host. `sshgo` will automatically use the parent host as a jumper.
+To configure a jump host, place the target host(s) inside the `children` array of another host. Nested SSH defaults to `ssh_jump_mode: "shell"`: `sshgo` logs in to the parent host first, then starts SSH to the target from that parent shell. Set `ssh_jump_mode: "tunnel"` to use OpenSSH forwarding instead.
+
+File transfer defaults to `transfer_jump_mode: "tunnel"`, which is true local SFTP and requires the jump host to allow TCP forwarding. Set `transfer_jump_mode: "relay"` only when forwarding is disabled and you accept that files are temporarily copied through the jump host with `scp`. If local-to-jump `scp` is incompatible with the jump host's SFTP subsystem, relay retries that hop with legacy scp protocol.
 
 ```json
 {
@@ -277,7 +287,9 @@ To configure a jump host, simply place the target host(s) inside the `children` 
             "name": "Internal API Server",
             "host": "10.0.1.50",
             "user": "api_user",
-            "password": "..."
+            "password": "...",
+            "ssh_jump_mode": "shell",
+            "transfer_jump_mode": "relay"
         }
     ]
 }

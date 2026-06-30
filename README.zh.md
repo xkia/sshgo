@@ -202,6 +202,9 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
     "data_dir": null,
     "strict_host_key_checking": true,
     "recent_expanded": false,
+    "default_ssh_jump_mode": "shell",
+    "default_transfer_jump_mode": "tunnel",
+    "relay_temp_dir": "/tmp",
     "theme": {
       "highlight_fg": "white",
       "highlight_bg": "blue",
@@ -223,6 +226,9 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 - `data_dir`: history 和 audit 日志的运行时数据目录。
 - `strict_host_key_checking`: `true` 使用 OpenSSH `accept-new`；`false` 恢复旧的宽松模式并使用 `UserKnownHostsFile=/dev/null`。
 - `recent_expanded`: 存储 TUI Recent 分组是否展开。
+- `default_ssh_jump_mode`: 嵌套 SSH 的默认模式, 可选 `shell` 或 `tunnel`。
+- `default_transfer_jump_mode`: 嵌套文件传输的默认模式, 可选 `tunnel` 或 `relay`。
+- `relay_temp_dir`: `transfer_jump_mode: "relay"` 使用的跳板机绝对临时目录。
 - `theme`: 可选 TUI 颜色。支持 `black`、`red`、`green`、`yellow`、`blue`、`magenta`、`cyan`、`white` 和 `default`。
 
 ### 节点类型
@@ -256,13 +262,17 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
   "id_file": "~/.ssh/id_rsa",  // 如果不使用密码, 则为必填项
   "mfa_secret": "...",       // 可选: 用于 TOTP 认证
   "use_ssh_agent": false,    // 可选: 覆盖 config.use_ssh_agent
+  "ssh_jump_mode": "shell",  // 可选: shell 或 tunnel
+  "transfer_jump_mode": "tunnel", // 可选: tunnel 或 relay
   "children": [ ... ]        // 可选: 使此主机成为一个跳板机
 }
 ```
 
 ### 跳板机示例
 
-要配置跳板机, 只需将目标主机放置在另一个主机的 `children` 数组中. `sshgo` 将自动使用父主机作为跳板机.
+要配置跳板机, 只需将目标主机放置在另一个主机的 `children` 数组中. 嵌套 SSH 默认使用 `ssh_jump_mode: "shell"`: `sshgo` 会先登录父主机, 再从父主机 shell 中发起到目标主机的 SSH. 如需使用 OpenSSH 转发, 可设置 `ssh_jump_mode: "tunnel"`.
+
+文件传输默认使用 `transfer_jump_mode: "tunnel"`, 这是真正的本机 SFTP, 要求跳板机允许 TCP forwarding. 当 forwarding 被禁用且接受文件通过跳板机临时中继时, 可以显式设置 `transfer_jump_mode: "relay"`. 如果本机到跳板机的 `scp` 与跳板机 SFTP subsystem 不兼容, relay 会对这一段重试 legacy scp protocol.
 
 ```json
 {
@@ -277,7 +287,9 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
             "name": "内部 API 服务器",
             "host": "10.0.1.50",
             "user": "api_user",
-            "password": "..."
+            "password": "...",
+            "ssh_jump_mode": "shell",
+            "transfer_jump_mode": "relay"
         }
     ]
 }
