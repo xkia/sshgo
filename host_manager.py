@@ -994,11 +994,14 @@ class HostManager:
 
         return args
 
-    def build_sftp_command_args(self, node, action, path1, path2):
+    def build_file_transfer_command_args(self, node, action, path1, path2):
         args, _ = self._build_sftp_command_parts(node, action, path1, path2)
         return args
 
-    def execute_sftp_transfer(self, node, action, path1, path2):
+    def build_sftp_command_args(self, node, action, path1, path2):
+        return self.build_file_transfer_command_args(node, action, path1, path2)
+
+    def execute_file_transfer(self, node, action, path1, path2):
         if (
             node.get("nest_parent")
             and self._effective_transfer_jump_mode(node) == "relay"
@@ -1071,6 +1074,9 @@ class HostManager:
             )
             print(f"Error executing SFTP: {e}", file=sys.stderr)
             sys.exit(1)
+
+    def execute_sftp_transfer(self, node, action, path1, path2):
+        return self.execute_file_transfer(node, action, path1, path2)
 
     def _execute_relay_transfer(self, node, action, path1, path2):
         relay_script = os.path.join(SCRIPT_DIR, "relay_transfer.exp")

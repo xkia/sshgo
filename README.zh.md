@@ -272,7 +272,7 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 
 要配置跳板机, 只需将目标主机放置在另一个主机的 `children` 数组中. 嵌套 SSH 默认使用 `ssh_jump_mode: "shell"`: `sshgo` 会先登录父主机, 再从父主机 shell 中发起到目标主机的 SSH. 如需使用 OpenSSH 转发, 可设置 `ssh_jump_mode: "tunnel"`.
 
-文件传输默认使用 `transfer_jump_mode: "tunnel"`, 这是真正的本机 SFTP, 要求跳板机允许 TCP forwarding. 当 forwarding 被禁用且接受文件通过跳板机临时中继时, 可以显式设置 `transfer_jump_mode: "relay"`. 如果本机到跳板机的 `scp` 与跳板机 SFTP subsystem 不兼容, relay 会对这一段重试 legacy scp protocol.
+文件传输默认使用 `transfer_jump_mode: "tunnel"`, 这是真正的本机 SFTP, 要求跳板机允许 TCP forwarding. 当 forwarding 被禁用且接受文件通过跳板机临时中继时, 可以显式设置 `transfer_jump_mode: "relay"`. 如果本机到跳板机的 `scp` 因协议不兼容失败, relay 会对这一段重试 legacy scp protocol.
 
 ```json
 {

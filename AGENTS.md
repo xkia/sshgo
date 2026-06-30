@@ -40,7 +40,7 @@ This file provides repository guidance for coding agents and maintainers working
 |------|---------------|
 | `sshgo.py` | Entry point: arg parsing, config path resolution, dispatches to TUI or shortcut commands |
 | `sshgo.sh` | Thin shell wrapper that `cd`s to script dir and invokes `python3 -B sshgo.py` |
-| `host_manager.py` | `HostManager` class — loads/parses `hosts.json` (JSONC), migrates stable node IDs, encrypt/decrypt credentials, CRUD for hosts/groups, validates and backs up config, builds SSH/SFTP command args with independent target/jump auth, records start audit events, then hands off to Expect |
+| `host_manager.py` | `HostManager` class — loads/parses `hosts.json` (JSONC), migrates stable node IDs, encrypt/decrypt credentials, CRUD for hosts/groups, validates and backs up config, builds SSH/file-transfer command args with independent target/jump auth, records start audit events, then hands off to Expect |
 | `audit_logger.py` | `AuditLogger` class — manages runtime data dir (`~/.sshgo/` or `$SSHGO_DATA_DIR`), writes audit logs in JSONL format with node identity/endpoint fields and retention limits (history: 1000, audit-simple: 5000, audit-full: 2000) |
 | `tui.py` | `Tui` class — curses-based interactive interface (tree view, search, add/edit/delete forms, detail preview pane) |
 | `config_parser.py` | `SshConfigParser` — parses `~/.ssh/config` into sshgo host nodes |
@@ -66,7 +66,7 @@ This file provides repository guidance for coding agents and maintainers working
 
 3. **SSH Connection**: `HostManager.execute_interactive_connection()` builds args, stores password/MFA secrets only in the `SSHGO_*` environment copy, records a `started` audit event, then uses `os.execve()` to replace Python with `login.exp`. Target and jump host auth are computed independently. Nested interactive SSH supports `ssh_jump_mode=shell` (default, login to jump then run target SSH from the jump shell) and `ssh_jump_mode=tunnel` (OpenSSH `ProxyCommand` / `ssh -W`). Python does not wait for the SSH session and cannot record final duration or exit code.
 
-4. **File Transfer**: `execute_sftp_transfer()` keeps the public shortcut path but dispatches by `transfer_jump_mode`. `tunnel` (default) uses true local SFTP via `sftp_login.exp` and requires jump-host TCP forwarding. `relay` uses `relay_transfer.exp`, copies regular files through a temporary path on the jump host with `scp`, retries local-to-jump scp with legacy protocol when the default scp protocol is incompatible, is not SFTP, and reports final transfer/cleanup status in Expect output rather than Python audit.
+4. **File Transfer**: `execute_file_transfer()` keeps the public shortcut path but dispatches by `transfer_jump_mode`. `tunnel` (default) uses true local SFTP via `sftp_login.exp` and requires jump-host TCP forwarding. `relay` uses `relay_transfer.exp`, copies regular files through a temporary path on the jump host with `scp`, retries local-to-jump scp with legacy protocol only for protocol-incompatibility failures, is not SFTP, and reports final transfer/cleanup status in Expect output rather than Python audit.
 
 5. **Recent Resolution**: TUI builds the Recent group from audit history. It resolves current nodes by `node_id` first, then legacy name/endpoint fields, and only falls back to read-only history snapshots when the configured node no longer exists.
 

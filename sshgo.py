@@ -35,7 +35,7 @@ def handle_shortcut_commands(cmd_args, host_manager):
             sys.exit(1)
 
         path1, path2 = cmd_args[2], cmd_args[3]
-        host_manager.execute_sftp_transfer(node, action, path1, path2)
+        host_manager.execute_file_transfer(node, action, path1, path2)
 
     else:
         remote_command = " ".join(cmd_args[1:])

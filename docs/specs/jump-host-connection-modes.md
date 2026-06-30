@@ -282,9 +282,19 @@ cleanup jump temporary path
 relay implementation = scp
 ```
 
-本机与跳板机之间的 `scp` 会优先使用默认协议；如果本机 OpenSSH 的默认 SFTP-based scp 与跳板机不兼容，会自动重试 legacy scp protocol（`scp -O`）。该 fallback 只用于本机与跳板机之间的复制，不改变用户配置值。
+本机与跳板机之间的 `scp` 会优先使用默认协议；如果本机 OpenSSH 的默认 SFTP-based scp 与跳板机不兼容并返回协议不兼容退出码，会自动重试 legacy scp protocol（`scp -O`）。该 fallback 只用于本机与跳板机之间的复制，不改变用户配置值。认证失败、host key 失败、网络失败等其他错误不应触发 legacy fallback。
 
 用户配置值仍保持为 `relay`，而不是 `relay_scp`。这样以后即使内部改为 `rsync`、`tar` stream 或其他机制，也不需要修改配置。
+
+### Relay backend 边界
+
+第一版 relay backend 是 `scp_relay`：
+
+```text
+transfer_jump_mode=relay -> scp_relay backend
+```
+
+当前 backend 的职责只包括普通文件传输、跳板机临时路径、local-to-jump scp、jump-to-target scp 和 best-effort cleanup。后续如果要支持目录、rsync、tar stream、终态 JSONL 审计或其他传输机制，应新增明确的 backend 设计，不继续把不相关机制堆叠到当前 Expect 流程中。
 
 适用场景：
 
@@ -324,7 +334,7 @@ relay implementation = scp
 - cleanup 失败必须打印警告，但不能覆盖原始传输错误。
 - 任何阶段都不能自动切换到 `tunnel` 或其他模式。
 - 本机 `scp` 阶段必须在 `eof` 后读取子进程退出码，不能只依赖输出文本判断成功。
-- 本机 `scp` 阶段允许在默认协议失败后重试 legacy scp protocol，以兼容禁用或缺失 SFTP subsystem 的跳板机。
+- 本机 `scp` 阶段允许在默认协议返回协议不兼容退出码后重试 legacy scp protocol，以兼容禁用或缺失 SFTP subsystem 的跳板机。
 
 ### Relay 认证语义
 
@@ -483,7 +493,7 @@ relay 的最终传输成功、传输失败、cleanup 成功或 cleanup 失败由
 
 ## 实现摘要
 
-- `host_manager.py` 负责模式解析、继承、validation、审计 start 记录和 `execve` 分发。
+- `host_manager.py` 负责模式解析、继承、validation、审计 start 记录、内部 file transfer 分发和 `execve` 移交。
 - `login.exp` 支持 `ssh_jump_mode=shell` 和 `ssh_jump_mode=tunnel`。
 - `sftp_login.exp` 保留真正 SFTP 的 `transfer_jump_mode=tunnel`。
 - `relay_transfer.exp` 实现非 SFTP 的 `transfer_jump_mode=relay`，通过跳板机临时路径和 `scp` 中继普通文件。
@@ -528,7 +538,7 @@ relay 的最终传输成功、传输失败、cleanup 成功或 cleanup 失败由
 - 模式参数传递、继承和 validation。
 - relay 使用独立 Expect 脚本。
 - relay target hop host-key options。
-- relay local `scp` 默认协议失败后的 legacy protocol fallback。
+- relay local `scp` 协议不兼容退出码触发的 legacy protocol fallback。
 - relay 路径 shell quote 的空格、单引号、双引号、反斜杠、`$`、`;`、`&` 和换行字符。
 - relay 本机上传路径只允许普通文件。
 - relay cleanup warning 和失败路径不互相覆盖的脚本结构。

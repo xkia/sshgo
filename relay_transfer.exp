@@ -137,6 +137,18 @@ proc auth_response {stage kind} {
     return ""
 }
 
+proc wait_exit_status {} {
+    set wait_result [wait]
+    if {[llength $wait_result] >= 4} {
+        set exit_status [lindex $wait_result 3]
+        if {[string is integer -strict $exit_status]} {
+            return $exit_status
+        }
+    }
+    catch {puts stderr "Warning: unexpected process wait result: $wait_result"}
+    return 1
+}
+
 proc expect_auth_until_eof {stage {fatal 1}} {
     expect {
         -re {Are you sure you want to continue connecting.*yes/no} {
@@ -181,8 +193,7 @@ proc expect_auth_until_eof {stage {fatal 1}} {
             return 1
         }
         eof {
-            set wait_result [wait]
-            set exit_status [lindex $wait_result 3]
+            set exit_status [wait_exit_status]
             if {$exit_status != "0" && $fatal} {
                 fail "\nRelay command failed with exit status $exit_status.\n" 1
             }
@@ -357,11 +368,15 @@ proc cleanup_temp_path {temp_path} {
     return $status
 }
 
+proc can_retry_legacy_scp {status} {
+    return [expr {$status == "10"}]
+}
+
 proc run_local_scp_with_legacy_fallback {normal_cmd legacy_cmd stage} {
     set status [run_local_command $normal_cmd $stage 0]
-    if {$status != "0"} {
+    if {[can_retry_legacy_scp $status]} {
         catch {puts stderr "Local scp failed; retrying with legacy scp protocol..."}
-        return [run_local_command $legacy_cmd $stage 1]
+        return [run_local_command $legacy_cmd $stage 0]
     }
     return $status
 }
@@ -408,10 +423,14 @@ set temp_dir [file dirname $temp_path]
 run_jump_command "mkdir -p [shell_quote $temp_dir]" 0 1
 
 if {$action == "upload"} {
-    run_local_scp_with_legacy_fallback \
+    set status [run_local_scp_with_legacy_fallback \
         [build_local_scp_to_jump $local_path $temp_path] \
         [build_local_scp_to_jump $local_path $temp_path 1] \
-        "jump"
+        "jump"]
+    if {$status != "0"} {
+        cleanup_temp_path $temp_path
+        fail "\nRelay upload failed while copying to jump host.\n" 1
+    }
     set remote_spec [target_scp_spec $remote_path]
     set cmd [target_scp_command $temp_path $remote_spec]
     set status [run_jump_command $cmd 1 0]

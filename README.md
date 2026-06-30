@@ -272,7 +272,7 @@ Represents a connectable server. A `host` can also act as a **jump host** if it 
 
 To configure a jump host, place the target host(s) inside the `children` array of another host. Nested SSH defaults to `ssh_jump_mode: "shell"`: `sshgo` logs in to the parent host first, then starts SSH to the target from that parent shell. Set `ssh_jump_mode: "tunnel"` to use OpenSSH forwarding instead.
 
-File transfer defaults to `transfer_jump_mode: "tunnel"`, which is true local SFTP and requires the jump host to allow TCP forwarding. Set `transfer_jump_mode: "relay"` only when forwarding is disabled and you accept that files are temporarily copied through the jump host with `scp`. If local-to-jump `scp` is incompatible with the jump host's SFTP subsystem, relay retries that hop with legacy scp protocol.
+File transfer defaults to `transfer_jump_mode: "tunnel"`, which is true local SFTP and requires the jump host to allow TCP forwarding. Set `transfer_jump_mode: "relay"` only when forwarding is disabled and you accept that files are temporarily copied through the jump host with `scp`. If local-to-jump `scp` fails with a protocol incompatibility, relay retries that hop with legacy scp protocol.
 
 ```json
 {

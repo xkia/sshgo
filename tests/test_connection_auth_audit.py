@@ -304,7 +304,7 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             try:
                 with redirect_stderr(StringIO()):
                     with self.assertRaises(SystemExit):
-                        manager.execute_sftp_transfer(
+                        manager.execute_file_transfer(
                             target, "upload", "local.txt", "/tmp/remote.txt"
                         )
             finally:
@@ -320,13 +320,27 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             manager = self._manager(temp_dir)
             target = manager.find_host_by_alias("target")
 
-            args = manager.build_sftp_command_args(
+            args = manager.build_file_transfer_command_args(
                 target, "download", "/remote/file.txt", "local-file.txt"
             )
 
         self.assertEqual(args[args.index("-action") + 1], "download")
         self.assertEqual(args[args.index("-local") + 1], "local-file.txt")
         self.assertEqual(args[args.index("-remote") + 1], "/remote/file.txt")
+
+    def test_legacy_sftp_transfer_api_delegates_to_file_transfer_api(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            target = manager.find_host_by_alias("target")
+
+            file_args = manager.build_file_transfer_command_args(
+                target, "upload", "local-file.txt", "/remote/file.txt"
+            )
+            legacy_args = manager.build_sftp_command_args(
+                target, "upload", "local-file.txt", "/remote/file.txt"
+            )
+
+        self.assertEqual(file_args, legacy_args)
 
     def test_relay_transfer_uses_relay_expect_script(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -347,7 +361,7 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             try:
                 with redirect_stderr(StringIO()):
                     with self.assertRaises(SystemExit):
-                        manager.execute_sftp_transfer(
+                        manager.execute_file_transfer(
                             target, "upload", "local.txt", "/tmp/remote.txt"
                         )
             finally:
@@ -480,9 +494,14 @@ class ConnectionAuthAuditTests(unittest.TestCase):
         with open("relay_transfer.exp", "r", encoding="utf-8") as f:
             script = f.read()
 
+        self.assertIn("proc wait_exit_status", script)
+        self.assertIn("Warning: unexpected process wait result", script)
+        self.assertIn("proc can_retry_legacy_scp", script)
+        self.assertIn('status == "10"', script)
         self.assertIn("Warning: could not remove relay temp file", script)
         self.assertIn("Local scp failed; retrying with legacy scp protocol", script)
         self.assertIn("cleanup_temp_path $temp_path", script)
+        self.assertIn("Relay upload failed while copying to jump host", script)
         self.assertIn("fail \"\\nRelay upload failed.\\n\" 1", script)
         self.assertIn("fail \"\\nRelay download failed.\\n\" 1", script)
 
@@ -598,6 +617,45 @@ class ConnectionAuthAuditTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 1)
         self.assertIn("regular files only", result.stdout + result.stderr)
+
+    def test_tui_form_reports_terminal_too_small(self):
+        class FakeScreen:
+            def __init__(self):
+                self.messages = []
+
+            def clear(self):
+                pass
+
+            def border(self, _):
+                pass
+
+            def getmaxyx(self):
+                return (8, 20)
+
+            def addstr(self, *args):
+                if args and isinstance(args[-1], str):
+                    self.messages.append(args[-1])
+
+            def refresh(self):
+                pass
+
+        tui = object.__new__(Tui)
+        tui.screen = FakeScreen()
+        tui.restore_screen = lambda: None
+        result = Tui._draw_form(
+            tui,
+            [
+                {"label": "Name", "type": "text", "name": "name", "y": 3, "x": 2},
+                {"label": "Save", "type": "button", "y": 19, "x": 2},
+            ],
+            0,
+            "Test",
+        )
+
+        self.assertFalse(result)
+        self.assertTrue(
+            any("Terminal too" in message for message in tui.screen.messages)
+        )
 
     def test_audit_records_node_identity_and_endpoint(self):
         with tempfile.TemporaryDirectory() as temp_dir:

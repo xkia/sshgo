@@ -188,6 +188,23 @@ class Tui:
             input_start_x + 22 + 1
         )  # Input box width (20) + 2 spaces + 1 for right border
 
+        required_height = box_bottom_y + 3
+        required_width = box_right_x + 2
+        screen_height, screen_width = self.screen.getmaxyx()
+        if screen_height < required_height or screen_width < required_width:
+            message = i18n.get(
+                "terminal_too_small",
+                width=required_width,
+                height=required_height,
+            )
+            if screen_height > 1 and screen_width > 3:
+                try:
+                    self.screen.addstr(1, 2, message[: max(0, screen_width - 4)])
+                except curses.error:
+                    pass
+            self.screen.refresh()
+            return False
+
         # Draw the inner box
         self.screen.addstr(
             box_top_y, box_left_x, "+" + "-" * (box_right_x - box_left_x - 2) + "+"
@@ -275,6 +292,7 @@ class Tui:
             self.screen.attroff(curses.A_REVERSE)
 
         self.screen.refresh()
+        return True
 
     def _run_form_loop(self, fields, title=""):
         active_field_index = 0
@@ -312,7 +330,11 @@ class Tui:
             ]
             if not interactive_fields:
                 # If no interactive fields, wait for Esc or q to exit
-                self._draw_form(visible_fields, -1, title, error_message)
+                if not self._draw_form(visible_fields, -1, title, error_message):
+                    c = self.screen.getch()
+                    if c in [27, ord("q")]:
+                        return None
+                    continue
                 c = self.screen.getch()
                 if c in [27, ord("q")]:
                     return None
@@ -324,7 +346,11 @@ class Tui:
             # Find the index of the active field in the full visible_fields list
             full_index = visible_fields.index(interactive_fields[active_field_index])
 
-            self._draw_form(visible_fields, full_index, title, error_message)
+            if not self._draw_form(visible_fields, full_index, title, error_message):
+                c = self.screen.getch()
+                if c in [27, ord("q")]:
+                    return None
+                continue
             c = self.screen.getch()
             error_message = ""
 
