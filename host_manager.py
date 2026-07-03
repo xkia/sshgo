@@ -9,6 +9,8 @@ import base64
 import tempfile
 import shutil
 import uuid
+import re
+import shlex
 from datetime import datetime, timezone
 from crypto import encrypt, decrypt, derive_key
 from config_parser import SshConfigParser
@@ -23,10 +25,15 @@ TRANSFER_JUMP_MODES = frozenset({"tunnel", "relay"})
 DEFAULT_SSH_JUMP_MODE = "shell"
 DEFAULT_TRANSFER_JUMP_MODE = "tunnel"
 DEFAULT_RELAY_TEMP_DIR = "/tmp"
+PLACEHOLDER_RE = re.compile(r"{{([A-Za-z_][A-Za-z0-9_]*)}}")
+PLACEHOLDER_TOKEN_RE = re.compile(r"{{([^{}]*)}}")
+PLACEHOLDER_BRACE_RE = re.compile(r"{{|}}")
+PLACEHOLDER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+PLACEHOLDER_NODE_FIELDS = frozenset({"host", "user", "id_file", "proxy_command"})
 ALLOWED_SAVE_KEYS = frozenset({
     "id", "type", "name", "expanded", "children",
     "host", "user", "password", "id_file", "mfa_secret", "use_ssh_agent",
-    "ssh_jump_mode", "transfer_jump_mode",
+    "ssh_jump_mode", "transfer_jump_mode", "proxy_command",
 })
 BACKUP_COUNT = 3
 
@@ -44,7 +51,30 @@ _DEFAULT_CONFIG = {
     "default_ssh_jump_mode": DEFAULT_SSH_JUMP_MODE,
     "default_transfer_jump_mode": DEFAULT_TRANSFER_JUMP_MODE,
     "relay_temp_dir": DEFAULT_RELAY_TEMP_DIR,
+    "placeholders": {},
 }
+
+
+class PlaceholderResolutionError(ValueError):
+    pass
+
+
+class ConfigRuntimeError(ValueError):
+    pass
+
+
+def _default_config():
+    config = dict(_DEFAULT_CONFIG)
+    config["placeholders"] = dict(_DEFAULT_CONFIG["placeholders"])
+    return config
+
+
+def _merge_config(raw_config):
+    config = _default_config()
+    config.update(raw_config)
+    if isinstance(config.get("placeholders"), dict):
+        config["placeholders"] = dict(config["placeholders"])
+    return config
 
 
 def _remove_comments_and_trailing_commas(text: str) -> str:
@@ -166,7 +196,11 @@ def validate_hosts_config(data: dict) -> list[str]:
         if isinstance(data.get("config", {}), dict)
         else {}
     )
-    config = {**_DEFAULT_CONFIG, **raw_config}
+    config = _merge_config(raw_config)
+    placeholders = _validate_placeholders(
+        raw_config.get("placeholders"),
+        errors,
+    )
 
     default_ssh_jump_mode = config.get("default_ssh_jump_mode")
     if default_ssh_jump_mode not in SSH_JUMP_MODES:
@@ -186,7 +220,11 @@ def validate_hosts_config(data: dict) -> list[str]:
             )
         )
 
-    relay_temp_dir = config.get("relay_temp_dir")
+    relay_temp_dir = _resolve_placeholders_for_validation(
+        config.get("relay_temp_dir"),
+        placeholders,
+        errors,
+    )
     if not relay_temp_dir or not os.path.isabs(os.path.expanduser(str(relay_temp_dir))):
         errors.append(i18n.get("validate_invalid_relay_temp_dir"))
 
@@ -199,6 +237,7 @@ def validate_hosts_config(data: dict) -> list[str]:
             data["hosts"],
             errors,
             config=config,
+            placeholders=placeholders,
             seen_names=set(),
             seen_ids=set(),
         )
@@ -213,17 +252,73 @@ def _validate_port(port):
     return 1 <= value <= 65535
 
 
+def _validate_placeholders(raw_placeholders, errors):
+    if raw_placeholders is None:
+        return {}
+    if not isinstance(raw_placeholders, dict):
+        errors.append(i18n.get("validate_placeholders_not_object"))
+        return {}
+
+    placeholders = {}
+    for name, value in raw_placeholders.items():
+        if not isinstance(name, str) or not PLACEHOLDER_NAME_RE.match(name):
+            errors.append(i18n.get("validate_invalid_placeholder_name", name=name))
+            continue
+        if not isinstance(value, str) or not value.strip():
+            errors.append(
+                i18n.get("validate_invalid_placeholder_value", name=name)
+            )
+            continue
+        placeholders[name] = value
+    return placeholders
+
+
+def _resolve_placeholders_for_validation(value, placeholders, errors):
+    if not isinstance(value, str):
+        return value
+
+    matched_spans = []
+    seen_errors = set()
+    for match in PLACEHOLDER_TOKEN_RE.finditer(value):
+        matched_spans.append(match.span())
+        name = match.group(1)
+        if not PLACEHOLDER_NAME_RE.match(name) and name not in seen_errors:
+            errors.append(i18n.get("validate_invalid_placeholder_name", name=name))
+            seen_errors.add(name)
+
+    for match in PLACEHOLDER_BRACE_RE.finditer(value):
+        if not any(start <= match.start() < end for start, end in matched_spans):
+            token = match.group(0)
+            errors.append(i18n.get("validate_invalid_placeholder_name", name=token))
+
+    seen_missing = set()
+
+    def replace(match):
+        name = match.group(1)
+        if name not in placeholders:
+            if name not in seen_missing:
+                errors.append(i18n.get("validate_unknown_placeholder", name=name))
+                seen_missing.add(name)
+            return match.group(0)
+        return placeholders[name]
+
+    return PLACEHOLDER_RE.sub(replace, value)
+
+
 def _validate_hosts_nodes(
     nodes: list,
     errors: list,
     path: str = "hosts",
     config=None,
+    placeholders=None,
     seen_names=None,
     seen_ids=None,
     parent_is_host=False,
 ):
     if config is None:
         config = {}
+    if placeholders is None:
+        placeholders = {}
     if seen_names is None:
         seen_names = set()
     if seen_ids is None:
@@ -248,7 +343,7 @@ def _validate_hosts_nodes(
             continue
 
         if node_type != "host":
-            for field in ("ssh_jump_mode", "transfer_jump_mode"):
+            for field in ("ssh_jump_mode", "transfer_jump_mode", "proxy_command"):
                 if field in node:
                     errors.append(
                         i18n.get("validate_mode_field_on_non_host", field=field)
@@ -272,6 +367,21 @@ def _validate_hosts_nodes(
                 seen_ids.add(node_id)
 
         if node_type == "host":
+            for field in PLACEHOLDER_NODE_FIELDS - {"host"}:
+                if field in node:
+                    _resolve_placeholders_for_validation(
+                        node.get(field),
+                        placeholders,
+                        errors,
+                    )
+
+            proxy_command = node.get("proxy_command")
+            if proxy_command is not None:
+                if not isinstance(proxy_command, str) or not proxy_command.strip():
+                    errors.append(i18n.get("validate_invalid_proxy_command"))
+                if parent_is_host:
+                    errors.append(i18n.get("validate_proxy_command_nested"))
+
             ssh_jump_mode = node.get("ssh_jump_mode")
             if ssh_jump_mode is not None and ssh_jump_mode not in SSH_JUMP_MODES:
                 errors.append(
@@ -296,7 +406,11 @@ def _validate_hosts_nodes(
             ):
                 errors.append(i18n.get("validate_relay_requires_jump"))
 
-            host_val = node.get("host")
+            host_val = _resolve_placeholders_for_validation(
+                node.get("host"),
+                placeholders,
+                errors,
+            )
             if not host_val:
                 errors.append(i18n.get("validate_missing_host"))
             if ":" in str(host_val):
@@ -328,6 +442,7 @@ def _validate_hosts_nodes(
                         errors,
                         f"{node_path}.children",
                         config=config,
+                        placeholders=placeholders,
                         seen_names=seen_names,
                         seen_ids=seen_ids,
                         parent_is_host=node_type == "host",
@@ -381,9 +496,80 @@ class HostManager:
 
         return validate_hosts_config(data)
 
+    def _resolve_placeholders(self, value):
+        if not isinstance(value, str):
+            return value
+
+        placeholders = self.config.get("placeholders", {})
+        if not isinstance(placeholders, dict):
+            placeholders = {}
+
+        matched_spans = []
+        for match in PLACEHOLDER_TOKEN_RE.finditer(value):
+            matched_spans.append(match.span())
+            name = match.group(1)
+            if not PLACEHOLDER_NAME_RE.match(name):
+                raise PlaceholderResolutionError(
+                    i18n.get("validate_invalid_placeholder_name", name=name)
+                )
+
+        for match in PLACEHOLDER_BRACE_RE.finditer(value):
+            if not any(start <= match.start() < end for start, end in matched_spans):
+                raise PlaceholderResolutionError(
+                    i18n.get(
+                        "validate_invalid_placeholder_name",
+                        name=match.group(0),
+                    )
+                )
+
+        def replace(match):
+            name = match.group(1)
+            if name not in placeholders:
+                raise PlaceholderResolutionError(
+                    i18n.get("validate_unknown_placeholder", name=name)
+                )
+            return str(placeholders[name])
+
+        return PLACEHOLDER_RE.sub(replace, value)
+
+    def _node_value(self, node, field, default=""):
+        return self._resolve_placeholders(node.get(field, default))
+
+    def _node_string_value(self, node, field, default=""):
+        value = self._node_value(node, field, default)
+        if value is None:
+            return ""
+        return str(value)
+
+    def _node_user(self, node):
+        return self._node_string_value(node, "user")
+
+    def _node_id_file(self, node):
+        return self._node_string_value(node, "id_file")
+
+    def _ensure_proxy_command_allowed(self, node):
+        if self._is_nested_host_node(node) and "proxy_command" in node:
+            raise ConfigRuntimeError(i18n.get("validate_proxy_command_nested"))
+
+    def _proxy_command(self, node):
+        self._ensure_proxy_command_allowed(node)
+        value = self._node_string_value(node, "proxy_command")
+        if value.strip():
+            return value.strip()
+        return ""
+
     def _parse_host_port(self, node):
-        host_info = node.get("host", ":").split(":", 1)
+        host_value = str(self._node_value(node, "host", ":"))
+        return self._split_host_port(host_value)
+
+    @staticmethod
+    def _split_host_port(host_value):
+        host_info = host_value.split(":", 1)
         return (host_info[0], host_info[1] if len(host_info) == 2 else DEFAULT_PORT)
+
+    @staticmethod
+    def raw_host_port(node):
+        return HostManager._split_host_port(str(node.get("host", ":")))
 
     @staticmethod
     def _build_target_str(user, host):
@@ -450,7 +636,11 @@ class HostManager:
 
     def _relay_temp_path(self, source_path):
         relay_dir = os.path.expanduser(
-            str(self.config.get("relay_temp_dir", DEFAULT_RELAY_TEMP_DIR))
+            str(
+                self._resolve_placeholders(
+                    self.config.get("relay_temp_dir", DEFAULT_RELAY_TEMP_DIR)
+                )
+            )
         )
         base = os.path.basename(str(source_path).rstrip(os.sep)) or "file"
         safe_base = "".join(
@@ -514,7 +704,7 @@ class HostManager:
         try:
             data = self._read_config_file()
         except FileNotFoundError:
-            self.config = dict(_DEFAULT_CONFIG)
+            self.config = _default_config()
             self.hosts = []
             return
         except Exception as e:
@@ -523,7 +713,7 @@ class HostManager:
             sys.exit(1)
 
         cfg = data.get("config", {})
-        merged = {**_DEFAULT_CONFIG, **cfg}
+        merged = _merge_config(cfg)
         self.config = merged
         self.hosts = data.get("hosts", [])
         self._nodes_migrated = self._ensure_node_ids(self.hosts)
@@ -737,7 +927,7 @@ class HostManager:
             node_host, node_port = self._parse_host_port(node)
             if node_host != host:
                 continue
-            if user and node.get("user", "") != user:
+            if user and self._node_user(node) != user:
                 continue
             if port and str(node_port) != str(port):
                 continue
@@ -818,7 +1008,11 @@ class HostManager:
         if parent_name:
             parent_node, _, _ = self.find_node_and_parent(parent_name)
             if parent_node:
+                if self._is_nested_host_node(node_data, parent_node):
+                    node_data.pop("proxy_command", None)
                 parent_node.setdefault("children", []).append(node_data)
+                if self._is_nested_host_node(node_data, parent_node):
+                    node_data["nest_parent"] = parent_node
             else:
                 print(
                     f"Warning: Parent '{parent_name}' not found. Adding to top level.",
@@ -830,11 +1024,23 @@ class HostManager:
 
         self._save_hosts()
 
+    @staticmethod
+    def _is_nested_host_node(node, parent_node=None):
+        if not node or node.get("type") != "host":
+            return False
+        if parent_node and parent_node.get("type") == "host":
+            return True
+        return bool(node.get("nest_parent"))
+
     def update_node(self, node_name, new_data):
         node, _, _ = self.find_node_and_parent(node_name)
         if not node:
             print(f"Error: Node '{node_name}' not found for update.", file=sys.stderr)
             return
+
+        is_nested_host = self._is_nested_host_node(node)
+        if is_nested_host:
+            node.pop("proxy_command", None)
 
         for key, value in new_data.items():
             if key in ("port", "auth"):
@@ -844,6 +1050,14 @@ class HostManager:
                     node.pop(key, None)
                 else:
                     node[key] = value
+                continue
+            if key == "proxy_command":
+                if is_nested_host:
+                    continue
+                if value is None or not str(value).strip():
+                    node.pop(key, None)
+                else:
+                    node[key] = str(value).strip()
                 continue
             if key == "host":
                 node["host"] = value
@@ -930,7 +1144,7 @@ class HostManager:
 
     def _build_common_ssh_options(self, node):
         opts = []
-        id_file = node.get("id_file", "")
+        id_file = self._node_id_file(node)
         if id_file:
             opts.extend(["-i", id_file])
         return opts
@@ -968,18 +1182,58 @@ class HostManager:
         args = []
         nest_parent = node.get("nest_parent")
         if nest_parent:
-            j_host, j_port = self._parse_host_port(nest_parent)
-            jumper_str = self._build_target_str(nest_parent.get("user", ""), j_host)
-            if j_port != DEFAULT_PORT:
-                jumper_str = f"{jumper_str}:{j_port}"
+            _, _, jumper_str = self._jump_endpoint(nest_parent)
             args.extend(["-J", jumper_str])
         return args
 
+    def _jump_endpoint(self, nest_parent):
+        j_host, j_port = self._parse_host_port(nest_parent)
+        jumper_str = self._build_target_str(self._node_user(nest_parent), j_host)
+        if j_port != DEFAULT_PORT:
+            jumper_str = f"{jumper_str}:{j_port}"
+        return j_host, j_port, jumper_str
+
+    @staticmethod
+    def _escape_nested_proxy_command(proxy_command):
+        return proxy_command.replace("%", "%%")
+
+    def _build_tunnel_proxy_command(self, nest_parent):
+        _, j_port, jumper_str = self._jump_endpoint(nest_parent)
+        parts = ["ssh", "-o", "ConnectTimeout=10"]
+        host_key_checking = self._host_key_checking_mode()
+        if host_key_checking == "no":
+            parts.extend([
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+            ])
+        else:
+            parts.extend(["-o", f"StrictHostKeyChecking={host_key_checking}"])
+        if j_port != DEFAULT_PORT:
+            parts.extend(["-p", j_port])
+        j_id_file = self._node_id_file(nest_parent)
+        if j_id_file:
+            parts.extend(["-i", j_id_file])
+        parent_proxy_command = self._proxy_command(nest_parent)
+        if parent_proxy_command:
+            parts.extend([
+                "-o",
+                "ProxyCommand="
+                + self._escape_nested_proxy_command(parent_proxy_command),
+            ])
+        parts.extend(["-W", "%h:%p", jumper_str])
+        return " ".join(shlex.quote(part) for part in parts)
+
     def build_ssh_command_args(self, node, remote_command=None):
+        self._ensure_proxy_command_allowed(node)
         args = ["ssh"]
         nest_parent = node.get("nest_parent")
         if nest_parent and self._effective_ssh_jump_mode(node) == "tunnel":
-            args.extend(self._build_jump_args(node))
+            args.extend([
+                "-o",
+                f"ProxyCommand={self._build_tunnel_proxy_command(nest_parent)}",
+            ])
         common_opts = self._build_common_ssh_options(node)
 
         host, port = self._parse_host_port(node)
@@ -987,7 +1241,11 @@ class HostManager:
             args.extend(["-p", port])
 
         args.extend(common_opts)
-        args.append(self._build_target_str(node.get("user", ""), host))
+        proxy_command = self._proxy_command(node)
+        if proxy_command and not nest_parent:
+            args.extend(["-o", f"ProxyCommand={proxy_command}"])
+
+        args.append(self._build_target_str(self._node_user(node), host))
 
         if remote_command:
             args.append(remote_command)
@@ -1011,10 +1269,15 @@ class HostManager:
 
         sftp_script = os.path.join(SCRIPT_DIR, "sftp_login.exp")
         self._ensure_executable(sftp_script)
-        args, secrets = self._build_sftp_command_parts(node, action, path1, path2)
-        env = self._secret_env(secrets)
-        audit_identity = self._audit_identity(node)
-        host = audit_identity["host"]
+        try:
+            args, secrets = self._build_sftp_command_parts(node, action, path1, path2)
+            env = self._secret_env(secrets)
+            audit_identity = self._audit_identity(node)
+            host = audit_identity["host"]
+            user = self._node_user(node)
+        except (PlaceholderResolutionError, ConfigRuntimeError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
         jump_chain = []
         nest_parent = node.get("nest_parent")
         if nest_parent:
@@ -1024,7 +1287,7 @@ class HostManager:
             self.audit.record_login(
                 name=node.get("name", ""),
                 host=host,
-                user=node.get("user", ""),
+                user=user,
                 auth=auth_method,
                 result="sftp_started",
                 command=f"{action} {path1} {path2}",
@@ -1042,7 +1305,7 @@ class HostManager:
             self.audit.record_login(
                 name=node.get("name", ""),
                 host=host,
-                user=node.get("user", ""),
+                user=user,
                 auth=auth_method,
                 result="sftp_exp_not_found",
                 command=f"{action} {path1} {path2}",
@@ -1060,7 +1323,7 @@ class HostManager:
             self.audit.record_login(
                 name=node.get("name", ""),
                 host=host,
-                user=node.get("user", ""),
+                user=user,
                 auth=auth_method,
                 result=f"sftp_exec_failed:{e.errno}",
                 command=f"{action} {path1} {path2}",
@@ -1081,10 +1344,15 @@ class HostManager:
     def _execute_relay_transfer(self, node, action, path1, path2):
         relay_script = os.path.join(SCRIPT_DIR, "relay_transfer.exp")
         self._ensure_executable(relay_script)
-        args, secrets = self._build_relay_command_parts(node, action, path1, path2)
-        env = self._secret_env(secrets)
-        audit_identity = self._audit_identity(node)
-        host = audit_identity["host"]
+        try:
+            args, secrets = self._build_relay_command_parts(node, action, path1, path2)
+            env = self._secret_env(secrets)
+            audit_identity = self._audit_identity(node)
+            host = audit_identity["host"]
+            user = self._node_user(node)
+        except (PlaceholderResolutionError, ConfigRuntimeError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
         nest_parent = node.get("nest_parent")
         jump_chain = [nest_parent.get("name", "")] if nest_parent else []
         auth_method = self._auth_method_for_mode(node, "relay")
@@ -1093,7 +1361,7 @@ class HostManager:
             self.audit.record_login(
                 name=node.get("name", ""),
                 host=host,
-                user=node.get("user", ""),
+                user=user,
                 auth=auth_method,
                 result=f"relay_{action}_started",
                 command=command,
@@ -1109,7 +1377,7 @@ class HostManager:
             self.audit.record_login(
                 name=node.get("name", ""),
                 host=host,
-                user=node.get("user", ""),
+                user=user,
                 auth=auth_method,
                 result="relay_exp_not_found",
                 command=command,
@@ -1125,7 +1393,7 @@ class HostManager:
             self.audit.record_login(
                 name=node.get("name", ""),
                 host=host,
-                user=node.get("user", ""),
+                user=user,
                 auth=auth_method,
                 result=f"relay_exec_failed:{e.errno}",
                 command=command,
@@ -1139,6 +1407,7 @@ class HostManager:
             sys.exit(1)
 
     def _build_relay_command_parts(self, node, action, path1, path2):
+        self._ensure_proxy_command_allowed(node)
         args = []
         secrets = {}
         audit_identity = self._audit_identity(node)
@@ -1154,11 +1423,14 @@ class HostManager:
         relay_temp_source = local_path
         temp_path = self._relay_temp_path(relay_temp_source)
 
-        args.extend(["-h", host, "-u", node.get("user", "")])
+        args.extend(["-h", host, "-u", self._node_user(node)])
         args.extend(["-host-key-checking", self._host_key_checking_mode()])
         args.extend(["-P", port])
-        args.extend(["-J-host", j_host, "-J-user", nest_parent.get("user", "")])
+        args.extend(["-J-host", j_host, "-J-user", self._node_user(nest_parent)])
         args.extend(["-J-port", j_port])
+        jump_proxy_command = self._proxy_command(nest_parent)
+        if jump_proxy_command:
+            args.extend(["-j-proxy-command", jump_proxy_command])
         args.extend(["-action", action, "-local", local_path, "-remote", remote_path])
         args.extend(["-temp", temp_path])
 
@@ -1168,7 +1440,7 @@ class HostManager:
             if target_pass:
                 secrets["target_pass"] = target_pass
 
-            id_file = node.get("id_file", "")
+            id_file = self._node_id_file(node)
             if id_file:
                 args.extend(["-i", id_file])
 
@@ -1178,7 +1450,7 @@ class HostManager:
 
         jump_uses_agent = self._uses_ssh_agent(nest_parent)
         if not jump_uses_agent:
-            j_id_file = nest_parent.get("id_file", "")
+            j_id_file = self._node_id_file(nest_parent)
             if j_id_file:
                 args.extend(["-j-i", j_id_file])
             jumper_pass = nest_parent.get("password", "")
@@ -1191,6 +1463,7 @@ class HostManager:
         return args, secrets
 
     def _build_sftp_command_parts(self, node, action, path1, path2):
+        self._ensure_proxy_command_allowed(node)
         args = []
         secrets = {}
         audit_identity = self._audit_identity(node)
@@ -1200,7 +1473,7 @@ class HostManager:
         local_path = path1 if action == "upload" else path2
         remote_path = path2 if action == "upload" else path1
 
-        args.extend(["-h", host, "-u", node.get("user", "")])
+        args.extend(["-h", host, "-u", self._node_user(node)])
         args.extend(["-host-key-checking", self._host_key_checking_mode()])
         if port != DEFAULT_PORT:
             args.extend(["-P", port])
@@ -1210,7 +1483,7 @@ class HostManager:
             if target_pass:
                 secrets["target_pass"] = target_pass
 
-            id_file = node.get("id_file", "")
+            id_file = self._node_id_file(node)
             if id_file:
                 args.extend(["-i", id_file])
 
@@ -1221,22 +1494,25 @@ class HostManager:
         nest_parent = node.get("nest_parent")
         if nest_parent:
             jump_uses_agent = self._uses_ssh_agent(nest_parent)
-            j_host, j_port = self._parse_host_port(nest_parent)
-            jumper_str = self._build_target_str(nest_parent.get("user", ""), j_host)
-            if j_port != DEFAULT_PORT:
-                jumper_str = f"{jumper_str}:{j_port}"
+            _, _, jumper_str = self._jump_endpoint(nest_parent)
             args.extend(["-J", jumper_str])
+            args.extend([
+                "-tunnel-proxy-command",
+                self._build_tunnel_proxy_command(nest_parent),
+            ])
 
             if not jump_uses_agent:
-                j_id_file = nest_parent.get("id_file", "")
-                if j_id_file:
-                    args.extend(["-j-i", j_id_file])
                 jumper_pass = nest_parent.get("password", "")
                 if jumper_pass:
                     secrets["jumper_pass"] = jumper_pass
                 j_mfa_secret = nest_parent.get("mfa_secret", "")
                 if j_mfa_secret:
                     secrets["jumper_mfa_secret"] = j_mfa_secret
+
+        if not nest_parent:
+            proxy_command = self._proxy_command(node)
+            if proxy_command:
+                args.extend(["-proxy-command", proxy_command])
 
         args.extend(["-action", action, "-local", local_path, "-remote", remote_path])
         return args, secrets
@@ -1247,46 +1523,65 @@ class HostManager:
         exe_args = [login_script]
         secrets = {}
 
-        audit_identity = self._audit_identity(node)
-        host = audit_identity["host"]
-        port = audit_identity["port"]
-        nest_parent = node.get("nest_parent")
-        ssh_jump_mode = self._effective_ssh_jump_mode(node) if nest_parent else "direct"
-        target_uses_agent = self._uses_target_agent_for_mode(node, ssh_jump_mode)
+        try:
+            self._ensure_proxy_command_allowed(node)
+            audit_identity = self._audit_identity(node)
+            host = audit_identity["host"]
+            port = audit_identity["port"]
+            user = self._node_user(node)
+            nest_parent = node.get("nest_parent")
+            ssh_jump_mode = self._effective_ssh_jump_mode(node) if nest_parent else "direct"
+            target_uses_agent = self._uses_target_agent_for_mode(node, ssh_jump_mode)
 
-        exe_args.extend(["-h", host, "-u", node.get("user", "")])
-        exe_args.extend(["-host-key-checking", self._host_key_checking_mode()])
-        if port != DEFAULT_PORT:
-            exe_args.extend(["-p", port])
+            exe_args.extend(["-h", host, "-u", user])
+            exe_args.extend(["-host-key-checking", self._host_key_checking_mode()])
+            if port != DEFAULT_PORT:
+                exe_args.extend(["-p", port])
 
-        if not target_uses_agent:
-            target_pass = node.get("password", "")
-            if target_pass:
-                secrets["target_pass"] = target_pass
+            if not target_uses_agent:
+                target_pass = node.get("password", "")
+                if target_pass:
+                    secrets["target_pass"] = target_pass
 
-            id_file = node.get("id_file", "")
-            if id_file:
-                exe_args.extend(["-i", id_file])
+                id_file = self._node_id_file(node)
+                if id_file:
+                    exe_args.extend(["-i", id_file])
 
-            mfa_secret = node.get("mfa_secret", "")
-            if mfa_secret:
-                secrets["mfa_secret"] = mfa_secret
+                mfa_secret = node.get("mfa_secret", "")
+                if mfa_secret:
+                    secrets["mfa_secret"] = mfa_secret
 
-        if nest_parent:
-            jump_uses_agent = self._uses_ssh_agent(nest_parent)
-            exe_args.extend(self._build_jump_args(node))
-            exe_args.extend(["-jump-mode", ssh_jump_mode])
-            if not jump_uses_agent:
-                j_id_file = nest_parent.get("id_file", "")
-                if j_id_file:
-                    exe_args.extend(["-j-i", j_id_file])
-                jumper_pass = nest_parent.get("password", "")
-                if jumper_pass:
-                    secrets["jumper_pass"] = jumper_pass
+            if nest_parent:
+                jump_uses_agent = self._uses_ssh_agent(nest_parent)
+                exe_args.extend(self._build_jump_args(node))
+                exe_args.extend(["-jump-mode", ssh_jump_mode])
+                if ssh_jump_mode == "tunnel":
+                    exe_args.extend([
+                        "-tunnel-proxy-command",
+                        self._build_tunnel_proxy_command(nest_parent),
+                    ])
+                else:
+                    jump_proxy_command = self._proxy_command(nest_parent)
+                    if jump_proxy_command:
+                        exe_args.extend(["-j-proxy-command", jump_proxy_command])
+                if not jump_uses_agent:
+                    j_id_file = self._node_id_file(nest_parent)
+                    if j_id_file:
+                        exe_args.extend(["-j-i", j_id_file])
+                    jumper_pass = nest_parent.get("password", "")
+                    if jumper_pass:
+                        secrets["jumper_pass"] = jumper_pass
 
-                j_mfa_secret = nest_parent.get("mfa_secret", "")
-                if j_mfa_secret:
-                    secrets["jumper_mfa_secret"] = j_mfa_secret
+                    j_mfa_secret = nest_parent.get("mfa_secret", "")
+                    if j_mfa_secret:
+                        secrets["jumper_mfa_secret"] = j_mfa_secret
+            else:
+                proxy_command = self._proxy_command(node)
+                if proxy_command:
+                    exe_args.extend(["-proxy-command", proxy_command])
+        except (PlaceholderResolutionError, ConfigRuntimeError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
 
         if remote_command:
             exe_args.extend(["-c", remote_command])
@@ -1301,7 +1596,7 @@ class HostManager:
             self.audit.record_login(
                 name=node.get("name", ""),
                 host=host,
-                user=node.get("user", ""),
+                user=user,
                 auth=auth_method,
                 result="started",
                 command=remote_command,
@@ -1319,7 +1614,7 @@ class HostManager:
             self.audit.record_login(
                 name=node.get("name", ""),
                 host=host,
-                user=node.get("user", ""),
+                user=user,
                 auth=auth_method,
                 result="login_exp_not_found",
                 command=remote_command,
@@ -1336,7 +1631,7 @@ class HostManager:
             self.audit.record_login(
                 name=node.get("name", ""),
                 host=host,
-                user=node.get("user", ""),
+                user=user,
                 auth=auth_method,
                 result=f"exec_failed:{e.errno}",
                 command=remote_command,

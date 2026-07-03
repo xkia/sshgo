@@ -588,12 +588,19 @@ class Tui:
                         "x": 2,
                     },
                     {
+                        "label": i18n.get("proxy_command"),
+                        "type": "text",
+                        "name": "proxy_command",
+                        "y": 12,
+                        "x": 2,
+                    },
+                    {
                         "label": i18n.get("ssh_jump_mode"),
                         "type": "radio",
                         "name": "ssh_jump_mode",
                         "options": ["default", "shell", "tunnel"],
                         "value": "default",
-                        "y": 12,
+                        "y": 13,
                         "x": 2,
                     },
                     {
@@ -602,12 +609,18 @@ class Tui:
                         "name": "transfer_jump_mode",
                         "options": ["default", "tunnel", "relay"],
                         "value": "default",
-                        "y": 15,
+                        "y": 16,
                         "x": 2,
                     },
-                    {"label": i18n.get("save"), "type": "button", "y": 19, "x": 2},
-                    {"label": i18n.get("cancel"), "type": "button", "y": 19, "x": 10},
+                    {"label": i18n.get("save"), "type": "button", "y": 20, "x": 2},
+                    {"label": i18n.get("cancel"), "type": "button", "y": 20, "x": 10},
                 ]
+                if parent_node.get("type") == "host":
+                    form_fields = [
+                        field
+                        for field in form_fields
+                        if field.get("name") != "proxy_command"
+                    ]
                 title = i18n.get("add_new_host")
             else:
                 form_fields = [
@@ -660,6 +673,8 @@ class Tui:
                         new_node["transfer_jump_mode"] = final_data.get(
                             "transfer_jump_mode"
                         )
+                    if final_data.get("proxy_command"):
+                        new_node["proxy_command"] = final_data.get("proxy_command")
                 else:
                     new_node = {
                         "type": "group",
@@ -704,7 +719,7 @@ class Tui:
         node_type = selected_node["type"]
 
         if node_type == "host":
-            current_host, current_port = self.host_manager._parse_host_port(selected_node)
+            current_host, current_port = self.host_manager.raw_host_port(selected_node)
 
             current_auth_val = "none"
             if selected_node.get("password"):
@@ -787,12 +802,20 @@ class Tui:
                     "value": selected_node.get("mfa_secret", ""),
                 },
                 {
+                    "label": i18n.get("proxy_command"),
+                    "type": "text",
+                    "name": "proxy_command",
+                    "y": 12,
+                    "x": 2,
+                    "value": selected_node.get("proxy_command", ""),
+                },
+                {
                     "label": i18n.get("ssh_jump_mode"),
                     "type": "radio",
                     "name": "ssh_jump_mode",
                     "options": ["default", "shell", "tunnel"],
                     "value": selected_node.get("ssh_jump_mode", "default"),
-                    "y": 12,
+                    "y": 13,
                     "x": 2,
                 },
                 {
@@ -801,12 +824,18 @@ class Tui:
                     "name": "transfer_jump_mode",
                     "options": ["default", "tunnel", "relay"],
                     "value": selected_node.get("transfer_jump_mode", "default"),
-                    "y": 15,
+                    "y": 16,
                     "x": 2,
                 },
-                {"label": i18n.get("save"), "type": "button", "y": 19, "x": 2},
-                {"label": i18n.get("cancel"), "type": "button", "y": 19, "x": 10},
+                {"label": i18n.get("save"), "type": "button", "y": 20, "x": 2},
+                {"label": i18n.get("cancel"), "type": "button", "y": 20, "x": 10},
             ]
+            if selected_node.get("nest_parent"):
+                form_fields = [
+                    field
+                    for field in form_fields
+                    if field.get("name") != "proxy_command"
+                ]
             title = i18n.get("edit_host", name=original_name)
         else:  # group
             form_fields = [
@@ -1095,6 +1124,9 @@ class Tui:
 
         if node.get("mfa_secret"):
             details.append(("MFA/OTP", "Enabled"))
+
+        if node.get("proxy_command") and not node.get("nest_parent"):
+            details.append(("ProxyCommand", node.get("proxy_command", "")))
 
         if node.get("nest_parent"):
             details.append(("Jump Host", node["nest_parent"].get("name", "N/A")))

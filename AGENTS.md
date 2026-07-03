@@ -64,9 +64,9 @@ This file provides repository guidance for coding agents and maintainers working
 
 2. **TUI**: `Tui.run()` enters curses main loop — render tree, handle keyboard input (j/k navigation, a/e/d CRUD, f search, h/l fold/unfold, q quit), forms for add/edit.
 
-3. **SSH Connection**: `HostManager.execute_interactive_connection()` builds args, stores password/MFA secrets only in the `SSHGO_*` environment copy, records a `started` audit event, then uses `os.execve()` to replace Python with `login.exp`. Target and jump host auth are computed independently. Nested interactive SSH supports `ssh_jump_mode=shell` (default, login to jump then run target SSH from the jump shell) and `ssh_jump_mode=tunnel` (OpenSSH `ProxyCommand` / `ssh -W`). Python does not wait for the SSH session and cannot record final duration or exit code.
+3. **SSH Connection**: `HostManager.execute_interactive_connection()` builds args, stores password/MFA secrets only in the `SSHGO_*` environment copy, records a `started` audit event, then uses `os.execve()` to replace Python with `login.exp`. Target and jump host auth are computed independently. Hosts can use a custom `proxy_command`; when such a host is used as a jump-host parent, child connections use the parent `proxy_command` for the first hop. Nested interactive SSH supports `ssh_jump_mode=shell` (default, login to jump then run target SSH from the jump shell) and `ssh_jump_mode=tunnel` (OpenSSH `ProxyCommand` / `ssh -W`). Python does not wait for the SSH session and cannot record final duration or exit code.
 
-4. **File Transfer**: `execute_file_transfer()` keeps the public shortcut path but dispatches by `transfer_jump_mode`. `tunnel` (default) uses true local SFTP via `sftp_login.exp` and requires jump-host TCP forwarding. `relay` uses `relay_transfer.exp`, copies regular files through a temporary path on the jump host with `scp`, retries local-to-jump scp with legacy protocol only for protocol-incompatibility failures, is not SFTP, and reports final transfer/cleanup status in Expect output rather than Python audit.
+4. **File Transfer**: `execute_file_transfer()` keeps the public shortcut path but dispatches by `transfer_jump_mode`. `tunnel` (default) uses true local SFTP via `sftp_login.exp` and requires jump-host TCP forwarding; nested tunnel mode receives a Python-generated `-tunnel-proxy-command`, including any parent jump-host key/proxy options. `relay` uses `relay_transfer.exp`, copies regular files through a temporary path on the jump host with `scp`, retries local-to-jump scp with legacy protocol only for protocol-incompatibility failures, is not SFTP, and reports final transfer/cleanup status in Expect output rather than Python audit.
 
 5. **Recent Resolution**: TUI builds the Recent group from audit history. It resolves current nodes by `node_id` first, then legacy name/endpoint fields, and only falls back to read-only history snapshots when the configured node no longer exists.
 
@@ -75,7 +75,7 @@ This file provides repository guidance for coding agents and maintainers working
 ### Node Types in `hosts.json`
 
 - **group**: `{"id": "...", "type": "group", "name": "...", "expanded": bool, "children": [...]}`
-- **host**: `{"id": "...", "type": "host", "name": "...", "host": "addr:port", "user": "...", "password": "...", "id_file": "...", "mfa_secret": "...", "ssh_jump_mode": "shell|tunnel", "transfer_jump_mode": "tunnel|relay", "children": [...]}` — `children` on a host makes it a jump host. `id` is managed by sshgo and should be preserved across edits.
+- **host**: `{"id": "...", "type": "host", "name": "...", "host": "addr:port", "user": "...", "password": "...", "id_file": "...", "mfa_secret": "...", "proxy_command": "OpenSSH ProxyCommand", "ssh_jump_mode": "shell|tunnel", "transfer_jump_mode": "tunnel|relay", "children": [...]}` — `children` on a host makes it a jump host. `proxy_command` is supported on direct hosts and non-nested parent jump hosts only; nested target hosts, including nested intermediate hosts that also have children, must not define their own `proxy_command`. `id` is managed by sshgo and should be preserved across edits. Global `config.placeholders` can be referenced as `{{name}}` in `host`, `user`, `id_file`, `proxy_command`, and `relay_temp_dir`.
 
 ### Config Priority
 
@@ -90,17 +90,19 @@ This file provides repository guidance for coding agents and maintainers working
 - `docs/roadmap.md`: milestones, exit criteria, and future candidates.
 - `docs/specs/*.md`: accepted behavior and implementation boundaries.
 - `docs/specs/jump-host-connection-modes.md`: configurable SSH/transfer jump modes (`shell`, `tunnel`, `relay`).
+- `docs/specs/custom-proxy-command.md`: host-level custom `proxy_command`, parent jump-host proxy, and `config.placeholders` behavior.
 - Verification commands live in this file; avoid adding separate per-spec test-plan status files.
 
 ## Development Notes
 
-- **Python**: Uses only stdlib modules (`curses`, `json`, `argparse`, `getpass`, `hmac`, `hashlib`, `base64`, `struct`, `curses.textpad`). Run with `~/.venv/bin/python` per project rules.
+- **Python**: Uses only stdlib modules (`curses`, `json`, `argparse`, `getpass`, `hmac`, `hashlib`, `base64`, `struct`, `shlex`, `curses.textpad`). Run with `~/.venv/bin/python` per project rules.
 - **External dependency**: `expect` is the only required non-Python package for interactive SSH/SFTP prompt handling.
 - **Expect scripts**: `login.exp`, `sftp_login.exp`, and `relay_transfer.exp` must be executable (`chmod +x`). HostManager ensures this before shortcut `execve`.
 - **MFA generation**: Expect scripts generate TOTP codes when an MFA prompt arrives by invoking `auth.py` with the secret from the transient `SSHGO_*` environment copy. Secrets are not passed in argv.
 - **Process handoff**: Shortcut connections and transfers replace Python via `os.execve()`. The Python manager records start/exec failure events only; it does not supervise the live SSH/SFTP session.
 - **Audit logging**: JSONL files in `~/.sshgo/`. History and audit-simple are always written for SSH and SFTP starts; audit-full requires `--audit-full` flag. New records include `node_id`, `port`, and `endpoint`. Because of the execve handoff, final duration and exit code are not available in current audit records.
 - **Config saves**: HostManager writes JSON atomically and keeps best-effort backups at `hosts.json.bak`, `hosts.json.bak.1`, and `hosts.json.bak.2`.
+- **Placeholders**: `config.placeholders` is resolved after JSONC parsing only for `host`, `user`, `id_file`, `proxy_command`, and `relay_temp_dir`; do not apply it to secrets or identity fields. `proxy_command` is executed locally by OpenSSH and must be treated as trusted user configuration.
 - **i18n**: All UI strings go through `i18n.get(key)`. New strings must be added to both `en` and `zh` dicts in `i18n.py`.
 - **Screen management**: TUI uses `curses` and must call `restore_screen()` on exit (handled via `finally` block in `sshgo.py`).
 - **JSONC support**: `hosts.json` supports `//` and `#` comments plus trailing commas via `HostManager._parse_jsonc()`.

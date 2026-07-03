@@ -4,7 +4,7 @@
 
 A modern, secure, and easy-to-manage SSH connection manager with a Text-based User Interface (TUI), full keyboard control, and powerful command-line shortcuts.
 
-Supports password, key-based, and MFA/TOTP authentication, as well as nested jump hosts.
+Supports password, key-based, and MFA/TOTP authentication, nested jump hosts, custom OpenSSH `ProxyCommand`, and reusable config placeholders.
 
 ---
 
@@ -22,6 +22,8 @@ Supports password, key-based, and MFA/TOTP authentication, as well as nested jum
     -   Built-in support for MFA/TOTP (Time-based One-Time Password) with prompt-time code generation.
     -   Jump host MFA support with separate code handling.
 -   **Nested Jump Hosts**: Intuitively configure jump hosts by nesting `host` nodes in the configuration.
+-   **Custom ProxyCommand**: Connect direct hosts through local proxy commands such as `nc -X 5 -x {{local_socks}} %h %p`.
+-   **Config Placeholders**: Reuse strings like domains, users, key paths, proxy endpoints, and relay directories with `{{name}}`.
 -   **Optional Credential Encryption**: Secure your saved passwords and MFA secrets with a master password. Encryption can be toggled on or off.
 -   **~/.ssh/config Import**: Automatically import and group hosts from your existing `~/.ssh/config` file.
 -   **Multi-language Support**: Switch between English and Chinese on the fly.
@@ -205,6 +207,10 @@ Set `SSHGO_DATA_DIR` or `config.data_dir` to use a different runtime data direct
     "default_ssh_jump_mode": "shell",
     "default_transfer_jump_mode": "tunnel",
     "relay_temp_dir": "/tmp",
+    "placeholders": {
+      "site_domain": "example.com",
+      "local_socks": "127.0.0.1:1080"
+    },
     "theme": {
       "highlight_fg": "white",
       "highlight_bg": "blue",
@@ -229,6 +235,7 @@ Important `config` fields:
 - `default_ssh_jump_mode`: Default nested SSH mode, either `shell` or `tunnel`.
 - `default_transfer_jump_mode`: Default nested transfer mode, either `tunnel` or `relay`.
 - `relay_temp_dir`: Absolute temporary directory on the jump host for `transfer_jump_mode: "relay"`.
+- `placeholders`: Optional string placeholders usable as `{{name}}` in connection fields.
 - `theme`: Optional TUI colors. Supported color names are `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, and `default`.
 
 ### Node Types
@@ -262,11 +269,49 @@ Represents a connectable server. A `host` can also act as a **jump host** if it 
   "id_file": "~/.ssh/id_rsa",  // Required if not using a password
   "mfa_secret": "...",       // Optional: for TOTP authentication
   "use_ssh_agent": false,    // Optional: overrides config.use_ssh_agent
+  "proxy_command": "nc -X 5 -x {{local_socks}} %h %p", // Optional
   "ssh_jump_mode": "shell",  // Optional: shell or tunnel
   "transfer_jump_mode": "tunnel", // Optional: tunnel or relay
   "children": [ ... ]        // Optional: makes this host a jump host
 }
 ```
+
+### Custom ProxyCommand and Placeholders
+
+Direct hosts can use an OpenSSH `ProxyCommand`. sshgo resolves only its own `{{name}}` placeholders, then passes the command to OpenSSH. OpenSSH still expands `%h` and `%p`.
+
+```json
+{
+  "config": {
+    "placeholders": {
+      "site_domain": "example.com",
+      "local_socks": "127.0.0.1:1080",
+      "default_user": "admin"
+    }
+  },
+  "hosts": [
+    {
+      "type": "host",
+      "name": "SSH via SOCKS",
+      "host": "ssh.{{site_domain}}:22",
+      "user": "{{default_user}}",
+      "proxy_command": "nc -X 5 -x {{local_socks}} %h %p"
+    }
+  ]
+}
+```
+
+This resolves to a connection equivalent to:
+
+```bash
+ssh -o 'ProxyCommand=nc -X 5 -x 127.0.0.1:1080 %h %p' admin@ssh.example.com
+```
+
+Placeholders are expanded after JSONC parsing and only in `host`, `user`, `id_file`, `proxy_command`, and `config.relay_temp_dir`. They are not expanded in secrets such as `password` or `mfa_secret`.
+
+`proxy_command` applies to the host where it is configured. When that host is used as a jump host, child connections use the parent `proxy_command` for the first hop. A `proxy_command` on the nested target itself is rejected because nested `tunnel` mode already generates its own `ProxyCommand=ssh -W ...`, while `shell` and `relay` modes run target operations from the jump host environment. In multi-level trees, only a non-nested parent jump host can define `proxy_command`; a nested intermediate host must not define its own value. The TUI only shows the `ProxyCommand` field for direct hosts and parent jump hosts. `ProxyCommand` entries from `~/.ssh/config` are not imported; define them explicitly in `hosts.json` when sshgo should manage them.
+
+`ProxyCommand` is executed locally by OpenSSH. Configure only trusted commands, and do not build `proxy_command` values from untrusted input.
 
 ### Jump Host Example
 

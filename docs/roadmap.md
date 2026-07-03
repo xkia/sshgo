@@ -16,6 +16,12 @@
 | Jump host connection modes | done | SSH supports `shell` and `tunnel`; transfer supports `tunnel` and `relay`; mode inheritance, validation, and real SSH/SFTP/relay chain verification are complete | [jump-host-connection-modes](specs/jump-host-connection-modes.md) |
 | Node identity and Recent hardening | done | Saved nodes have stable IDs; Recent resolves renamed nodes; audit records include node identity; config backups are rotated | [node-identity-recent-hardening](specs/node-identity-recent-hardening.md) |
 
+## 2026-07
+
+| Milestone | Status | Exit Criteria | Related Spec |
+|---|---|---|---|
+| Custom ProxyCommand support | done | Direct SSH, remote-command, and direct SFTP paths can use a host-level OpenSSH ProxyCommand; global placeholders resolve in allowed connection fields without changing existing jump-host modes | [custom-proxy-command](specs/custom-proxy-command.md) |
+
 ## Future Candidates
 
 | Milestone | Status | Exit Criteria | Related Spec |

@@ -15,6 +15,10 @@ set jumper_mfa_secret ""
 set jumper_pass ""
 set target_pass ""
 set remote_command ""
+set print_command ""
+set custom_proxy_command ""
+set jumper_proxy_command ""
+set tunnel_proxy_command ""
 set jump_mfa_used 0
 set connection_stage "direct"
 set host_key_checking "accept-new"
@@ -33,6 +37,10 @@ for {set i 0} {$i < $argc} {incr i} {
         "-i"   { set id_file $value }
         "-j-i" { set jumper_id_file $value }
         "-c"   { set remote_command $value }
+        "-print-command" { set print_command $value }
+        "-proxy-command" { set custom_proxy_command $value }
+        "-j-proxy-command" { set jumper_proxy_command $value }
+        "-tunnel-proxy-command" { set tunnel_proxy_command $value }
         "-host-key-checking" { set host_key_checking $value }
     }
 }
@@ -122,31 +130,6 @@ proc shell_join {parts} {
     return [join $quoted " "]
 }
 
-proc proxy_command {jumper jumper_id_file host_key_checking} {
-    set proxy_jumper $jumper
-    set proxy_port ""
-    if {[regexp {^(.+):([0-9]+)$} $jumper -> base port]} {
-        set proxy_jumper $base
-        set proxy_port $port
-    }
-
-    set parts [list ssh -o ConnectTimeout=10]
-    if {$host_key_checking == "no"} {
-        lappend parts -o StrictHostKeyChecking=no
-        lappend parts -o UserKnownHostsFile=/dev/null
-    } else {
-        lappend parts -o StrictHostKeyChecking=$host_key_checking
-    }
-    if {$proxy_port != ""} {
-        lappend parts -p $proxy_port
-    }
-    if {$jumper_id_file != ""} {
-        lappend parts -i $jumper_id_file
-    }
-    lappend parts -W %h:%p $proxy_jumper
-    return [shell_join $parts]
-}
-
 proc target_ssh_command {host port user id_file} {
     set parts [list ssh]
     if {$port != "" && $port != "22"} {
@@ -182,6 +165,9 @@ if {$jumper != "" && $jump_mode == "shell"} {
     if {$jumper_id_file != ""} {
         lappend cmd -i $jumper_id_file
     }
+    if {$jumper_proxy_command != ""} {
+        lappend cmd -o "ProxyCommand=$jumper_proxy_command"
+    }
     lappend cmd $jumper_target
 } else {
     set cmd [list ssh]
@@ -191,9 +177,19 @@ if {$jumper != "" && $jump_mode == "shell"} {
     if {$port != ""} { lappend cmd -p $port }
     if {$id_file != ""} { lappend cmd -i $id_file }
     if {$jumper != "" && $jump_mode == "tunnel"} {
-        lappend cmd -o "ProxyCommand=[proxy_command $jumper $jumper_id_file $host_key_checking]"
+        if {$tunnel_proxy_command == ""} {
+            fail "Error: missing tunnel proxy command." 1
+        }
+        lappend cmd -o "ProxyCommand=$tunnel_proxy_command"
+    } elseif {$custom_proxy_command != ""} {
+        lappend cmd -o "ProxyCommand=$custom_proxy_command"
     }
     lappend cmd "$user@$host"
+}
+
+if {$print_command != ""} {
+    puts [shell_join $cmd]
+    exit 0
 }
 
 set timeout 20

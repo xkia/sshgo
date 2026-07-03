@@ -17,6 +17,7 @@
 | [connection-auth-audit-hardening.md](specs/connection-auth-audit-hardening.md) | Target/jump auth independence, SFTP audit, atomic save |
 | [jump-host-connection-modes.md](specs/jump-host-connection-modes.md) | Configurable SSH/transfer jump modes |
 | [node-identity-recent-hardening.md](specs/node-identity-recent-hardening.md) | Stable node IDs, Recent resolution, config backups |
+| [custom-proxy-command.md](specs/custom-proxy-command.md) | Host-level custom OpenSSH ProxyCommand and placeholders |
 
 ## Documentation Rules
 

@@ -21,6 +21,7 @@ set local_path ""
 set remote_path ""
 set temp_path ""
 set print_command ""
+set jumper_proxy_command ""
 set has_tty [expr {![catch {exec sh -c {test -t 0}}]}]
 
 for {set i 0} {$i < $argc} {incr i} {
@@ -41,6 +42,7 @@ for {set i 0} {$i < $argc} {incr i} {
         "-temp" { set temp_path $value }
         "-host-key-checking" { set host_key_checking $value }
         "-print-command" { set print_command $value }
+        "-j-proxy-command" { set jumper_proxy_command $value }
     }
 }
 
@@ -210,7 +212,7 @@ proc run_local_command {cmd stage {fatal 1}} {
 }
 
 proc run_jump_command {command expects_target_auth fatal} {
-    global jump_host jump_user jump_port jumper_id_file host_key_checking
+    global jump_host jump_user jump_port jumper_id_file host_key_checking jumper_proxy_command
     set jump_target [target_string $jump_user $jump_host]
     set cmd [list ssh]
     foreach opt [common_ssh_options $host_key_checking] {
@@ -221,6 +223,9 @@ proc run_jump_command {command expects_target_auth fatal} {
     }
     if {$jumper_id_file != ""} {
         lappend cmd -i $jumper_id_file
+    }
+    if {$jumper_proxy_command != ""} {
+        lappend cmd -o "ProxyCommand=$jumper_proxy_command"
     }
     lappend cmd $jump_target
 
@@ -300,7 +305,7 @@ proc run_jump_command {command expects_target_auth fatal} {
 }
 
 proc build_local_scp_to_jump {source dest {legacy 0}} {
-    global jump_host jump_user jump_port jumper_id_file host_key_checking
+    global jump_host jump_user jump_port jumper_id_file host_key_checking jumper_proxy_command
     set jump_target [target_string $jump_user $jump_host]
     set cmd [list scp]
     if {$legacy} {
@@ -314,13 +319,16 @@ proc build_local_scp_to_jump {source dest {legacy 0}} {
     }
     if {$jumper_id_file != ""} {
         lappend cmd -i $jumper_id_file
+    }
+    if {$jumper_proxy_command != ""} {
+        lappend cmd -o "ProxyCommand=$jumper_proxy_command"
     }
     lappend cmd $source "$jump_target:$dest"
     return $cmd
 }
 
 proc build_local_scp_from_jump {source dest {legacy 0}} {
-    global jump_host jump_user jump_port jumper_id_file host_key_checking
+    global jump_host jump_user jump_port jumper_id_file host_key_checking jumper_proxy_command
     set jump_target [target_string $jump_user $jump_host]
     set cmd [list scp]
     if {$legacy} {
@@ -334,6 +342,9 @@ proc build_local_scp_from_jump {source dest {legacy 0}} {
     }
     if {$jumper_id_file != ""} {
         lappend cmd -i $jumper_id_file
+    }
+    if {$jumper_proxy_command != ""} {
+        lappend cmd -o "ProxyCommand=$jumper_proxy_command"
     }
     lappend cmd "$jump_target:$source" $dest
     return $cmd

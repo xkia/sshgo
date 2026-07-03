@@ -4,7 +4,7 @@
 
 一个现代、安全、易于管理的 SSH 连接管理器, 具备文本用户界面 (TUI)、完整的键盘控制以及强大的命令行快捷方式.
 
-支持密码、密钥、MFA/TOTP 认证, 以及嵌套的跳板机.
+支持密码、密钥、MFA/TOTP 认证、嵌套跳板机、自定义 OpenSSH `ProxyCommand` 和可复用配置占位符.
 
 ---
 
@@ -22,6 +22,8 @@
     -   内置 MFA/TOTP (基于时间的一次性密码) 支持, 在提示到达时生成验证码.
     -   跳板机 MFA 独立处理.
 -   **嵌套跳板机**: 通过在配置中嵌套 `host` 节点, 直观地配置跳板机.
+-   **自定义 ProxyCommand**: 普通直连主机可通过 `nc -X 5 -x {{local_socks}} %h %p` 这类本机代理命令连接.
+-   **配置占位符**: 用 `{{name}}` 复用域名、用户名、密钥路径、代理端点和 relay 目录等字符串.
 -   **可选的凭证加密**: 使用主密码保护您保存的密码和 MFA 密钥. 加密可以随时开启或关闭.
 -   **~/.ssh/config 导入**: 自动从您现有的 `~/.ssh/config` 文件中导入主机并分组.
 -   **多语言支持**: 可随时在中英文之间切换显示语言.
@@ -205,6 +207,10 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
     "default_ssh_jump_mode": "shell",
     "default_transfer_jump_mode": "tunnel",
     "relay_temp_dir": "/tmp",
+    "placeholders": {
+      "site_domain": "example.com",
+      "local_socks": "127.0.0.1:1080"
+    },
     "theme": {
       "highlight_fg": "white",
       "highlight_bg": "blue",
@@ -229,6 +235,7 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 - `default_ssh_jump_mode`: 嵌套 SSH 的默认模式, 可选 `shell` 或 `tunnel`。
 - `default_transfer_jump_mode`: 嵌套文件传输的默认模式, 可选 `tunnel` 或 `relay`。
 - `relay_temp_dir`: `transfer_jump_mode: "relay"` 使用的跳板机绝对临时目录。
+- `placeholders`: 可选字符串占位符, 可在连接字段中以 `{{name}}` 使用。
 - `theme`: 可选 TUI 颜色。支持 `black`、`red`、`green`、`yellow`、`blue`、`magenta`、`cyan`、`white` 和 `default`。
 
 ### 节点类型
@@ -262,11 +269,49 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
   "id_file": "~/.ssh/id_rsa",  // 如果不使用密码, 则为必填项
   "mfa_secret": "...",       // 可选: 用于 TOTP 认证
   "use_ssh_agent": false,    // 可选: 覆盖 config.use_ssh_agent
+  "proxy_command": "nc -X 5 -x {{local_socks}} %h %p", // 可选
   "ssh_jump_mode": "shell",  // 可选: shell 或 tunnel
   "transfer_jump_mode": "tunnel", // 可选: tunnel 或 relay
   "children": [ ... ]        // 可选: 使此主机成为一个跳板机
 }
 ```
+
+### 自定义 ProxyCommand 和占位符
+
+普通直连主机可以配置 OpenSSH `ProxyCommand`。sshgo 只解析自己的 `{{name}}` 占位符，然后把命令交给 OpenSSH；`%h` 和 `%p` 仍由 OpenSSH 展开。
+
+```json
+{
+  "config": {
+    "placeholders": {
+      "site_domain": "example.com",
+      "local_socks": "127.0.0.1:1080",
+      "default_user": "admin"
+    }
+  },
+  "hosts": [
+    {
+      "type": "host",
+      "name": "SSH via SOCKS",
+      "host": "ssh.{{site_domain}}:22",
+      "user": "{{default_user}}",
+      "proxy_command": "nc -X 5 -x {{local_socks}} %h %p"
+    }
+  ]
+}
+```
+
+该配置解析后的连接效果等价于:
+
+```bash
+ssh -o 'ProxyCommand=nc -X 5 -x 127.0.0.1:1080 %h %p' admin@ssh.example.com
+```
+
+占位符在 JSONC 解析后展开, 第一版只作用于 `host`、`user`、`id_file`、`proxy_command` 和 `config.relay_temp_dir`。它们不会在 `password` 或 `mfa_secret` 等密钥字段中展开。
+
+`proxy_command` 作用于配置它的主机。当这个主机被用作跳板机时, 子节点连接会把父节点的 `proxy_command` 用在第一跳。嵌套目标自身仍会拒绝该字段, 因为 nested `tunnel` 模式已经会生成自己的 `ProxyCommand=ssh -W ...`, 而 `shell` 和 `relay` 模式会在跳板机环境中执行目标操作。在多层树中, 只有非嵌套的父跳板主机可以定义 `proxy_command`; 嵌套中间节点也不能定义自己的值。TUI 只会在单节点和父跳板主机上显示 `ProxyCommand` 字段。`~/.ssh/config` 中的 `ProxyCommand` 不会被导入；如果希望 sshgo 管理该行为, 请在 `hosts.json` 中显式配置。
+
+`ProxyCommand` 会由 OpenSSH 在本机执行。只应配置可信命令, 不要用不可信输入拼接 `proxy_command`。
 
 ### 跳板机示例
 
