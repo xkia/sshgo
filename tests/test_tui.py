@@ -299,6 +299,31 @@ class TuiTests(unittest.TestCase):
             [("curs_set", 1), ("nocbreak",), ("echo",), ("endwin",)],
         )
 
+    def test_theme_uses_terminal_default_color_for_footer_status(self):
+        class FakeManager:
+            config = {"theme": {"prefix_color": "cyan"}}
+
+        pairs = []
+        old_start_color = tui_module.curses.start_color
+        old_use_default_colors = tui_module.curses.use_default_colors
+        old_init_pair = tui_module.curses.init_pair
+        tui_module.curses.start_color = lambda: None
+        tui_module.curses.use_default_colors = lambda: None
+        tui_module.curses.init_pair = lambda *args: pairs.append(args)
+        try:
+            tui = object.__new__(Tui)
+            tui.host_manager = FakeManager()
+
+            Tui._init_theme(tui)
+        finally:
+            tui_module.curses.start_color = old_start_color
+            tui_module.curses.use_default_colors = old_use_default_colors
+            tui_module.curses.init_pair = old_init_pair
+
+        self.assertEqual(tui.COLOR_STATUS, 0)
+        self.assertIn((3, curses.COLOR_CYAN, -1), pairs)
+        self.assertNotIn((4, curses.COLOR_BLACK, curses.COLOR_WHITE), pairs)
+
     def test_init_failure_after_initscr_restores_terminal(self):
         class FakeScreen:
             def __init__(self):

@@ -85,9 +85,7 @@ class Tui:
         curses.init_pair(3, prefix_fg, -1)
         self.COLOR_RED = 3
         self.COLOR_ACCENT = 3
-
-        curses.init_pair(4, curses.COLOR_BLACK, curses.COLOR_WHITE)
-        self.COLOR_STATUS = 4
+        self.COLOR_STATUS = 0
 
         curses.init_pair(5, curses.COLOR_YELLOW, -1)
         self.COLOR_WARNING = 5
