@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import time
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 
 import host_manager as host_manager_module
@@ -45,6 +45,39 @@ class ConnectionAuthAuditTests(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(config, f)
         return HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+
+    def _run_handoff_and_capture(self, manager, action, env=None, tty=True):
+        env_keys = ("CI", "TERM", "TERM_PROGRAM", "WT_SESSION", "KONSOLE_VERSION")
+        old_env = {key: os.environ.get(key) for key in env_keys}
+        real_execve = host_manager_module.os.execve
+        captured = {}
+
+        def fake_execve(path, args, exec_env):
+            captured["path"] = path
+            captured["args"] = args
+            captured["env"] = exec_env
+            raise OSError(5, "fake")
+
+        host_manager_module.os.execve = fake_execve
+        manager._terminal_title_output_is_tty = lambda: tty
+        try:
+            for key in env_keys:
+                os.environ.pop(key, None)
+            for key, value in (env or {}).items():
+                os.environ[key] = value
+
+            stdout = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(StringIO()):
+                with self.assertRaises(SystemExit):
+                    action()
+            return stdout.getvalue(), captured
+        finally:
+            host_manager_module.os.execve = real_execve
+            for key, value in old_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def test_target_and_jump_auth_are_independent(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -98,6 +131,122 @@ class ConnectionAuthAuditTests(unittest.TestCase):
         self.assertIn("UTF", env["LANG"].upper())
         self.assertIn("UTF", env["LC_ALL"].upper())
         self.assertIn("UTF", env["LC_CTYPE"].upper())
+
+    def test_terminal_title_not_emitted_by_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            target = manager.find_host_by_alias("target")
+
+            output, _ = self._run_handoff_and_capture(
+                manager,
+                lambda: manager.execute_interactive_connection(target),
+                env={"TERM_PROGRAM": "iTerm.app"},
+            )
+
+            self.assertEqual(output, "")
+
+    def test_terminal_title_emits_iterm_tab_alias_host(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            manager.config["terminal_title_enabled"] = True
+            target = manager.find_host_by_alias("target")
+
+            output, _ = self._run_handoff_and_capture(
+                manager,
+                lambda: manager.execute_interactive_connection(target),
+                env={"TERM_PROGRAM": "iTerm.app"},
+            )
+
+            self.assertEqual(
+                output,
+                "\033]1;SSH target | target.internal:2222\007",
+            )
+
+    def test_terminal_title_format_host_hides_default_port(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            manager.config.update({
+                "terminal_title_enabled": True,
+                "terminal_title_format": "host",
+                "terminal_title_scope": "always",
+            })
+            target = manager.find_host_by_alias("target")
+            target["host"] = "target.internal"
+
+            output, _ = self._run_handoff_and_capture(
+                manager,
+                lambda: manager.execute_interactive_connection(target),
+                env={"TERM": "dumb"},
+                tty=False,
+            )
+
+            self.assertEqual(output, "\033]1;SSH target.internal\007")
+
+    def test_terminal_title_auto_skips_unsupported_terminal(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            manager.config["terminal_title_enabled"] = True
+            target = manager.find_host_by_alias("target")
+
+            output, _ = self._run_handoff_and_capture(
+                manager,
+                lambda: manager.execute_interactive_connection(target),
+                env={"TERM": "dumb"},
+            )
+
+            self.assertEqual(output, "")
+
+    def test_terminal_title_transfer_modes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            manager.config.update({
+                "terminal_title_enabled": True,
+                "terminal_title_scope": "always",
+            })
+            target = manager.find_host_by_alias("target")
+
+            upload_output, _ = self._run_handoff_and_capture(
+                manager,
+                lambda: manager.execute_file_transfer(
+                    target,
+                    "upload",
+                    "local.txt",
+                    "/tmp/remote.txt",
+                ),
+                env={"TERM": "dumb"},
+                tty=False,
+            )
+            sftp_output, _ = self._run_handoff_and_capture(
+                manager,
+                lambda: manager.execute_interactive_sftp_session(target),
+                env={"TERM": "dumb"},
+                tty=False,
+            )
+            target["transfer_jump_mode"] = "relay"
+            relay_output, _ = self._run_handoff_and_capture(
+                manager,
+                lambda: manager.execute_file_transfer(
+                    target,
+                    "download",
+                    "/tmp/remote.txt",
+                    "local.txt",
+                ),
+                env={"TERM": "dumb"},
+                tty=False,
+            )
+
+            self.assertEqual(
+                upload_output,
+                "\033]1;UPLOAD target | target.internal:2222\007",
+            )
+            self.assertEqual(
+                sftp_output,
+                "\033]1;SFTP target | target.internal:2222\007",
+            )
+            self.assertEqual(
+                relay_output,
+                "\033]1;RELAY DOWNLOAD target | target.internal:2222\007",
+            )
 
     def test_login_exp_supports_shell_and_tunnel_jump_modes(self):
         with open("login.exp", "r", encoding="utf-8") as f:

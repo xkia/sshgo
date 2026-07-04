@@ -2,6 +2,8 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 
 from host_manager import CommandPlan, ConfigRuntimeError, HostManager
 
@@ -68,6 +70,22 @@ class CommandPlanTests(unittest.TestCase):
                 manager.build_interactive_launch_command_args(target, "uptime"),
                 plan.launch_args(),
             )
+
+    def test_launch_arg_preview_does_not_emit_terminal_title(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            manager.config.update({
+                "terminal_title_enabled": True,
+                "terminal_title_scope": "always",
+            })
+            target = manager.find_host_by_alias("target")
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                args = manager.build_interactive_launch_command_args(target, "uptime")
+
+            self.assertTrue(args[0].endswith("login.exp"))
+            self.assertEqual(stdout.getvalue(), "")
 
     def test_sftp_command_plan_contains_transfer_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:

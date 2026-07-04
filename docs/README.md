@@ -27,6 +27,7 @@
 | [sftp-batch-mode-hardening.md](specs/sftp-batch-mode-hardening.md) | Batch-mode SFTP transfer hardening to reduce output-text failure detection risk |
 | [interactive-sftp-session.md](specs/interactive-sftp-session.md) | CLI-only interactive `sftp>` session entry point for direct/tunnel hosts |
 | [terminal-screen-policy.md](specs/terminal-screen-policy.md) | TUI alternate-screen isolation and optional private scrollback cleanup |
+| [terminal-title.md](specs/terminal-title.md) | Optional terminal tab/window title updates before SSH, SFTP, and transfer handoff |
 
 ## TUI Specs
 
@@ -43,6 +44,7 @@
 | [config-store-extraction.md](specs/config-store-extraction.md) | Isolated config file parsing, atomic writes, and backup storage helpers |
 | [config-validation-extraction.md](specs/config-validation-extraction.md) | Isolated parsed-config validation helpers with HostManager compatibility export |
 | [command-planning-extraction.md](specs/command-planning-extraction.md) | Pure SSH/SFTP/relay command plan objects for safer launch testing |
+| [host-manager-decomposition.md](specs/host-manager-decomposition.md) | HostManager facade split into connection plan, planner, runtime, and shared error modules |
 | [host-tree-extraction.md](specs/host-tree-extraction.md) | Pure host tree helpers for traversal, lookup, parent links, and node ID assignment |
 | [test-suite-organization.md](specs/test-suite-organization.md) | Focused test modules for isolated implementation areas |
 

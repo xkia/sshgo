@@ -48,7 +48,7 @@ This change extracts the launch data into a small pure command plan object while
 
 ## Technical Design
 
-Keep `CommandPlan` in `host_manager.py` for now to avoid a broad module split. It should be a small stdlib dataclass with:
+`CommandPlan` was originally kept in `host_manager.py` to avoid a broad module split. That temporary placement is superseded by [host-manager-decomposition](host-manager-decomposition.md), which moves it to `connection_plan.py` while preserving the `host_manager.py` compatibility export. It remains a small stdlib dataclass with:
 
 - `script_path`
 - `args`
