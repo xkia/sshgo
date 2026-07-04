@@ -23,6 +23,8 @@ set tunnel_proxy_command ""
 set has_tty [expr {![catch {exec sh -c {test -t 0}}]}]
 set batch_path ""
 set stale_batch_seconds 86400
+set interactive_prompt_seen 0
+set interactive_user_handoff_started 0
 
 # Argument parser
 for {set i 0} {$i < $argc} {incr i} {
@@ -44,7 +46,17 @@ for {set i 0} {$i < $argc} {incr i} {
     }
 }
 
-if {$host == "" || $user == "" || $action == "" || $local_path == "" || $remote_path == ""} {
+if {$host == "" || $user == "" || $action == ""} {
+    puts "Usage: sftp_login.exp -h <host> -u <user> -action <upload|download|interactive> -local <path> -remote <path>"
+    exit 1
+}
+
+if {$action != "upload" && $action != "download" && $action != "interactive"} {
+    puts "Usage: sftp_login.exp -h <host> -u <user> -action <upload|download|interactive> -local <path> -remote <path>"
+    exit 1
+}
+
+if {$action != "interactive" && ($local_path == "" || $remote_path == "")} {
     puts "Usage: sftp_login.exp -h <host> -u <user> -action <upload|download> -local <path> -remote <path>"
     exit 1
 }
@@ -71,16 +83,21 @@ set script_dir [file dirname [file normalize [info script]]]
 set auth_py [file join $script_dir "auth.py"]
 set ssh_wrapper_py [file join $script_dir "sftp_ssh_wrapper.py"]
 
+proc restore_terminal_echo {} {
+    global has_tty
+    if {$has_tty} {
+        catch {stty echo}
+    }
+}
+
 proc cleanup {} {
-    global has_tty batch_path
+    global batch_path
     catch {close}
     if {$batch_path != ""} {
         catch {file delete -force $batch_path}
         set batch_path ""
     }
-    if {$has_tty} {
-        catch {stty echo}
-    }
+    restore_terminal_echo
 }
 
 proc fail {message code} {
@@ -111,6 +128,26 @@ proc finish_with_status {exit_status} {
     }
     cleanup
     exit 0
+}
+
+proc finish_interactive_with_status {exit_status} {
+    global interactive_prompt_seen interactive_user_handoff_started
+    if {$exit_status != "0"} {
+        fail "\nInteractive SFTP exited with status $exit_status.\n" 1
+    }
+    if {$interactive_prompt_seen == 0 && $interactive_user_handoff_started == 0} {
+        fail "\nInteractive SFTP ended before prompt.\n" 1
+    }
+    cleanup
+    exit 0
+}
+
+proc finish_action_with_status {exit_status} {
+    global action
+    if {$action == "interactive"} {
+        finish_interactive_with_status $exit_status
+    }
+    finish_with_status $exit_status
 }
 
 proc cleanup_and_exit {code} {
@@ -198,9 +235,13 @@ proc create_batch_file {} {
 }
 
 proc build_sftp_command {batch_file} {
-    global host user port jumper id_file host_key_checking custom_proxy_command tunnel_proxy_command ssh_wrapper_py
+    global host user port jumper id_file host_key_checking custom_proxy_command tunnel_proxy_command ssh_wrapper_py action
 
-    set cmd [list sftp -b $batch_file -S $ssh_wrapper_py -o ConnectTimeout=10]
+    if {$action == "interactive"} {
+        set cmd [list sftp -o ConnectTimeout=10]
+    } else {
+        set cmd [list sftp -b $batch_file -S $ssh_wrapper_py -o ConnectTimeout=10]
+    }
     if {$host_key_checking == "no"} {
         lappend cmd -o StrictHostKeyChecking=no
         lappend cmd -o UserKnownHostsFile=/dev/null
@@ -252,6 +293,11 @@ trap {
 } WINCH
 
 if {$print_command != ""} {
+    if {$action == "interactive"} {
+        set cmd [build_sftp_command ""]
+        puts [shell_join $cmd]
+        exit 0
+    }
     set batch_preview [sftp_batch_command]
     set cmd [build_sftp_command "<sshgo-generated-batch-file>"]
     puts [shell_join $cmd]
@@ -259,8 +305,12 @@ if {$print_command != ""} {
     exit 0
 }
 
-ensure_ssh_wrapper_executable
-set cmd [build_sftp_command [create_batch_file]]
+if {$action == "interactive"} {
+    set cmd [build_sftp_command ""]
+} else {
+    ensure_ssh_wrapper_executable
+    set cmd [build_sftp_command [create_batch_file]]
+}
 
 set timeout 20
 
@@ -276,7 +326,11 @@ if {[catch {spawn {*}$cmd} spawn_error]} {
 }
 log_user 1
 
-puts "Connecting to $user@$host for $action..."
+if {$action == "interactive"} {
+    puts "Connecting to $user@$host for interactive sftp..."
+} else {
+    puts "Connecting to $user@$host for $action..."
+}
 
 # Main expect loop for authentication
 expect {
@@ -291,8 +345,11 @@ expect {
             set password_queue [lrange $password_queue 1 end]
             exp_continue
         } else {
+            if {$action == "interactive"} {
+                set interactive_user_handoff_started 1
+            }
             interact
-            finish_with_status [wait_exit_status]
+            finish_action_with_status [wait_exit_status]
         }
     }
     -re {(?i)(MFA|OTP|Verification code).*:} {
@@ -307,14 +364,27 @@ expect {
             send "$oath\r"
             exp_continue
         }
+        if {$action == "interactive"} {
+            set interactive_user_handoff_started 1
+        }
         interact
-        finish_with_status [wait_exit_status]
+        finish_action_with_status [wait_exit_status]
+    }
+    -re {sftp> *} {
+        if {$action == "interactive"} {
+            set interactive_prompt_seen 1
+            set interactive_user_handoff_started 1
+            restore_terminal_echo
+            interact
+            finish_action_with_status [wait_exit_status]
+        }
+        exp_continue
     }
     -re {(?i)Operation timed out} {
         fail "\nError: Connection to host timed out." 1
     }
     eof {
-        finish_with_status [wait_exit_status]
+        finish_action_with_status [wait_exit_status]
     }
     timeout {
         fail "\n\nConnection timed out.\n" 1

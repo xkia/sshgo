@@ -17,6 +17,7 @@
     -   快速连接主机: `sshgo <alias>`
     -   登录后发送初始命令: `sshgo <alias> <command>`
     -   通过 SFTP 上传/下载文件: `sshgo <alias> upload/download ...`
+    -   打开标准交互式 SFTP 提示符: `sshgo --sftp <alias>`
 -   **高级认证**:
     -   支持密码和公钥认证.
     -   内置 MFA/TOTP (基于时间的一次性密码) 支持, 在提示到达时生成验证码.
@@ -121,6 +122,12 @@ sshgo
     sshgo <主机别名> download /path/to/remote/file.txt /local/path/
     ```
 
+-   **打开交互式 SFTP 会话:**
+    ```bash
+    sshgo --sftp <主机别名>
+    ```
+    该命令会使用 sshgo 的主机解析、认证、MFA、host key 策略以及 direct/tunnel 跳板规划打开标准 OpenSSH `sftp>` 提示符。位置参数形式 `sshgo <主机别名> sftp` 仍然表示通过 SSH 执行远端命令 `sftp`。
+
 ### 全局选项
 
 -   `sshgo --toggle-encryption`
@@ -155,6 +162,12 @@ sshgo
 
 -   `sshgo --print-command <主机别名> [命令|upload|download ...]`
     打印解析后的 sshgo 移交命令但不发起连接。不会打印密码或 MFA secret。
+
+-   `sshgo --print-command --sftp <主机别名>`
+    打印交互式 SFTP 的移交命令但不发起连接。
+
+-   `sshgo --sftp <主机别名>`
+    打开交互式 SFTP 会话。嵌套主机要求生效的 `transfer_jump_mode: "tunnel"`；`relay` 会被拒绝，因为它不是实时 SFTP 会话。
 
 -   `sshgo --audit-full`
     启用完整审计日志记录。当前完整记录可包含命令、路径和跳转链上下文, 其中可能包含敏感参数；由于 Python 通过 `execve` 移交给 Expect，不记录最终时长和退出码.
@@ -337,7 +350,7 @@ ssh -o 'ProxyCommand=nc -X 5 -x 127.0.0.1:1080 %h %p' admin@ssh.example.com
 
 要配置跳板机, 只需将目标主机放置在另一个主机的 `children` 数组中. 嵌套 SSH 默认使用 `ssh_jump_mode: "shell"`: `sshgo` 会先登录父主机, 再从父主机 shell 中发起到目标主机的 SSH. 如需使用 OpenSSH 转发, 可设置 `ssh_jump_mode: "tunnel"`.
 
-文件传输默认使用 `transfer_jump_mode: "tunnel"`, 这是真正的本机 SFTP, 要求跳板机允许 TCP forwarding. 当 forwarding 被禁用且接受文件通过跳板机临时中继时, 可以显式设置 `transfer_jump_mode: "relay"`. 如果本机到跳板机的 `scp` 因协议不兼容失败, relay 会对这一段重试 legacy scp protocol.
+文件传输默认使用 `transfer_jump_mode: "tunnel"`, 这是真正的本机 SFTP, 要求跳板机允许 TCP forwarding. 交互式 SFTP (`sshgo --sftp <alias>`) 同样要求 direct 或 tunnel 模式. 当 forwarding 被禁用且接受文件通过跳板机临时中继时, 可以显式设置 `transfer_jump_mode: "relay"`; relay 支持 upload/download 快捷命令, 但不支持实时 `sftp>` 提示符. 如果本机到跳板机的 `scp` 因协议不兼容失败, relay 会对这一段重试 legacy scp protocol.
 
 ```json
 {

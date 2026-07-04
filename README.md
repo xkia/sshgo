@@ -17,6 +17,7 @@ Supports password, key-based, and MFA/TOTP authentication, nested jump hosts, cu
     -   Quickly connect to a host: `sshgo <alias>`
     -   Send an initial command after login: `sshgo <alias> <command>`
     -   Upload/download files via SFTP: `sshgo <alias> upload/download ...`
+    -   Open a standard interactive SFTP prompt: `sshgo --sftp <alias>`
 -   **Advanced Authentication**:
     -   Supports password and public key authentication.
     -   Built-in support for MFA/TOTP (Time-based One-Time Password) with prompt-time code generation.
@@ -121,6 +122,12 @@ sshgo
     sshgo <host_alias> download /path/to/remote/file.txt /local/path/
     ```
 
+-   **Open an interactive SFTP session:**
+    ```bash
+    sshgo --sftp <host_alias>
+    ```
+    This opens the normal OpenSSH `sftp>` prompt using sshgo's host resolution, authentication, MFA, host-key policy, and direct/tunnel jump planning. The positional form `sshgo <host_alias> sftp` is still treated as an SSH remote command.
+
 ### Global Options
 
 -   `sshgo --toggle-encryption`
@@ -155,6 +162,12 @@ sshgo
 
 -   `sshgo --print-command <host_alias> [command|upload|download ...]`
     Print the resolved sshgo handoff command without connecting. Passwords and MFA secrets are not printed.
+
+-   `sshgo --print-command --sftp <host_alias>`
+    Print the resolved interactive SFTP handoff command without connecting.
+
+-   `sshgo --sftp <host_alias>`
+    Open an interactive SFTP session. Nested hosts require effective `transfer_jump_mode: "tunnel"`; `relay` is rejected because it is not a live SFTP session.
 
 -   `sshgo --audit-full`
     Enable full audit logging for this session. Current full records can include command, path, and jump-chain context that may contain sensitive arguments; final duration and exit code are not recorded because Python hands off to Expect with `execve`.
@@ -337,7 +350,7 @@ Placeholders are expanded after JSONC parsing and only in `host`, `user`, `id_fi
 
 To configure a jump host, place the target host(s) inside the `children` array of another host. Nested SSH defaults to `ssh_jump_mode: "shell"`: `sshgo` logs in to the parent host first, then starts SSH to the target from that parent shell. Set `ssh_jump_mode: "tunnel"` to use OpenSSH forwarding instead.
 
-File transfer defaults to `transfer_jump_mode: "tunnel"`, which is true local SFTP and requires the jump host to allow TCP forwarding. Set `transfer_jump_mode: "relay"` only when forwarding is disabled and you accept that files are temporarily copied through the jump host with `scp`. If local-to-jump `scp` fails with a protocol incompatibility, relay retries that hop with legacy scp protocol.
+File transfer defaults to `transfer_jump_mode: "tunnel"`, which is true local SFTP and requires the jump host to allow TCP forwarding. Interactive SFTP (`sshgo --sftp <alias>`) also requires direct or tunnel mode. Set `transfer_jump_mode: "relay"` only when forwarding is disabled and you accept that files are temporarily copied through the jump host with `scp`; relay supports upload/download shortcuts, but not a live `sftp>` prompt. If local-to-jump `scp` fails with a protocol incompatibility, relay retries that hop with legacy scp protocol.
 
 ```json
 {

@@ -124,6 +124,7 @@ STRINGS = {
         "validate_failed": "Config validation failed",
         "alias_not_found": "Error: Host alias '{alias}' not found.",
         "alias_ambiguous": "Error: Host alias '{alias}' is ambiguous. Candidates: {candidates}",
+        "interactive_sftp_relay_unsupported": "Interactive SFTP requires direct or tunnel transfer mode; relay is not an SFTP session.",
     },
     "zh": {
         "footer_main": "[a]添加 [e]编辑 [d]删除 | [f]搜索 | [h/l]折叠/展开 | [q]退出",
@@ -248,6 +249,7 @@ STRINGS = {
         "validate_failed": "配置文件验证失败",
         "alias_not_found": "错误: 未找到主机别名 '{alias}'.",
         "alias_ambiguous": "错误: 主机别名 '{alias}' 存在歧义. 候选项: {candidates}",
+        "interactive_sftp_relay_unsupported": "交互式 SFTP 需要直连或 tunnel 传输模式; relay 不是 SFTP 会话.",
     },
 }
 
