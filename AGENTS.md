@@ -15,6 +15,8 @@ This file provides repository guidance for coding agents and maintainers working
 | Run remote command | `./sshgo.sh <alias> ls -la` |
 | Upload file | `./sshgo.sh <alias> upload <local> <remote>` |
 | Download file | `./sshgo.sh <alias> download <remote> <local>` |
+| Preview command | `./sshgo.sh --print-command <alias>` |
+| Run diagnostics | `./sshgo.sh --doctor` |
 | Toggle encryption | `./sshgo.sh --toggle-encryption` |
 | Toggle language | `./sshgo.sh --toggle-language` |
 | Toggle detail pane | `./sshgo.sh --toggle-details` |
@@ -30,6 +32,7 @@ This file provides repository guidance for coding agents and maintainers working
 - Do not change accepted behavior that is documented in `docs/specs/*.md` without updating the matching spec documentation.
 - If a requested change conflicts with documented non-goals or accepted specs, surface the conflict before implementation.
 - Preserve the Expect handoff model unless a spec explicitly changes it. Python records start/exec-failure audit events and then uses `execve`; it does not supervise live SSH/SFTP sessions.
+- Keep common workflows highly polished: exact alias shortcuts should be fast, ambiguous aliases must fail before connecting, and diagnostic output should be concise and actionable.
 - Run the narrowest meaningful verification before delivery and report anything not run.
 
 ## Architecture
@@ -88,6 +91,7 @@ This file provides repository guidance for coding agents and maintainers working
 
 - `docs/vision.md`: product goals and non-goals.
 - `docs/roadmap.md`: milestones, exit criteria, and future candidates.
+- `docs/gap-analysis.md`: current risks, closed gaps, optimization outcomes, and future candidate boundaries.
 - `docs/specs/*.md`: accepted behavior and implementation boundaries.
 - `docs/specs/jump-host-connection-modes.md`: configurable SSH/transfer jump modes (`shell`, `tunnel`, `relay`).
 - `docs/specs/custom-proxy-command.md`: host-level custom `proxy_command`, parent jump-host proxy, and `config.placeholders` behavior.
@@ -113,7 +117,7 @@ Use the smallest set that matches the change. For broad code or documentation sy
 
 ```bash
 python3 -m unittest discover -s tests -p 'test*.py'
-python3 -m py_compile sshgo.py host_manager.py tui.py audit_logger.py auth.py crypto.py config_parser.py i18n.py tests/test_connection_auth_audit.py
+python3 -m py_compile sshgo.py host_manager.py config_store.py tui.py audit_logger.py auth.py crypto.py config_parser.py i18n.py tests/test_connection_auth_audit.py tests/test_command_plan.py tests/test_tui.py tests/test_audit.py tests/test_config_backup.py tests/test_config_store.py tests/test_validation.py tests/test_cli.py tests/test_host_manager.py
 python3 sshgo.py --validate
 git diff --check
 ```

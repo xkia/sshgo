@@ -2,13 +2,13 @@
 
 ## 2026-05
 
-| Milestone | Status | Exit Criteria | Related Spec |
+| Milestone | Status | Exit Criteria | Related Spec/Doc |
 |---|---|---|---|
 | Runtime data separation | done | History and audit data are stored outside `hosts.json`; `--history` reads JSONL history; SSH agent config is supported | [runtime-separation](specs/runtime-separation.md) |
 
 ## 2026-06
 
-| Milestone | Status | Exit Criteria | Related Spec |
+| Milestone | Status | Exit Criteria | Related Spec/Doc |
 |---|---|---|---|
 | Security hardening | done with residual risks | Secrets are not passed in argv; prompt-time MFA is used; host key checking is strict by default; Python hands off with `execve` | [security-hardening](specs/security-hardening.md) |
 | JSONC-only configuration | done | `hosts.json` is the only supported config format; JSONC comments/trailing commas parse; saves write JSON | [config-format-jsonc](specs/config-format-jsonc.md) |
@@ -18,13 +18,27 @@
 
 ## 2026-07
 
-| Milestone | Status | Exit Criteria | Related Spec |
+| Milestone | Status | Exit Criteria | Related Spec/Doc |
 |---|---|---|---|
 | Custom ProxyCommand support | done | Direct SSH, remote-command, and direct SFTP paths can use a host-level OpenSSH ProxyCommand; global placeholders resolve in allowed connection fields without changing existing jump-host modes | [custom-proxy-command](specs/custom-proxy-command.md) |
+| CLI safety and diagnostics | done | Alias ambiguity is protected; unsupported deep jump-host nesting is rejected; command preview and doctor checks are available | [cli-safety-and-diagnostics](specs/cli-safety-and-diagnostics.md) |
+| Common workflow polish | done | TUI saves validate before writing; detail pane shows resolved connection state; fragile SFTP paths fail before handoff | [common-workflow-polish](specs/common-workflow-polish.md) |
+| Config and audit durability | done | Known top-level config fields are validated; audit JSONL trim uses lock coordination and atomic replacement | [config-and-audit-durability](specs/config-and-audit-durability.md) |
+| Config backup recovery | done | Users can list and explicitly restore rotated config backups, even when the active config is malformed | [config-backup-recovery](specs/config-backup-recovery.md) |
+| Config store extraction | done | Config parsing, atomic writes, and backup storage helpers are isolated outside HostManager without behavior change | [config-store-extraction](specs/config-store-extraction.md) |
+| Command planning extraction | done | SSH, SFTP, and relay launch data are built through pure command-plan objects with focused tests and no behavior change | [command-planning-extraction](specs/command-planning-extraction.md) |
+| TUI style system | done | Main list, forms, messages, and details use one shared TUI template without adding dependencies | [tui-style-system](specs/tui-style-system.md) |
+| TUI form interaction polish | done | Add/Edit forms use Basic/Auth/Advanced sections; validation stays in-form; delete defaults to Cancel with impact summary | [tui-form-interaction-polish](specs/tui-form-interaction-polish.md) |
+| TUI input editing polish | done | Text/password fields support cursor movement, Home/End, Delete, Ctrl+U clear, and paste-friendly insertion | [tui-input-editing-polish](specs/tui-input-editing-polish.md) |
+| Test suite organization | done | CommandPlan, TUI, audit, validation, CLI, and HostManager CRUD coverage move into focused test modules while keeping unittest discovery unchanged | [test-suite-organization](specs/test-suite-organization.md) |
 
 ## Future Candidates
 
-| Milestone | Status | Exit Criteria | Related Spec |
-|---|---|---|---|
-| Batch operations and multi-host commands | unscheduled | A spec defines command fan-out semantics, failure handling, output grouping, and audit behavior | - |
-| Connection health checks | unscheduled | A spec defines lightweight reachability checks, UI surfacing, timeout behavior, and audit impact | - |
+No active future candidates are currently scheduled. New work should first pass the personal-tool scope filters in [gap-analysis.md](gap-analysis.md), then get a focused spec under `docs/specs/`.
+
+Explicitly out of the current plan unless repeated real usage justifies reopening:
+
+- Batch multi-host commands.
+- Connection health checks.
+- Directory transfer support.
+- Full OpenSSH config compatibility.

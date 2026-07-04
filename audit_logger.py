@@ -3,7 +3,15 @@
 
 import os
 import json
+import errno
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-Unix fallback
+    fcntl = None
 
 
 class AuditLogger:
@@ -69,16 +77,68 @@ class AuditLogger:
             self._append(self.audit_full_path, full_record)
             self._trim(self.audit_full_path, self.AUDIT_FULL_MAX)
 
+    @contextmanager
+    def _locked_file(self, path, blocking=True):
+        if fcntl is None:
+            yield True
+            return
+
+        lock_path = path + ".lock"
+        os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+        with open(lock_path, "a", encoding="utf-8") as lock_file:
+            flags = fcntl.LOCK_EX
+            if not blocking:
+                flags |= fcntl.LOCK_NB
+            try:
+                fcntl.flock(lock_file.fileno(), flags)
+            except OSError as e:
+                if not blocking and e.errno in (errno.EACCES, errno.EAGAIN):
+                    yield False
+                    return
+                raise
+            try:
+                yield True
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
     def _trim(self, path, max_lines):
+        with self._locked_file(path, blocking=False) as locked:
+            if not locked:
+                return
+            self._trim_unlocked(path, max_lines)
+
+    def _trim_unlocked(self, path, max_lines):
         if not os.path.exists(path):
             return
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             lines = [l for l in f if l.strip()]
         if len(lines) <= max_lines + self.TRIM_BATCH:
             return
-        with open(path, "w") as f:
-            for line in lines[-max_lines:]:
-                f.write(line)
+
+        temp_path = None
+        directory = os.path.dirname(path) or "."
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=directory,
+                prefix=os.path.basename(path) + ".",
+                suffix=".tmp",
+                delete=False,
+            ) as f:
+                temp_path = f.name
+                for line in lines[-max_lines:]:
+                    f.write(line)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, path)
+            temp_path = None
+        finally:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except FileNotFoundError:
+                    pass
 
     def get_history(self, limit=10, filter_name=None):
         records = []
@@ -100,5 +160,6 @@ class AuditLogger:
         return records[-limit:]
 
     def _append(self, path, record):
-        with open(path, "a") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        with self._locked_file(path, blocking=True):
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")

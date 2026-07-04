@@ -3,15 +3,15 @@
 
 import os
 import sys
-import json
 import getpass
 import base64
-import tempfile
-import shutil
 import uuid
 import re
 import shlex
+import copy
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from config_store import BACKUP_COUNT, ConfigStore, parse_jsonc
 from crypto import encrypt, decrypt, derive_key
 from config_parser import SshConfigParser
 from i18n import i18n
@@ -25,17 +25,54 @@ TRANSFER_JUMP_MODES = frozenset({"tunnel", "relay"})
 DEFAULT_SSH_JUMP_MODE = "shell"
 DEFAULT_TRANSFER_JUMP_MODE = "tunnel"
 DEFAULT_RELAY_TEMP_DIR = "/tmp"
+SFTP_UNSAFE_PATH_CHARS = frozenset({"\n", "\r", "\"", "\\"})
+SECRET_ENV_KEYS = {
+    "target_pass": "SSHGO_TARGET_PASS",
+    "jumper_pass": "SSHGO_JUMPER_PASS",
+    "mfa_secret": "SSHGO_MFA_SECRET",
+    "jumper_mfa_secret": "SSHGO_JUMPER_MFA_SECRET",
+}
+SECRET_ENV_VAR_NAMES = frozenset(SECRET_ENV_KEYS.values())
 PLACEHOLDER_RE = re.compile(r"{{([A-Za-z_][A-Za-z0-9_]*)}}")
 PLACEHOLDER_TOKEN_RE = re.compile(r"{{([^{}]*)}}")
 PLACEHOLDER_BRACE_RE = re.compile(r"{{|}}")
 PLACEHOLDER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PLACEHOLDER_NODE_FIELDS = frozenset({"host", "user", "id_file", "proxy_command"})
+LANGUAGES = frozenset({"en", "zh"})
+CONFIG_BOOL_FIELDS = frozenset({
+    "encryption_enabled",
+    "import_ssh_config",
+    "show_detail_pane",
+    "audit_full",
+    "use_ssh_agent",
+    "strict_host_key_checking",
+    "show_recent",
+    "recent_expanded",
+})
+CONFIG_STRING_FIELDS = frozenset({
+    "language",
+    "default_ssh_jump_mode",
+    "default_transfer_jump_mode",
+    "relay_temp_dir",
+})
+CONFIG_OPTIONAL_STRING_FIELDS = frozenset({"data_dir", "encryption_salt"})
+THEME_FIELDS = frozenset({"highlight_fg", "highlight_bg", "prefix_color"})
+THEME_COLORS = frozenset({
+    "black",
+    "red",
+    "green",
+    "yellow",
+    "blue",
+    "magenta",
+    "cyan",
+    "white",
+    "default",
+})
 ALLOWED_SAVE_KEYS = frozenset({
     "id", "type", "name", "expanded", "children",
     "host", "user", "password", "id_file", "mfa_secret", "use_ssh_agent",
     "ssh_jump_mode", "transfer_jump_mode", "proxy_command",
 })
-BACKUP_COUNT = 3
 
 _DEFAULT_CONFIG = {
     "encryption_enabled": False,
@@ -47,12 +84,29 @@ _DEFAULT_CONFIG = {
     "use_ssh_agent": False,
     "data_dir": None,
     "strict_host_key_checking": True,
+    "show_recent": True,
     "recent_expanded": False,
     "default_ssh_jump_mode": DEFAULT_SSH_JUMP_MODE,
     "default_transfer_jump_mode": DEFAULT_TRANSFER_JUMP_MODE,
     "relay_temp_dir": DEFAULT_RELAY_TEMP_DIR,
     "placeholders": {},
 }
+
+
+@dataclass(frozen=True)
+class CommandPlan:
+    script_path: str
+    args: tuple
+    secret_env: dict
+    audit: dict
+    start_result: str
+    missing_result: str
+    exec_failed_prefix: str
+    missing_message: str = ""
+    exec_error_message: str = ""
+
+    def launch_args(self):
+        return [self.script_path] + list(self.args)
 
 
 class PlaceholderResolutionError(ValueError):
@@ -77,107 +131,6 @@ def _merge_config(raw_config):
     return config
 
 
-def _remove_comments_and_trailing_commas(text: str) -> str:
-    """Remove // and # comments and trailing commas from JSONC text."""
-    without_comments = []
-    in_string = False
-    escaped = False
-    i = 0
-    while i < len(text):
-        ch = text[i]
-        next_ch = text[i + 1] if i + 1 < len(text) else ""
-
-        if in_string:
-            without_comments.append(ch)
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            i += 1
-            continue
-
-        if ch == '"':
-            in_string = True
-            without_comments.append(ch)
-            i += 1
-            continue
-
-        if ch == "#" or (ch == "/" and next_ch == "/"):
-            while i < len(text) and text[i] not in "\r\n":
-                i += 1
-            continue
-
-        without_comments.append(ch)
-        i += 1
-
-    text = "".join(without_comments)
-    result = []
-    in_string = False
-    escaped = False
-    i = 0
-    while i < len(text):
-        ch = text[i]
-        if in_string:
-            result.append(ch)
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            i += 1
-            continue
-
-        if ch == '"':
-            in_string = True
-            result.append(ch)
-            i += 1
-            continue
-
-        if ch == ",":
-            j = i + 1
-            while j < len(text) and text[j].isspace():
-                j += 1
-            if j < len(text) and text[j] in "}]":
-                i += 1
-                continue
-
-        result.append(ch)
-        i += 1
-
-    return "".join(result)
-
-
-def _json_error_hint(e: json.JSONDecodeError, original: str) -> str:
-    line_num = e.lineno
-    col_num = e.colno
-    msg = e.msg
-
-    lines = original.splitlines()
-    context = ""
-    if 1 <= line_num <= len(lines):
-        context = f"\n  第 {line_num} 行: {lines[line_num - 1].strip()}"
-        context += f"\n  {' ' * (col_num + 5)}^ 此处"
-
-    suggestions = []
-    if "Expecting" in msg:
-        if "property name" in msg:
-            suggestions.append("检查是否缺少键名或多了逗号")
-        elif "value" in msg:
-            suggestions.append("检查是否缺少值或多了逗号")
-    elif "delimiter" in msg.lower():
-        suggestions.append("检查是否缺少逗号 ','")
-    elif "extra" in msg.lower():
-        suggestions.append("检查是否多了多余的内容")
-
-    hint = f"：第 {line_num} 行第 {col_num} 列 — {msg}{context}"
-    if suggestions:
-        hint += "\n  建议：" + "；".join(suggestions)
-    return hint
-
-
 def validate_hosts_config(data: dict) -> list[str]:
     """Validate parsed config data. Returns list of warning/error strings."""
     errors = []
@@ -197,6 +150,7 @@ def validate_hosts_config(data: dict) -> list[str]:
         else {}
     )
     config = _merge_config(raw_config)
+    _validate_config_schema(raw_config, errors)
     placeholders = _validate_placeholders(
         raw_config.get("placeholders"),
         errors,
@@ -243,6 +197,63 @@ def validate_hosts_config(data: dict) -> list[str]:
         )
 
     return errors
+
+
+def _validate_config_schema(config, errors):
+    for field in sorted(CONFIG_BOOL_FIELDS):
+        if field in config and type(config[field]) is not bool:
+            errors.append(
+                i18n.get(
+                    "validate_invalid_config_type",
+                    field=field,
+                    expected=i18n.get("validate_type_bool"),
+                )
+            )
+
+    for field in sorted(CONFIG_STRING_FIELDS):
+        if field in config and not isinstance(config[field], str):
+            errors.append(
+                i18n.get(
+                    "validate_invalid_config_type",
+                    field=field,
+                    expected=i18n.get("validate_type_string"),
+                )
+            )
+
+    for field in sorted(CONFIG_OPTIONAL_STRING_FIELDS):
+        value = config.get(field)
+        if field in config and value is not None and not isinstance(value, str):
+            errors.append(
+                i18n.get(
+                    "validate_invalid_config_type",
+                    field=field,
+                    expected=i18n.get("validate_type_optional_string"),
+                )
+            )
+
+    language = config.get("language")
+    if isinstance(language, str) and language not in LANGUAGES:
+        errors.append(i18n.get("validate_invalid_language", lang=language))
+
+    theme = config.get("theme")
+    if theme is None:
+        return
+    if not isinstance(theme, dict):
+        errors.append(i18n.get("validate_theme_not_object"))
+        return
+
+    for field, color in theme.items():
+        if field not in THEME_FIELDS:
+            errors.append(i18n.get("validate_unknown_theme_field", field=field))
+            continue
+        if not isinstance(color, str) or color not in THEME_COLORS:
+            errors.append(
+                i18n.get(
+                    "validate_invalid_theme_color",
+                    field=field,
+                    color=color,
+                )
+            )
 
 
 def _validate_port(port):
@@ -314,6 +325,7 @@ def _validate_hosts_nodes(
     seen_names=None,
     seen_ids=None,
     parent_is_host=False,
+    host_parent_depth=0,
 ):
     if config is None:
         config = {}
@@ -367,6 +379,14 @@ def _validate_hosts_nodes(
                 seen_ids.add(node_id)
 
         if node_type == "host":
+            if host_parent_depth > 1 or (host_parent_depth == 1 and not parent_is_host):
+                errors.append(
+                    i18n.get(
+                        "validate_unsupported_nested_host_depth",
+                        path=node_path,
+                    )
+                )
+
             for field in PLACEHOLDER_NODE_FIELDS - {"host"}:
                 if field in node:
                     _resolve_placeholders_for_validation(
@@ -446,12 +466,18 @@ def _validate_hosts_nodes(
                         seen_names=seen_names,
                         seen_ids=seen_ids,
                         parent_is_host=node_type == "host",
+                        host_parent_depth=(
+                            host_parent_depth + 1
+                            if node_type == "host"
+                            else host_parent_depth
+                        ),
                     )
 
 
 class HostManager:
     def __init__(self, config_path, data_dir=None, auto_migrate=True):
         self.json_path = config_path
+        self.store = ConfigStore(config_path)
         self.master_password = None
         self.config = {}
         self.hosts = []
@@ -472,19 +498,10 @@ class HostManager:
             self._save_hosts()
 
     def _parse_jsonc(self, json_string: str) -> dict:
-        try:
-            return json.loads(json_string)
-        except json.JSONDecodeError:
-            cleaned = _remove_comments_and_trailing_commas(json_string)
-            try:
-                return json.loads(cleaned)
-            except json.JSONDecodeError as e:
-                hint = _json_error_hint(e, json_string)
-                raise ValueError(f"配置文件解析失败{hint}") from e
+        return parse_jsonc(json_string)
 
     def _read_config_file(self) -> dict:
-        with open(self.json_path, "r", encoding="utf-8") as f:
-            return self._parse_jsonc(f.read())
+        return self.store.read()
 
     def validate_config(self) -> list[str]:
         try:
@@ -547,9 +564,36 @@ class HostManager:
     def _node_id_file(self, node):
         return self._node_string_value(node, "id_file")
 
+    def _target_display(self, user, host, port=DEFAULT_PORT):
+        target = self._build_target_str(user, host)
+        if port and str(port) != DEFAULT_PORT:
+            return f"{target}:{port}"
+        return target
+
     def _ensure_proxy_command_allowed(self, node):
         if self._is_nested_host_node(node) and "proxy_command" in node:
             raise ConfigRuntimeError(i18n.get("validate_proxy_command_nested"))
+
+    def _ensure_supported_jump_topology(self, node):
+        if not node or node.get("type") != "host":
+            return
+
+        host_ancestor_count = int(node.get("_host_ancestor_count") or 0)
+        direct_parent_is_host = bool(node.get("_direct_parent_is_host"))
+        parent = node.get("nest_parent")
+        parent_has_parent = bool(parent and parent.get("nest_parent"))
+
+        if (
+            host_ancestor_count > 1
+            or parent_has_parent
+            or (host_ancestor_count == 1 and not direct_parent_is_host)
+        ):
+            raise ConfigRuntimeError(
+                i18n.get(
+                    "validate_unsupported_nested_host_runtime",
+                    name=node.get("name", ""),
+                )
+            )
 
     def _proxy_command(self, node):
         self._ensure_proxy_command_allowed(node)
@@ -557,6 +601,13 @@ class HostManager:
         if value.strip():
             return value.strip()
         return ""
+
+    def _validate_sftp_path(self, path, label):
+        value = str(path)
+        if any(ch in value for ch in SFTP_UNSAFE_PATH_CHARS):
+            raise ConfigRuntimeError(
+                i18n.get("validate_invalid_sftp_path", label=label)
+            )
 
     def _parse_host_port(self, node):
         host_value = str(self._node_value(node, "host", ":"))
@@ -813,6 +864,124 @@ class HostManager:
             clean_nodes.append(clean_node)
         return clean_nodes
 
+    def _clean_hosts_for_validation(self):
+        return self._clean_nodes_for_saving(copy.deepcopy(self.hosts))
+
+    @staticmethod
+    def _find_node_in_tree(nodes, name=None, node_id=None):
+        for node in nodes:
+            if node_id and node.get("id") == node_id:
+                return node
+            if name and node.get("name") == name:
+                return node
+            found = HostManager._find_node_in_tree(
+                node.get("children", []),
+                name=name,
+                node_id=node_id,
+            )
+            if found:
+                return found
+        return None
+
+    @staticmethod
+    def _replace_node_in_tree(nodes, replacement, name=None, node_id=None):
+        for index, node in enumerate(nodes):
+            if (node_id and node.get("id") == node_id) or (
+                name and node.get("name") == name
+            ):
+                nodes[index] = replacement
+                return True
+            if HostManager._replace_node_in_tree(
+                node.get("children", []),
+                replacement,
+                name=name,
+                node_id=node_id,
+            ):
+                return True
+        return False
+
+    def _candidate_config_data(self, hosts):
+        return {
+            "config": copy.deepcopy(self.config),
+            "hosts": hosts,
+        }
+
+    def validate_add_candidate(self, node_data, parent_name=None):
+        hosts = self._clean_hosts_for_validation()
+        candidate = copy.deepcopy(node_data)
+        if parent_name:
+            parent = self._find_node_in_tree(hosts, name=parent_name)
+            if parent:
+                parent.setdefault("children", []).append(candidate)
+            else:
+                hosts.append(candidate)
+        else:
+            hosts.append(candidate)
+        return validate_hosts_config(self._candidate_config_data(hosts))
+
+    def _apply_update_data_to_node(self, node, new_data, is_nested_host=False):
+        if is_nested_host:
+            node.pop("proxy_command", None)
+
+        for key, value in new_data.items():
+            if key in ("port", "auth"):
+                continue
+            if key in ("ssh_jump_mode", "transfer_jump_mode"):
+                if value in (None, "", "default"):
+                    node.pop(key, None)
+                else:
+                    node[key] = value
+                continue
+            if key == "proxy_command":
+                if is_nested_host:
+                    continue
+                if value is None or not str(value).strip():
+                    node.pop(key, None)
+                else:
+                    node[key] = str(value).strip()
+                continue
+            node[key] = value
+
+        auth_method = new_data.get("auth")
+        if auth_method == "password":
+            node["password"] = new_data.get("password", "")
+            node["id_file"] = ""
+        elif auth_method == "key":
+            node["id_file"] = new_data.get("id_file", "")
+            node["password"] = ""
+        elif auth_method == "none":
+            node["password"] = ""
+            node["id_file"] = ""
+
+    def validate_update_candidate(self, node_name, new_data):
+        current, _, _ = self.find_node_and_parent(node_name)
+        if not current:
+            return [i18n.get("validate_node_not_found", name=node_name)]
+
+        hosts = self._clean_hosts_for_validation()
+        current_id = current.get("id")
+        clean_current = self._find_node_in_tree(
+            hosts,
+            name=node_name,
+            node_id=current_id,
+        )
+        if not clean_current:
+            return [i18n.get("validate_node_not_found", name=node_name)]
+
+        candidate = copy.deepcopy(clean_current)
+        self._apply_update_data_to_node(
+            candidate,
+            new_data,
+            is_nested_host=self._is_nested_host_node(current),
+        )
+        self._replace_node_in_tree(
+            hosts,
+            candidate,
+            name=node_name,
+            node_id=current_id,
+        )
+        return validate_hosts_config(self._candidate_config_data(hosts))
+
     def _save_hosts(self):
         derived_key = b""
         if self.config.get("encryption_enabled"):
@@ -842,57 +1011,30 @@ class HostManager:
         self._atomic_write_json(final_data)
 
     def _atomic_write_json(self, data):
-        config_dir = os.path.dirname(os.path.abspath(self.json_path)) or "."
-        os.makedirs(config_dir, exist_ok=True)
-
-        fd, tmp_path = tempfile.mkstemp(
-            prefix=f".{os.path.basename(self.json_path)}.",
-            suffix=".tmp",
-            dir=config_dir,
-            text=True,
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4, ensure_ascii=False)
-                f.write("\n")
-                f.flush()
-                os.fsync(f.fileno())
-
-            try:
-                current_mode = os.stat(self.json_path).st_mode & 0o777
-                os.chmod(tmp_path, current_mode)
-            except FileNotFoundError:
-                os.chmod(tmp_path, 0o600)
-
-            self._rotate_config_backups()
-            os.replace(tmp_path, self.json_path)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except FileNotFoundError:
-                pass
-            raise
+        self.store.write_json(data)
 
     def _backup_path(self, index):
-        suffix = ".bak" if index == 0 else f".bak.{index}"
-        return f"{self.json_path}{suffix}"
+        return self.store.backup_path(index)
+
+    @staticmethod
+    def backup_path_for(config_path, index):
+        return ConfigStore.backup_path_for(config_path, index)
+
+    @classmethod
+    def list_config_backups(cls, config_path):
+        return ConfigStore.list_backups_for(config_path)
+
+    @classmethod
+    def restore_config_backup(cls, config_path, index):
+        return ConfigStore.restore_backup_for(
+            config_path,
+            index,
+            validate_func=validate_hosts_config,
+        )
 
     def _rotate_config_backups(self):
-        if not os.path.exists(self.json_path):
-            return
-
         try:
-            oldest = self._backup_path(BACKUP_COUNT - 1)
-            if os.path.exists(oldest):
-                os.unlink(oldest)
-
-            for index in range(BACKUP_COUNT - 2, -1, -1):
-                src = self._backup_path(index)
-                dst = self._backup_path(index + 1)
-                if os.path.exists(src):
-                    os.replace(src, dst)
-
-            shutil.copy2(self.json_path, self._backup_path(0))
+            self.store.rotate_backups()
         except OSError as e:
             print(f"Warning: Could not create config backup: {e}", file=sys.stderr)
 
@@ -900,16 +1042,58 @@ class HostManager:
         self._apply_crypto(nodes, key, encrypt)
 
     def find_host_by_alias(self, alias):
-        best_match = None
+        result = self.resolve_host_alias(alias)
+        if result["status"] == "found":
+            return result["node"]
+        return None
+
+    @staticmethod
+    def _alias_values(node):
+        name = node.get("name", "")
+        values = []
+        if name:
+            values.append(name)
+            base_name = name.split(" ", 1)[0]
+            if base_name and base_name != name:
+                values.append(base_name)
+        return values
+
+    def resolve_host_alias(self, alias):
+        exact_matches = []
+        prefix_matches = []
+        prefix_seen = set()
         for node in self._traverse_all(self.hosts):
             if node.get("type") != "host":
                 continue
-            base_name = node.get("name", "").split(" ", 1)[0]
-            if alias == base_name:
-                return node
-            if best_match is None and node.get("name", "").startswith(alias):
-                best_match = node
-        return best_match
+
+            alias_values = self._alias_values(node)
+            if alias in alias_values:
+                exact_matches.append(node)
+                continue
+
+            if any(value.startswith(alias) for value in alias_values):
+                key = node.get("id") or id(node)
+                if key not in prefix_seen:
+                    prefix_seen.add(key)
+                    prefix_matches.append(node)
+
+        if len(exact_matches) == 1:
+            return {"status": "found", "node": exact_matches[0], "matches": []}
+        if len(exact_matches) > 1:
+            return {
+                "status": "ambiguous",
+                "node": None,
+                "matches": exact_matches,
+            }
+        if len(prefix_matches) == 1:
+            return {"status": "found", "node": prefix_matches[0], "matches": []}
+        if len(prefix_matches) > 1:
+            return {
+                "status": "ambiguous",
+                "node": None,
+                "matches": prefix_matches,
+            }
+        return {"status": "not_found", "node": None, "matches": []}
 
     def find_host_by_id(self, node_id):
         if not node_id:
@@ -934,14 +1118,31 @@ class HostManager:
             return node
         return None
 
-    def _rebuild_nest_parents(self, nodes):
+    def _rebuild_nest_parents(self, nodes, host_ancestors=None, direct_parent=None):
+        if host_ancestors is None:
+            host_ancestors = []
+
         for node in nodes:
-            if node.get("type") == "host" and node.get("children"):
-                for child in node["children"]:
-                    if child.get("type") == "host":
-                        child["nest_parent"] = node
+            node_type = node.get("type")
+            if node_type == "host":
+                node["_host_ancestor_count"] = len(host_ancestors)
+                node["_direct_parent_is_host"] = bool(
+                    direct_parent and direct_parent.get("type") == "host"
+                )
+                if node["_direct_parent_is_host"]:
+                    node["nest_parent"] = direct_parent
+                else:
+                    node.pop("nest_parent", None)
+                next_host_ancestors = host_ancestors + [node]
+            else:
+                next_host_ancestors = host_ancestors
+
             if node.get("children"):
-                self._rebuild_nest_parents(node["children"])
+                self._rebuild_nest_parents(
+                    node["children"],
+                    next_host_ancestors,
+                    node,
+                )
 
     def get_hosts(self):
         return self.hosts
@@ -991,6 +1192,7 @@ class HostManager:
 
         if parent_list is not None and index != -1:
             del parent_list[index]
+            self._rebuild_nest_parents(self.hosts)
             self._save_hosts()
         else:
             print(
@@ -1022,6 +1224,7 @@ class HostManager:
         else:
             self.hosts.append(node_data)
 
+        self._rebuild_nest_parents(self.hosts)
         self._save_hosts()
 
     @staticmethod
@@ -1038,45 +1241,58 @@ class HostManager:
             print(f"Error: Node '{node_name}' not found for update.", file=sys.stderr)
             return
 
-        is_nested_host = self._is_nested_host_node(node)
-        if is_nested_host:
-            node.pop("proxy_command", None)
+        self._apply_update_data_to_node(
+            node,
+            new_data,
+            is_nested_host=self._is_nested_host_node(node),
+        )
 
-        for key, value in new_data.items():
-            if key in ("port", "auth"):
-                continue
-            if key in ("ssh_jump_mode", "transfer_jump_mode"):
-                if value in (None, "", "default"):
-                    node.pop(key, None)
-                else:
-                    node[key] = value
-                continue
-            if key == "proxy_command":
-                if is_nested_host:
-                    continue
-                if value is None or not str(value).strip():
-                    node.pop(key, None)
-                else:
-                    node[key] = str(value).strip()
-                continue
-            if key == "host":
-                node["host"] = value
-            else:
-                node[key] = value
-
-        # Handle password/id_file based on auth method
-        auth_method = new_data.get("auth")
-        if auth_method == "password":
-            node["password"] = new_data.get("password", "")
-            node["id_file"] = ""
-        elif auth_method == "key":
-            node["id_file"] = new_data.get("id_file", "")
-            node["password"] = ""
-        elif auth_method == "none":
-            node["password"] = ""
-            node["id_file"] = ""
-
+        self._rebuild_nest_parents(self.hosts)
         self._save_hosts()
+
+    def describe_host(self, node):
+        details = []
+        if not node or node.get("type") != "host":
+            return details
+
+        details.append(("Name", node.get("name", "N/A")))
+        try:
+            host, port = self._parse_host_port(node)
+            user = self._node_user(node)
+            nest_parent = node.get("nest_parent")
+            ssh_mode = self._effective_ssh_jump_mode(node) if nest_parent else "direct"
+            transfer_mode = (
+                self._effective_transfer_jump_mode(node) if nest_parent else "direct"
+            )
+            details.append(("Target", self._target_display(user, host, port)))
+            details.append(("Auth", self._auth_method_for_mode(node, ssh_mode)))
+            if node.get("mfa_secret"):
+                details.append(("MFA/OTP", "enabled"))
+            details.append(("SSH Mode", ssh_mode))
+            details.append(("Transfer", transfer_mode))
+            details.append(("Host Key", self._host_key_checking_mode()))
+            if self._uses_target_agent_for_mode(node, ssh_mode):
+                details.append(("Agent", "enabled"))
+            id_file = self._node_id_file(node)
+            if id_file:
+                details.append(("Key", os.path.basename(id_file)))
+            if nest_parent:
+                j_host, j_port, jumper_str = self._jump_endpoint(nest_parent)
+                details.append(("Jump Host", self._target_display("", j_host, j_port)))
+                details.append(("Jump Alias", nest_parent.get("name", "")))
+                jump_proxy_command = self._proxy_command(nest_parent)
+                if jump_proxy_command:
+                    details.append(("Jump Proxy", jump_proxy_command))
+                else:
+                    details.append(("Jump Target", jumper_str))
+            else:
+                proxy_command = self._proxy_command(node)
+                if proxy_command:
+                    details.append(("ProxyCommand", proxy_command))
+        except (PlaceholderResolutionError, ConfigRuntimeError, ValueError) as e:
+            details.append(("Config Error", str(e)))
+
+        return details
 
     def toggle_encryption(self):
         is_currently_enabled = self.config.get("encryption_enabled", False)
@@ -1157,20 +1373,25 @@ class HostManager:
         )
 
     def _secret_env(self, secrets):
-        env = os.environ.copy()
-        secret_env_keys = {
-            "target_pass": "SSHGO_TARGET_PASS",
-            "jumper_pass": "SSHGO_JUMPER_PASS",
-            "mfa_secret": "SSHGO_MFA_SECRET",
-            "jumper_mfa_secret": "SSHGO_JUMPER_MFA_SECRET",
-        }
-        for key, env_key in secret_env_keys.items():
+        return self._env_for_secret_values(self._secret_env_values(secrets))
+
+    def _secret_env_values(self, secrets):
+        values = {}
+        for key, env_key in SECRET_ENV_KEYS.items():
             value = secrets.get(key)
             if value:
-                env[env_key] = str(value)
-            else:
-                env.pop(env_key, None)
+                values[env_key] = str(value)
+        return values
+
+    def _env_for_secret_values(self, secret_env):
+        env = os.environ.copy()
+        for env_key in SECRET_ENV_VAR_NAMES:
+            env.pop(env_key, None)
+        env.update(secret_env)
         return env
+
+    def _env_for_plan(self, plan):
+        return self._env_for_secret_values(plan.secret_env)
 
     def _ensure_executable(self, script_path):
         try:
@@ -1226,6 +1447,7 @@ class HostManager:
         return " ".join(shlex.quote(part) for part in parts)
 
     def build_ssh_command_args(self, node, remote_command=None):
+        self._ensure_supported_jump_topology(node)
         self._ensure_proxy_command_allowed(node)
         args = ["ssh"]
         nest_parent = node.get("nest_parent")
@@ -1259,154 +1481,155 @@ class HostManager:
     def build_sftp_command_args(self, node, action, path1, path2):
         return self.build_file_transfer_command_args(node, action, path1, path2)
 
-    def execute_file_transfer(self, node, action, path1, path2):
+    def _command_plan(
+        self,
+        script_path,
+        args,
+        secrets,
+        audit,
+        start_result,
+        missing_result,
+        exec_failed_prefix,
+        missing_message="",
+        exec_error_message="",
+    ):
+        return CommandPlan(
+            script_path=script_path,
+            args=tuple(args),
+            secret_env=self._secret_env_values(secrets),
+            audit=dict(audit),
+            start_result=start_result,
+            missing_result=missing_result,
+            exec_failed_prefix=exec_failed_prefix,
+            missing_message=missing_message,
+            exec_error_message=exec_error_message,
+        )
+
+    def _audit_metadata(self, node, auth, command=None, jump_chain=None, extra=None):
+        audit_identity = self._audit_identity(node)
+        return {
+            "name": node.get("name", ""),
+            "host": audit_identity["host"],
+            "user": self._node_user(node),
+            "auth": auth,
+            "command": command,
+            "jump_chain": jump_chain if jump_chain else None,
+            "node_id": audit_identity["node_id"],
+            "port": audit_identity["port"],
+            "endpoint": audit_identity["endpoint"],
+            "extra": extra,
+        }
+
+    def _record_plan_audit(self, plan, result):
+        audit = plan.audit
+        self.audit.record_login(
+            name=audit.get("name", ""),
+            host=audit.get("host", ""),
+            user=audit.get("user", ""),
+            auth=audit.get("auth", ""),
+            result=result,
+            command=audit.get("command"),
+            jump_chain=audit.get("jump_chain"),
+            full_mode=self._audit_full,
+            node_id=audit.get("node_id"),
+            port=audit.get("port"),
+            endpoint=audit.get("endpoint"),
+            extra=audit.get("extra"),
+        )
+
+    def _execute_command_plan(self, plan):
+        self._ensure_executable(plan.script_path)
+        try:
+            self._record_plan_audit(plan, plan.start_result)
+            os.execve(plan.script_path, plan.launch_args(), self._env_for_plan(plan))
+        except FileNotFoundError:
+            self._record_plan_audit(plan, plan.missing_result)
+            if plan.missing_message:
+                print(plan.missing_message, file=sys.stderr)
+            sys.exit(1)
+        except OSError as e:
+            self._record_plan_audit(plan, f"{plan.exec_failed_prefix}:{e.errno}")
+            if plan.exec_error_message:
+                print(plan.exec_error_message.format(error=e), file=sys.stderr)
+            sys.exit(1)
+
+    def build_sftp_command_plan(self, node, action, path1, path2):
+        script_path = os.path.join(SCRIPT_DIR, "sftp_login.exp")
+        args, secrets = self._build_sftp_command_parts(node, action, path1, path2)
+        nest_parent = node.get("nest_parent")
+        jump_chain = [nest_parent.get("name", "")] if nest_parent else []
+        return self._command_plan(
+            script_path=script_path,
+            args=args,
+            secrets=secrets,
+            audit=self._audit_metadata(
+                node,
+                auth=self._auth_method(node),
+                command=f"{action} {path1} {path2}",
+                jump_chain=jump_chain,
+                extra={
+                    "transfer_jump_mode": self._effective_transfer_jump_mode(node),
+                },
+            ),
+            start_result="sftp_started",
+            missing_result="sftp_exp_not_found",
+            exec_failed_prefix="sftp_exec_failed",
+            missing_message="Error: sftp_login.exp not found.",
+            exec_error_message="Error executing SFTP: {error}",
+        )
+
+    def build_relay_command_plan(self, node, action, path1, path2):
+        script_path = os.path.join(SCRIPT_DIR, "relay_transfer.exp")
+        args, secrets = self._build_relay_command_parts(node, action, path1, path2)
+        nest_parent = node.get("nest_parent")
+        jump_chain = [nest_parent.get("name", "")] if nest_parent else []
+        return self._command_plan(
+            script_path=script_path,
+            args=args,
+            secrets=secrets,
+            audit=self._audit_metadata(
+                node,
+                auth=self._auth_method_for_mode(node, "relay"),
+                command=f"{action} {path1} {path2}",
+                jump_chain=jump_chain,
+                extra={"transfer_jump_mode": "relay"},
+            ),
+            start_result=f"relay_{action}_started",
+            missing_result="relay_exp_not_found",
+            exec_failed_prefix="relay_exec_failed",
+            missing_message="Error: relay_transfer.exp not found.",
+            exec_error_message="Error executing relay transfer: {error}",
+        )
+
+    def build_file_transfer_command_plan(self, node, action, path1, path2):
         if (
             node.get("nest_parent")
             and self._effective_transfer_jump_mode(node) == "relay"
         ):
-            self._execute_relay_transfer(node, action, path1, path2)
-            return
+            return self.build_relay_command_plan(node, action, path1, path2)
+        return self.build_sftp_command_plan(node, action, path1, path2)
 
-        sftp_script = os.path.join(SCRIPT_DIR, "sftp_login.exp")
-        self._ensure_executable(sftp_script)
+    def execute_file_transfer(self, node, action, path1, path2):
         try:
-            args, secrets = self._build_sftp_command_parts(node, action, path1, path2)
-            env = self._secret_env(secrets)
-            audit_identity = self._audit_identity(node)
-            host = audit_identity["host"]
-            user = self._node_user(node)
+            plan = self.build_file_transfer_command_plan(node, action, path1, path2)
         except (PlaceholderResolutionError, ConfigRuntimeError) as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
-        jump_chain = []
-        nest_parent = node.get("nest_parent")
-        if nest_parent:
-            jump_chain.append(nest_parent.get("name", ""))
-        auth_method = self._auth_method(node)
-        try:
-            self.audit.record_login(
-                name=node.get("name", ""),
-                host=host,
-                user=user,
-                auth=auth_method,
-                result="sftp_started",
-                command=f"{action} {path1} {path2}",
-                jump_chain=jump_chain if jump_chain else None,
-                full_mode=self._audit_full,
-                node_id=audit_identity["node_id"],
-                port=audit_identity["port"],
-                endpoint=audit_identity["endpoint"],
-                extra={
-                    "transfer_jump_mode": self._effective_transfer_jump_mode(node),
-                },
-            )
-            os.execve(sftp_script, [sftp_script] + args, env)
-        except FileNotFoundError:
-            self.audit.record_login(
-                name=node.get("name", ""),
-                host=host,
-                user=user,
-                auth=auth_method,
-                result="sftp_exp_not_found",
-                command=f"{action} {path1} {path2}",
-                full_mode=self._audit_full,
-                node_id=audit_identity["node_id"],
-                port=audit_identity["port"],
-                endpoint=audit_identity["endpoint"],
-                extra={
-                    "transfer_jump_mode": self._effective_transfer_jump_mode(node),
-                },
-            )
-            print("Error: sftp_login.exp not found.", file=sys.stderr)
-            sys.exit(1)
-        except OSError as e:
-            self.audit.record_login(
-                name=node.get("name", ""),
-                host=host,
-                user=user,
-                auth=auth_method,
-                result=f"sftp_exec_failed:{e.errno}",
-                command=f"{action} {path1} {path2}",
-                full_mode=self._audit_full,
-                node_id=audit_identity["node_id"],
-                port=audit_identity["port"],
-                endpoint=audit_identity["endpoint"],
-                extra={
-                    "transfer_jump_mode": self._effective_transfer_jump_mode(node),
-                },
-            )
-            print(f"Error executing SFTP: {e}", file=sys.stderr)
-            sys.exit(1)
+        self._execute_command_plan(plan)
 
     def execute_sftp_transfer(self, node, action, path1, path2):
         return self.execute_file_transfer(node, action, path1, path2)
 
     def _execute_relay_transfer(self, node, action, path1, path2):
-        relay_script = os.path.join(SCRIPT_DIR, "relay_transfer.exp")
-        self._ensure_executable(relay_script)
         try:
-            args, secrets = self._build_relay_command_parts(node, action, path1, path2)
-            env = self._secret_env(secrets)
-            audit_identity = self._audit_identity(node)
-            host = audit_identity["host"]
-            user = self._node_user(node)
+            plan = self.build_relay_command_plan(node, action, path1, path2)
         except (PlaceholderResolutionError, ConfigRuntimeError) as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
-        nest_parent = node.get("nest_parent")
-        jump_chain = [nest_parent.get("name", "")] if nest_parent else []
-        auth_method = self._auth_method_for_mode(node, "relay")
-        command = f"{action} {path1} {path2}"
-        try:
-            self.audit.record_login(
-                name=node.get("name", ""),
-                host=host,
-                user=user,
-                auth=auth_method,
-                result=f"relay_{action}_started",
-                command=command,
-                jump_chain=jump_chain if jump_chain else None,
-                full_mode=self._audit_full,
-                node_id=audit_identity["node_id"],
-                port=audit_identity["port"],
-                endpoint=audit_identity["endpoint"],
-                extra={"transfer_jump_mode": "relay"},
-            )
-            os.execve(relay_script, [relay_script] + args, env)
-        except FileNotFoundError:
-            self.audit.record_login(
-                name=node.get("name", ""),
-                host=host,
-                user=user,
-                auth=auth_method,
-                result="relay_exp_not_found",
-                command=command,
-                full_mode=self._audit_full,
-                node_id=audit_identity["node_id"],
-                port=audit_identity["port"],
-                endpoint=audit_identity["endpoint"],
-                extra={"transfer_jump_mode": "relay"},
-            )
-            print("Error: relay_transfer.exp not found.", file=sys.stderr)
-            sys.exit(1)
-        except OSError as e:
-            self.audit.record_login(
-                name=node.get("name", ""),
-                host=host,
-                user=user,
-                auth=auth_method,
-                result=f"relay_exec_failed:{e.errno}",
-                command=command,
-                full_mode=self._audit_full,
-                node_id=audit_identity["node_id"],
-                port=audit_identity["port"],
-                endpoint=audit_identity["endpoint"],
-                extra={"transfer_jump_mode": "relay"},
-            )
-            print(f"Error executing relay transfer: {e}", file=sys.stderr)
-            sys.exit(1)
+        self._execute_command_plan(plan)
 
     def _build_relay_command_parts(self, node, action, path1, path2):
+        self._ensure_supported_jump_topology(node)
         self._ensure_proxy_command_allowed(node)
         args = []
         secrets = {}
@@ -1463,6 +1686,7 @@ class HostManager:
         return args, secrets
 
     def _build_sftp_command_parts(self, node, action, path1, path2):
+        self._ensure_supported_jump_topology(node)
         self._ensure_proxy_command_allowed(node)
         args = []
         secrets = {}
@@ -1472,6 +1696,8 @@ class HostManager:
         target_uses_agent = self._uses_ssh_agent(node)
         local_path = path1 if action == "upload" else path2
         remote_path = path2 if action == "upload" else path1
+        self._validate_sftp_path(local_path, "local")
+        self._validate_sftp_path(remote_path, "remote")
 
         args.extend(["-h", host, "-u", self._node_user(node)])
         args.extend(["-host-key-checking", self._host_key_checking_mode()])
@@ -1518,130 +1744,116 @@ class HostManager:
         return args, secrets
 
     def execute_interactive_connection(self, node, remote_command=None):
-        login_script = os.path.join(SCRIPT_DIR, "login.exp")
-        self._ensure_executable(login_script)
-        exe_args = [login_script]
-        secrets = {}
-
         try:
-            self._ensure_proxy_command_allowed(node)
-            audit_identity = self._audit_identity(node)
-            host = audit_identity["host"]
-            port = audit_identity["port"]
-            user = self._node_user(node)
-            nest_parent = node.get("nest_parent")
-            ssh_jump_mode = self._effective_ssh_jump_mode(node) if nest_parent else "direct"
-            target_uses_agent = self._uses_target_agent_for_mode(node, ssh_jump_mode)
-
-            exe_args.extend(["-h", host, "-u", user])
-            exe_args.extend(["-host-key-checking", self._host_key_checking_mode()])
-            if port != DEFAULT_PORT:
-                exe_args.extend(["-p", port])
-
-            if not target_uses_agent:
-                target_pass = node.get("password", "")
-                if target_pass:
-                    secrets["target_pass"] = target_pass
-
-                id_file = self._node_id_file(node)
-                if id_file:
-                    exe_args.extend(["-i", id_file])
-
-                mfa_secret = node.get("mfa_secret", "")
-                if mfa_secret:
-                    secrets["mfa_secret"] = mfa_secret
-
-            if nest_parent:
-                jump_uses_agent = self._uses_ssh_agent(nest_parent)
-                exe_args.extend(self._build_jump_args(node))
-                exe_args.extend(["-jump-mode", ssh_jump_mode])
-                if ssh_jump_mode == "tunnel":
-                    exe_args.extend([
-                        "-tunnel-proxy-command",
-                        self._build_tunnel_proxy_command(nest_parent),
-                    ])
-                else:
-                    jump_proxy_command = self._proxy_command(nest_parent)
-                    if jump_proxy_command:
-                        exe_args.extend(["-j-proxy-command", jump_proxy_command])
-                if not jump_uses_agent:
-                    j_id_file = self._node_id_file(nest_parent)
-                    if j_id_file:
-                        exe_args.extend(["-j-i", j_id_file])
-                    jumper_pass = nest_parent.get("password", "")
-                    if jumper_pass:
-                        secrets["jumper_pass"] = jumper_pass
-
-                    j_mfa_secret = nest_parent.get("mfa_secret", "")
-                    if j_mfa_secret:
-                        secrets["jumper_mfa_secret"] = j_mfa_secret
-            else:
-                proxy_command = self._proxy_command(node)
-                if proxy_command:
-                    exe_args.extend(["-proxy-command", proxy_command])
+            plan = self.build_interactive_command_plan(node, remote_command)
         except (PlaceholderResolutionError, ConfigRuntimeError) as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
+        self._execute_command_plan(plan)
+
+    def _build_interactive_command_parts(self, node, remote_command=None):
+        self._ensure_supported_jump_topology(node)
+        self._ensure_proxy_command_allowed(node)
+        args = []
+        secrets = {}
+        audit_identity = self._audit_identity(node)
+        host = audit_identity["host"]
+        port = audit_identity["port"]
+        user = self._node_user(node)
+        nest_parent = node.get("nest_parent")
+        ssh_jump_mode = self._effective_ssh_jump_mode(node) if nest_parent else "direct"
+        target_uses_agent = self._uses_target_agent_for_mode(node, ssh_jump_mode)
+
+        args.extend(["-h", host, "-u", user])
+        args.extend(["-host-key-checking", self._host_key_checking_mode()])
+        if port != DEFAULT_PORT:
+            args.extend(["-p", port])
+
+        if not target_uses_agent:
+            target_pass = node.get("password", "")
+            if target_pass:
+                secrets["target_pass"] = target_pass
+
+            id_file = self._node_id_file(node)
+            if id_file:
+                args.extend(["-i", id_file])
+
+            mfa_secret = node.get("mfa_secret", "")
+            if mfa_secret:
+                secrets["mfa_secret"] = mfa_secret
+
+        if nest_parent:
+            jump_uses_agent = self._uses_ssh_agent(nest_parent)
+            args.extend(self._build_jump_args(node))
+            args.extend(["-jump-mode", ssh_jump_mode])
+            if ssh_jump_mode == "tunnel":
+                args.extend([
+                    "-tunnel-proxy-command",
+                    self._build_tunnel_proxy_command(nest_parent),
+                ])
+            else:
+                jump_proxy_command = self._proxy_command(nest_parent)
+                if jump_proxy_command:
+                    args.extend(["-j-proxy-command", jump_proxy_command])
+            if not jump_uses_agent:
+                j_id_file = self._node_id_file(nest_parent)
+                if j_id_file:
+                    args.extend(["-j-i", j_id_file])
+                jumper_pass = nest_parent.get("password", "")
+                if jumper_pass:
+                    secrets["jumper_pass"] = jumper_pass
+
+                j_mfa_secret = nest_parent.get("mfa_secret", "")
+                if j_mfa_secret:
+                    secrets["jumper_mfa_secret"] = j_mfa_secret
+        else:
+            proxy_command = self._proxy_command(node)
+            if proxy_command:
+                args.extend(["-proxy-command", proxy_command])
 
         if remote_command:
-            exe_args.extend(["-c", remote_command])
+            args.extend(["-c", remote_command])
 
-        auth_method = self._auth_method_for_mode(node, ssh_jump_mode)
+        return args, secrets
 
-        jump_chain = []
-        if nest_parent:
-            jump_chain.append(nest_parent.get("name", ""))
-
-        try:
-            self.audit.record_login(
-                name=node.get("name", ""),
-                host=host,
-                user=user,
-                auth=auth_method,
-                result="started",
+    def build_interactive_command_plan(self, node, remote_command=None):
+        login_script = os.path.join(SCRIPT_DIR, "login.exp")
+        args, secrets = self._build_interactive_command_parts(
+            node,
+            remote_command=remote_command,
+        )
+        nest_parent = node.get("nest_parent")
+        ssh_jump_mode = self._effective_ssh_jump_mode(node) if nest_parent else "direct"
+        jump_chain = [nest_parent.get("name", "")] if nest_parent else []
+        return self._command_plan(
+            script_path=login_script,
+            args=args,
+            secrets=secrets,
+            audit=self._audit_metadata(
+                node,
+                auth=self._auth_method_for_mode(node, ssh_jump_mode),
                 command=remote_command,
-                jump_chain=jump_chain if jump_chain else None,
-                full_mode=self._audit_full,
-                node_id=audit_identity["node_id"],
-                port=audit_identity["port"],
-                endpoint=audit_identity["endpoint"],
+                jump_chain=jump_chain,
                 extra={
                     "ssh_jump_mode": self._effective_ssh_jump_mode(node),
                 },
-            )
-            os.execve(login_script, exe_args, self._secret_env(secrets))
-        except FileNotFoundError:
-            self.audit.record_login(
-                name=node.get("name", ""),
-                host=host,
-                user=user,
-                auth=auth_method,
-                result="login_exp_not_found",
-                command=remote_command,
-                full_mode=self._audit_full,
-                node_id=audit_identity["node_id"],
-                port=audit_identity["port"],
-                endpoint=audit_identity["endpoint"],
-                extra={
-                    "ssh_jump_mode": self._effective_ssh_jump_mode(node),
-                },
-            )
-            sys.exit(1)
-        except OSError as e:
-            self.audit.record_login(
-                name=node.get("name", ""),
-                host=host,
-                user=user,
-                auth=auth_method,
-                result=f"exec_failed:{e.errno}",
-                command=remote_command,
-                full_mode=self._audit_full,
-                node_id=audit_identity["node_id"],
-                port=audit_identity["port"],
-                endpoint=audit_identity["endpoint"],
-                extra={
-                    "ssh_jump_mode": self._effective_ssh_jump_mode(node),
-                },
-            )
-            print(f"Error executing SSH: {e}", file=sys.stderr)
-            sys.exit(1)
+            ),
+            start_result="started",
+            missing_result="login_exp_not_found",
+            exec_failed_prefix="exec_failed",
+            exec_error_message="Error executing SSH: {error}",
+        )
+
+    def build_interactive_launch_command_args(self, node, remote_command=None):
+        return self.build_interactive_command_plan(
+            node,
+            remote_command=remote_command,
+        ).launch_args()
+
+    def build_file_transfer_launch_command_args(self, node, action, path1, path2):
+        return self.build_file_transfer_command_plan(
+            node,
+            action,
+            path1,
+            path2,
+        ).launch_args()

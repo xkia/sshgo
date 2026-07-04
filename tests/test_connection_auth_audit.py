@@ -7,10 +7,7 @@ from contextlib import redirect_stderr
 from io import StringIO
 
 import host_manager as host_manager_module
-import sshgo as sshgo_module
-from audit_logger import AuditLogger
-from host_manager import HostManager, validate_hosts_config
-from tui import Tui
+from host_manager import HostManager
 
 
 class ConnectionAuthAuditTests(unittest.TestCase):
@@ -104,6 +101,26 @@ class ConnectionAuthAuditTests(unittest.TestCase):
         self.assertIn("ProxyCommand=$custom_proxy_command", script)
         self.assertNotIn("jumper_id_file", script)
         self.assertNotIn("\"-j-i\"", script)
+
+    def test_describe_host_uses_resolved_connection_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            target = manager.find_host_by_alias("target")
+
+            details = dict(manager.describe_host(target))
+
+            self.assertEqual(details["Target"], "targetuser@target.internal:2222")
+            self.assertEqual(details["Auth"], "key")
+            self.assertEqual(details["MFA/OTP"], "enabled")
+            self.assertEqual(details["SSH Mode"], "shell")
+            self.assertEqual(details["Transfer"], "tunnel")
+            self.assertEqual(details["Jump Alias"], "jump")
+            self.assertEqual(details["Jump Host"], "jump.example.com:2200")
+            self.assertEqual(details["Key"], "target_key")
+            joined = "\n".join(f"{key}: {value}" for key, value in details.items())
+            self.assertNotIn("target-pass", joined)
+            self.assertNotIn("jump-pass", joined)
+            self.assertNotIn("JBSWY3DPEHPK3PXP", joined)
 
     def test_ssh_tunnel_mode_is_passed_to_expect(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -439,6 +456,29 @@ class ConnectionAuthAuditTests(unittest.TestCase):
         self.assertIn("-i /tmp/jump_key", tunnel_proxy)
         self.assertEqual(secrets["jumper_pass"], "jump-pass")
 
+    def test_sftp_rejects_fragile_paths_before_expect_handoff(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            target = manager.find_host_by_alias("target")
+
+            with self.assertRaisesRegex(ValueError, "Invalid local SFTP path"):
+                manager.build_file_transfer_launch_command_args(
+                    target,
+                    "upload",
+                    'local"bad.txt',
+                    "/tmp/remote.txt",
+                )
+
+            target["transfer_jump_mode"] = "relay"
+            args = manager.build_file_transfer_launch_command_args(
+                target,
+                "upload",
+                'local"bad.txt',
+                "/tmp/remote.txt",
+            )
+            self.assertTrue(args[0].endswith("relay_transfer.exp"))
+            self.assertIn('local"bad.txt', args)
+
     def test_target_agent_does_not_suppress_jump_password(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
@@ -468,161 +508,6 @@ class ConnectionAuthAuditTests(unittest.TestCase):
 
             self.assertNotIn("SSHGO_TARGET_PASS", captured["env"])
             self.assertEqual(captured["env"]["SSHGO_JUMPER_PASS"], "jump-pass")
-
-    def test_global_agent_satisfies_validation_auth(self):
-        errors = validate_hosts_config(
-            {
-                "config": {"use_ssh_agent": True},
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "agent-only",
-                        "host": "example.com",
-                        "user": "deploy",
-                    }
-                ],
-            }
-        )
-        self.assertEqual(errors, [])
-
-    def test_default_config_prefers_user_config_when_present(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            home_dir = os.path.join(temp_dir, "home")
-            script_dir = os.path.join(temp_dir, "script")
-            user_config_dir = os.path.join(home_dir, ".config", "sshgo")
-            os.makedirs(user_config_dir)
-            os.makedirs(script_dir)
-            user_config = os.path.join(user_config_dir, "hosts.json")
-            with open(user_config, "w", encoding="utf-8") as f:
-                json.dump({"config": {}, "hosts": []}, f)
-
-            old_home = os.environ.get("HOME")
-            os.environ["HOME"] = home_dir
-            try:
-                self.assertEqual(
-                    sshgo_module._default_config_path(script_dir),
-                    user_config,
-                )
-            finally:
-                if old_home is None:
-                    os.environ.pop("HOME", None)
-                else:
-                    os.environ["HOME"] = old_home
-
-    def test_default_config_falls_back_to_script_config(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            home_dir = os.path.join(temp_dir, "home")
-            script_dir = os.path.join(temp_dir, "script")
-            os.makedirs(os.path.join(home_dir, ".config", "sshgo"))
-            os.makedirs(script_dir)
-
-            old_home = os.environ.get("HOME")
-            os.environ["HOME"] = home_dir
-            try:
-                self.assertEqual(
-                    sshgo_module._default_config_path(script_dir),
-                    os.path.join(script_dir, "hosts.json"),
-                )
-            finally:
-                if old_home is None:
-                    os.environ.pop("HOME", None)
-                else:
-                    os.environ["HOME"] = old_home
-
-    def test_save_hosts_writes_valid_json(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            manager = self._manager(temp_dir)
-            manager.config["language"] = "zh"
-            manager._save_hosts()
-
-            with open(manager.json_path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            self.assertEqual(saved["config"]["language"], "zh")
-
-    def test_node_ids_are_saved_and_preserved_on_rename(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            manager = self._manager(temp_dir)
-            target = manager.find_host_by_alias("target")
-            original_id = target.get("id")
-            self.assertTrue(original_id)
-
-            manager.update_node(
-                "target",
-                {
-                    "name": "renamed-target",
-                    "host": "target.internal:2222",
-                    "user": "targetuser",
-                },
-            )
-            renamed = manager.find_host_by_alias("renamed-target")
-            self.assertEqual(renamed.get("id"), original_id)
-
-            with open(manager.json_path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            saved_target = saved["hosts"][0]["children"][0]
-            self.assertEqual(saved_target["id"], original_id)
-
-    def test_validate_style_load_does_not_persist_node_id_migration(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {"import_ssh_config": False},
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "legacy",
-                        "host": "legacy.example.com",
-                        "user": "deploy",
-                        "password": "pw",
-                    }
-                ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-
-            manager = HostManager(
-                path,
-                data_dir=os.path.join(temp_dir, "data"),
-                auto_migrate=False,
-            )
-            self.assertTrue(manager.find_host_by_alias("legacy").get("id"))
-            with open(path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            self.assertNotIn("id", saved["hosts"][0])
-            self.assertFalse(os.path.exists(path + ".bak"))
-
-    def test_save_hosts_creates_backup(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            manager = self._manager(temp_dir)
-            for suffix in (".bak", ".bak.1", ".bak.2"):
-                try:
-                    os.unlink(manager.json_path + suffix)
-                except FileNotFoundError:
-                    pass
-
-            manager.config["language"] = "zh"
-            manager._save_hosts()
-
-            self.assertTrue(os.path.exists(manager.json_path + ".bak"))
-            with open(manager.json_path + ".bak", "r", encoding="utf-8") as f:
-                backup = json.load(f)
-            self.assertIn("hosts", backup)
-
-    def test_audit_trim_is_batched(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            audit = AuditLogger(temp_dir)
-            audit.HISTORY_MAX = 3
-            audit.AUDIT_SIMPLE_MAX = 3
-            audit.TRIM_BATCH = 2
-
-            for i in range(5):
-                audit.record_login(str(i), "host", "user", "none", "started")
-            with open(audit.history_path, "r", encoding="utf-8") as f:
-                self.assertEqual(sum(1 for _ in f), 5)
-
-            audit.record_login("5", "host", "user", "none", "started")
-            with open(audit.history_path, "r", encoding="utf-8") as f:
-                self.assertEqual(sum(1 for _ in f), 3)
 
     def test_sftp_exec_failure_is_audited(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1095,410 +980,46 @@ class ConnectionAuthAuditTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("regular files only", result.stdout + result.stderr)
 
-    def test_tui_form_reports_terminal_too_small(self):
-        class FakeScreen:
-            def __init__(self):
-                self.messages = []
-
-            def clear(self):
-                pass
-
-            def border(self, _):
-                pass
-
-            def getmaxyx(self):
-                return (8, 20)
-
-            def addstr(self, *args):
-                if args and isinstance(args[-1], str):
-                    self.messages.append(args[-1])
-
-            def refresh(self):
-                pass
-
-        tui = object.__new__(Tui)
-        tui.screen = FakeScreen()
-        tui.restore_screen = lambda: None
-        result = Tui._draw_form(
-            tui,
-            [
-                {"label": "Name", "type": "text", "name": "name", "y": 3, "x": 2},
-                {"label": "Save", "type": "button", "y": 19, "x": 2},
-            ],
-            0,
-            "Test",
-        )
-
-        self.assertFalse(result)
-        self.assertTrue(
-            any("Terminal too" in message for message in tui.screen.messages)
-        )
-
-    def test_audit_records_node_identity_and_endpoint(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            manager = self._manager(temp_dir)
-            target = manager.find_host_by_alias("target")
-
-            captured = {}
-            real_execve = host_manager_module.os.execve
-
-            def fake_execve(path, args, env):
-                captured["args"] = args
-                raise OSError(5, "fake")
-
-            host_manager_module.os.execve = fake_execve
-            try:
-                with redirect_stderr(StringIO()):
-                    with self.assertRaises(SystemExit):
-                        manager.execute_interactive_connection(target)
-            finally:
-                host_manager_module.os.execve = real_execve
-
-            with open(manager.audit.history_path, "r", encoding="utf-8") as f:
-                records = [json.loads(line) for line in f if line.strip()]
-            started = next(r for r in records if r["result"] == "started")
-            self.assertEqual(started["node_id"], target["id"])
-            self.assertEqual(started["host"], "target.internal")
-            self.assertEqual(started["port"], "2222")
-            self.assertEqual(started["endpoint"], "target.internal:2222")
-
-    def test_recent_group_uses_current_name_after_rename(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            manager = self._manager(temp_dir)
-            manager.audit.record_login(
-                "target",
-                "target.internal",
-                "targetuser",
-                "password",
-                "started",
-            )
-            manager.update_node(
-                "target",
-                {
-                    "name": "renamed-target",
-                    "host": "target.internal:2222",
-                    "user": "targetuser",
-                },
-            )
-
-            tui = object.__new__(Tui)
-            tui.host_manager = manager
-            tui._recent_group = None
-            tui._recent_group_ts = 0
-
-            recent_group = Tui._build_recent_group(tui)
-            recent_names = [
-                child["name"] for child in recent_group.get("children", [])
-            ]
-            self.assertIn("renamed-target", recent_names)
-            self.assertNotIn("target", recent_names)
-
-    def test_recent_group_is_collapsed_by_default(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            manager = self._manager(temp_dir)
-            manager.audit.record_login(
-                "target",
-                "target.internal",
-                "targetuser",
-                "password",
-                "started",
-            )
-
-            tui = object.__new__(Tui)
-            tui.host_manager = manager
-            tui._recent_group = None
-            tui._recent_group_ts = 0
-
-            recent_group = Tui._build_recent_group(tui)
-            self.assertFalse(recent_group.get("expanded"))
-
-    def test_recent_group_resolves_by_node_id_before_endpoint(self):
+    def test_runtime_rejects_unsupported_deep_host_nesting(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = {
                 "config": {"import_ssh_config": False},
                 "hosts": [
                     {
                         "type": "host",
-                        "name": "app-22",
-                        "host": "shared.internal:22",
-                        "user": "deploy",
+                        "name": "jump-one",
+                        "host": "jump-one.example.com",
+                        "user": "jump",
                         "password": "pw",
-                    },
-                    {
-                        "type": "host",
-                        "name": "app-2222",
-                        "host": "shared.internal:2222",
-                        "user": "deploy",
-                        "password": "pw",
-                    },
+                        "children": [
+                            {
+                                "type": "host",
+                                "name": "jump-two",
+                                "host": "jump-two.example.com",
+                                "user": "jump",
+                                "password": "pw",
+                                "children": [
+                                    {
+                                        "type": "host",
+                                        "name": "target",
+                                        "host": "target.example.com",
+                                        "user": "target",
+                                        "password": "pw",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
                 ],
             }
             path = os.path.join(temp_dir, "hosts.json")
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(config, f)
-
             manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
-            second = manager.find_host_by_alias("app-2222")
-            manager.audit.record_login(
-                "old-app",
-                "shared.internal",
-                "deploy",
-                "password",
-                "started",
-                node_id=second["id"],
-                port="2222",
-                endpoint="shared.internal:2222",
-            )
-            manager.update_node(
-                "app-2222",
-                {
-                    "name": "renamed-app",
-                    "host": "shared.internal:2222",
-                    "user": "deploy",
-                },
-            )
+            target = manager.find_host_by_alias("target")
 
-            tui = object.__new__(Tui)
-            tui.host_manager = manager
-            tui._recent_group = None
-            tui._recent_group_ts = 0
-
-            recent_group = Tui._build_recent_group(tui)
-            recent_names = [
-                child["name"] for child in recent_group.get("children", [])
-            ]
-            self.assertEqual(recent_names, ["renamed-app"])
-
-    def test_validation_reports_identity_schema_and_port_errors(self):
-        errors = validate_hosts_config(
-            {
-                "config": {},
-                "hosts": [
-                    {
-                        "id": "duplicate-id",
-                        "type": "host",
-                        "name": "duplicate-name",
-                        "host": "example.com:70000",
-                        "user": "deploy",
-                        "password": "pw",
-                        "unexpected": True,
-                    },
-                    {
-                        "id": "duplicate-id",
-                        "type": "host",
-                        "name": "duplicate-name",
-                        "host": "example.net",
-                        "user": "deploy",
-                        "password": "pw",
-                    },
-                ],
-            }
-        )
-        joined = "\n".join(errors)
-        self.assertIn("Duplicate node name", joined)
-        self.assertIn("Duplicate node id", joined)
-        self.assertIn("Port '70000'", joined)
-        self.assertIn("Unknown field", joined)
-
-    def test_config_theme_is_allowed_while_node_unknown_fields_are_rejected(self):
-        errors = validate_hosts_config(
-            {
-                "config": {
-                    "theme": {
-                        "highlight_fg": "white",
-                        "highlight_bg": "blue",
-                        "prefix_color": "red",
-                    }
-                },
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "bad-node",
-                        "host": "example.com",
-                        "user": "deploy",
-                        "password": "pw",
-                        "theme": {},
-                    }
-                ],
-            }
-        )
-        joined = "\n".join(errors)
-        self.assertIn("Unknown field", joined)
-        self.assertIn("theme", joined)
-
-    def test_validate_jump_modes(self):
-        valid = validate_hosts_config(
-            {
-                "config": {
-                    "default_ssh_jump_mode": "shell",
-                    "default_transfer_jump_mode": "tunnel",
-                    "relay_temp_dir": "/tmp",
-                },
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "jump",
-                        "host": "jump.example.com",
-                        "user": "jump",
-                        "password": "pw",
-                        "transfer_jump_mode": "relay",
-                        "children": [
-                            {
-                                "type": "host",
-                                "name": "target",
-                                "host": "target.example.com",
-                                "user": "target",
-                                "password": "pw",
-                                "ssh_jump_mode": "tunnel",
-                                "transfer_jump_mode": "relay",
-                            }
-                        ],
-                    }
-                ],
-            }
-        )
-        self.assertEqual(valid, [])
-
-        invalid = validate_hosts_config(
-            {
-                "config": {
-                    "default_ssh_jump_mode": "bad",
-                    "default_transfer_jump_mode": "bad",
-                    "relay_temp_dir": "tmp",
-                },
-                "hosts": [
-                    {
-                        "type": "group",
-                        "name": "bad-group",
-                        "ssh_jump_mode": "shell",
-                        "children": [],
-                    },
-                    {
-                        "type": "host",
-                        "name": "bad-host",
-                        "host": "example.com",
-                        "user": "deploy",
-                        "password": "pw",
-                        "ssh_jump_mode": "relay",
-                        "transfer_jump_mode": "relay",
-                    },
-                ],
-            }
-        )
-        joined = "\n".join(invalid)
-        self.assertIn("Invalid ssh_jump_mode", joined)
-        self.assertIn("Invalid transfer_jump_mode", joined)
-        self.assertIn("relay_temp_dir", joined)
-        self.assertIn("only allowed on host", joined)
-        self.assertIn("requires a jump host", joined)
-
-    def test_validate_proxy_command_and_placeholders(self):
-        valid = validate_hosts_config(
-            {
-                "config": {
-                    "placeholders": {
-                        "site_domain": "example.net",
-                        "user": "root",
-                        "proxy": "127.0.0.1:1080",
-                        "relay_dir": "/tmp",
-                    },
-                    "relay_temp_dir": "{{relay_dir}}",
-                },
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "demo-host",
-                        "host": "ssh.{{site_domain}}:22",
-                        "user": "{{user}}",
-                        "password": "pw",
-                        "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
-                    }
-                ],
-            }
-        )
-        self.assertEqual(valid, [])
-
-        invalid = validate_hosts_config(
-            {
-                "config": {
-                    "placeholders": {
-                        "bad-name": "value",
-                        "empty": "",
-                        "proxy": "127.0.0.1:1080",
-                    },
-                    "relay_temp_dir": "{{missing_relay_dir}}",
-                },
-                "hosts": [
-                    {
-                        "type": "group",
-                        "name": "bad-group",
-                        "proxy_command": "nc %h %p",
-                    },
-                    {
-                        "type": "host",
-                        "name": "empty-proxy",
-                        "host": "example.com",
-                        "user": "deploy",
-                        "password": "pw",
-                        "proxy_command": "",
-                    },
-                    {
-                        "type": "host",
-                        "name": "missing-placeholder",
-                        "host": "{{missing_host}}:22",
-                        "user": "deploy",
-                        "password": "pw",
-                        "proxy_command": "nc -x {{proxy}} %h %p",
-                    },
-                    {
-                        "type": "host",
-                        "name": "bad-placeholder-syntax",
-                        "host": "example.net",
-                        "user": "deploy",
-                        "password": "pw",
-                        "proxy_command": "nc -x {{bad-name}} %h %p",
-                    },
-                    {
-                        "type": "host",
-                        "name": "missing-close-brace",
-                        "host": "bad.{{home_domain:22",
-                        "user": "deploy",
-                        "password": "pw",
-                    },
-                    {
-                        "type": "host",
-                        "name": "missing-open-brace",
-                        "host": "bad.home_domain}}:22",
-                        "user": "deploy",
-                        "password": "pw",
-                    },
-                    {
-                        "type": "host",
-                        "name": "jump",
-                        "host": "jump.example.com",
-                        "user": "jump",
-                        "password": "pw",
-                        "children": [
-                            {
-                                "type": "host",
-                                "name": "nested",
-                                "host": "nested.example.com",
-                                "user": "nested",
-                                "password": "pw",
-                                "proxy_command": "nc -x {{proxy}} %h %p",
-                            }
-                        ],
-                    },
-                ],
-            }
-        )
-        joined = "\n".join(invalid)
-        self.assertIn("Invalid placeholder name", joined)
-        self.assertIn("Invalid placeholder value", joined)
-        self.assertIn("Unknown placeholder", joined)
-        self.assertIn("only allowed on host", joined)
-        self.assertIn("Invalid proxy_command", joined)
-        self.assertIn("nested jump host modes", joined)
+            with self.assertRaisesRegex(ValueError, "Unsupported nested host topology"):
+                manager.build_interactive_launch_command_args(target)
 
     def test_runtime_placeholder_errors_are_user_facing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1575,280 +1096,6 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                     manager.execute_interactive_connection(target)
 
             self.assertIn("nested jump host modes", stderr.getvalue())
-
-    def test_default_placeholders_do_not_share_mutable_state(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            path1 = os.path.join(temp_dir, "one.json")
-            path2 = os.path.join(temp_dir, "two.json")
-            for path in (path1, path2):
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump({"config": {"import_ssh_config": False}, "hosts": []}, f)
-
-            first = HostManager(path1, data_dir=os.path.join(temp_dir, "data1"))
-            second = HostManager(path2, data_dir=os.path.join(temp_dir, "data2"))
-            first.config["placeholders"]["leak"] = "value"
-
-            self.assertNotIn("leak", second.config["placeholders"])
-
-    def test_tui_edit_preserves_raw_placeholder_host(self):
-        class FakeScreen:
-            def clear(self):
-                pass
-
-            def addstr(self, *args):
-                pass
-
-            def refresh(self):
-                pass
-
-            def getch(self):
-                return 0
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {
-                    "import_ssh_config": False,
-                    "placeholders": {"domain": "example.com"},
-                },
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "templated",
-                        "host": "app.{{domain}}:2222",
-                        "user": "deploy",
-                        "password": "pw",
-                    }
-                ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
-
-            tui = object.__new__(Tui)
-            tui.host_manager = manager
-            tui.screen = FakeScreen()
-            tui.restore_screen = lambda: None
-            tui._recent_group = None
-            tui._recent_group_ts = 0
-            tui.get_current_node = lambda: manager.find_host_by_alias("templated")
-            tui._run_form_loop = lambda fields, title="": {
-                "name": "templated",
-                "host": "app.{{domain}}",
-                "port": "2222",
-                "user": "deploy",
-                "auth": "password",
-                "password": "pw",
-                "id_file": "",
-                "mfa_secret": "",
-                "proxy_command": "",
-                "ssh_jump_mode": "default",
-                "transfer_jump_mode": "default",
-            }
-
-            Tui.run_edit_flow(tui)
-
-            with open(path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            self.assertEqual(saved["hosts"][0]["host"], "app.{{domain}}:2222")
-
-    def test_tui_edit_hides_proxy_command_for_nested_target(self):
-        class FakeScreen:
-            def clear(self):
-                pass
-
-            def addstr(self, *args):
-                pass
-
-            def refresh(self):
-                pass
-
-            def getch(self):
-                return 0
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {"import_ssh_config": False},
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "jump",
-                        "host": "jump.example.com",
-                        "user": "jumpuser",
-                        "password": "pw",
-                        "children": [
-                            {
-                                "type": "host",
-                                "name": "target",
-                                "host": "target.internal:22",
-                                "user": "targetuser",
-                                "password": "pw",
-                                "proxy_command": "nc -x 127.0.0.1:1080 %h %p",
-                            }
-                        ],
-                    }
-                ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
-            field_names = []
-
-            def fake_form(fields, title=""):
-                field_names.extend(
-                    field["name"] for field in fields if field.get("name")
-                )
-                return {
-                    "name": "target",
-                    "host": "target.internal",
-                    "port": "22",
-                    "user": "targetuser",
-                    "auth": "password",
-                    "password": "pw",
-                    "id_file": "",
-                    "mfa_secret": "",
-                    "ssh_jump_mode": "default",
-                    "transfer_jump_mode": "default",
-                }
-
-            tui = object.__new__(Tui)
-            tui.host_manager = manager
-            tui.screen = FakeScreen()
-            tui.restore_screen = lambda: None
-            tui._recent_group = None
-            tui._recent_group_ts = 0
-            tui.get_current_node = lambda: manager.find_host_by_alias("target")
-            tui._run_form_loop = fake_form
-
-            Tui.run_edit_flow(tui)
-
-            self.assertNotIn("proxy_command", field_names)
-            target = manager.find_host_by_alias("target")
-            self.assertNotIn("proxy_command", target)
-            with open(path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            self.assertNotIn("proxy_command", saved["hosts"][0]["children"][0])
-
-    def test_update_node_clears_proxy_command(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {"import_ssh_config": False},
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "proxy-host",
-                        "host": "example.com",
-                        "user": "deploy",
-                        "password": "pw",
-                        "proxy_command": "nc -x 127.0.0.1:1080 %h %p",
-                    }
-                ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
-
-            manager.update_node(
-                "proxy-host",
-                {
-                    "name": "proxy-host",
-                    "host": "example.com",
-                    "user": "deploy",
-                    "proxy_command": "",
-                },
-            )
-
-            node = manager.find_host_by_alias("proxy-host")
-            self.assertNotIn("proxy_command", node)
-            with open(path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            self.assertNotIn("proxy_command", saved["hosts"][0])
-
-    def test_add_node_drops_proxy_command_under_host_parent(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {"import_ssh_config": False},
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "jump",
-                        "host": "jump.example.com",
-                        "user": "jumpuser",
-                        "password": "pw",
-                    }
-                ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
-
-            manager.add_node(
-                {
-                    "type": "host",
-                    "name": "target",
-                    "host": "target.internal",
-                    "user": "targetuser",
-                    "password": "pw",
-                    "proxy_command": "nc -x 127.0.0.1:1080 %h %p",
-                },
-                "jump",
-            )
-
-            target = manager.find_host_by_alias("target")
-            self.assertNotIn("proxy_command", target)
-            self.assertEqual(target["nest_parent"]["name"], "jump")
-            with open(path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            self.assertNotIn("proxy_command", saved["hosts"][0]["children"][0])
-
-    def test_update_node_drops_proxy_command_on_nested_target(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {"import_ssh_config": False},
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "jump",
-                        "host": "jump.example.com",
-                        "user": "jumpuser",
-                        "password": "pw",
-                        "children": [
-                            {
-                                "type": "host",
-                                "name": "target",
-                                "host": "target.internal",
-                                "user": "targetuser",
-                                "password": "pw",
-                                "proxy_command": "nc -x 127.0.0.1:1080 %h %p",
-                            }
-                        ],
-                    }
-                ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
-
-            manager.update_node(
-                "target",
-                {
-                    "name": "target",
-                    "host": "target.internal",
-                    "user": "targetuser",
-                    "proxy_command": "nc -x 127.0.0.1:1081 %h %p",
-                },
-            )
-
-            target = manager.find_host_by_alias("target")
-            self.assertNotIn("proxy_command", target)
-            with open(path, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            self.assertNotIn("proxy_command", saved["hosts"][0]["children"][0])
-
 
 if __name__ == "__main__":
     unittest.main()

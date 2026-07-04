@@ -102,6 +102,7 @@ sshgo
     ```bash
     sshgo <主机别名>
     ```
+    sshgo 会优先使用精确别名匹配。如果短别名同时匹配多个主机, 会在连接前失败并列出候选项, 不会自动猜测第一个结果。
 
 -   **登录后发送初始命令:**
     ```bash
@@ -142,6 +143,18 @@ sshgo
 -   `sshgo --validate`
     验证配置文件是否有错误.
 
+-   `sshgo --doctor`
+    运行本地诊断, 检查配置有效性、`expect`、内置 Expect 脚本、运行时数据目录可写性、SSH agent 状态和 host key 模式。
+
+-   `sshgo --list-backups`
+    列出当前解析到的 `hosts.json` 路径对应的轮转备份。
+
+-   `sshgo --restore-backup <index>`
+    按索引恢复轮转备份。`0` 表示 `hosts.json.bak`, `1` 表示 `hosts.json.bak.1`, 依此类推。
+
+-   `sshgo --print-command <主机别名> [命令|upload|download ...]`
+    打印解析后的 sshgo 移交命令但不发起连接。不会打印密码或 MFA secret。
+
 -   `sshgo --audit-full`
     启用完整审计日志记录。当前完整记录可包含命令和跳转链上下文；由于 Python 通过 `execve` 移交给 Expect，不记录最终时长和退出码.
 
@@ -179,6 +192,8 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 - `hosts.json.bak.1`
 - `hosts.json.bak.2`
 
+使用 `sshgo --list-backups` 查看备份轮转, 使用 `sshgo --restore-backup <index>` 恢复其中一份。恢复前会先验证所选备份, 并在当前配置存在时将恢复前的当前配置保留为最新备份。
+
 新的审计/历史记录会包含 `node_id`、`host`、`port` 和 `endpoint`, 因此 Recent 可以区分相同主机和用户但端口不同的节点。
 
 运行时历史和审计数据与 `hosts.json` 分离。默认情况下, sshgo 写入:
@@ -203,6 +218,7 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
     "use_ssh_agent": false,
     "data_dir": null,
     "strict_host_key_checking": true,
+    "show_recent": true,
     "recent_expanded": false,
     "default_ssh_jump_mode": "shell",
     "default_transfer_jump_mode": "tunnel",
@@ -231,6 +247,7 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 - `use_ssh_agent`: 当 `SSH_AUTH_SOCK` 存在时全局使用 SSH agent 认证；主机节点可用自己的 `use_ssh_agent` 覆盖。
 - `data_dir`: history 和 audit 日志的运行时数据目录。
 - `strict_host_key_checking`: `true` 使用 OpenSSH `accept-new`；`false` 恢复旧的宽松模式并使用 `UserKnownHostsFile=/dev/null`。
+- `show_recent`: 显示或隐藏 TUI Recent 分组。
 - `recent_expanded`: 存储 TUI Recent 分组是否展开。
 - `default_ssh_jump_mode`: 嵌套 SSH 的默认模式, 可选 `shell` 或 `tunnel`。
 - `default_transfer_jump_mode`: 嵌套文件传输的默认模式, 可选 `tunnel` 或 `relay`。

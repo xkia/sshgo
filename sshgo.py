@@ -6,40 +6,86 @@ import sys
 import locale
 import textwrap
 import argparse
+import shlex
+import shutil
 from host_manager import HostManager
 from tui import Tui
 from i18n import i18n
 
 
-def handle_shortcut_commands(cmd_args, host_manager):
-    host_alias = cmd_args[0]
-    node = host_manager.find_host_by_alias(host_alias)
-    if not node:
-        print(f"Error: Host alias '{host_alias}' not found.", file=sys.stderr)
+def _format_alias_matches(matches):
+    return ", ".join(sorted(node.get("name", "") for node in matches))
+
+
+def _resolve_shortcut_alias(host_alias, host_manager):
+    result = host_manager.resolve_host_alias(host_alias)
+    if result["status"] == "found":
+        return result["node"]
+    if result["status"] == "ambiguous":
+        print(
+            i18n.get(
+                "alias_ambiguous",
+                alias=host_alias,
+                candidates=_format_alias_matches(result["matches"]),
+            ),
+            file=sys.stderr,
+        )
         sys.exit(1)
+    print(i18n.get("alias_not_found", alias=host_alias), file=sys.stderr)
+    sys.exit(1)
 
-    if len(cmd_args) == 1:
-        host_manager.execute_interactive_connection(node)
-        return
 
-    action = cmd_args[1]
-    if action in ("upload", "download"):
-        if len(cmd_args) != 4:
-            print(
-                f"Error: Incorrect number of arguments for {action}.", file=sys.stderr
-            )
-            print(
-                f"Usage: {os.path.basename(sys.argv[0])} {host_alias} {action} <source_path> <destination_path>",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+def handle_shortcut_commands(cmd_args, host_manager, print_command=False):
+    host_alias = cmd_args[0]
+    node = _resolve_shortcut_alias(host_alias, host_manager)
 
-        path1, path2 = cmd_args[2], cmd_args[3]
-        host_manager.execute_file_transfer(node, action, path1, path2)
+    try:
+        if len(cmd_args) == 1:
+            if print_command:
+                print(shlex.join(host_manager.build_interactive_launch_command_args(node)))
+                return
+            host_manager.execute_interactive_connection(node)
+            return
 
-    else:
-        remote_command = " ".join(cmd_args[1:])
-        host_manager.execute_interactive_connection(node, remote_command)
+        action = cmd_args[1]
+        if action in ("upload", "download"):
+            if len(cmd_args) != 4:
+                print(
+                    f"Error: Incorrect number of arguments for {action}.", file=sys.stderr
+                )
+                print(
+                    f"Usage: {os.path.basename(sys.argv[0])} {host_alias} {action} <source_path> <destination_path>",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            path1, path2 = cmd_args[2], cmd_args[3]
+            if print_command:
+                print(
+                    shlex.join(
+                        host_manager.build_file_transfer_launch_command_args(
+                            node, action, path1, path2
+                        )
+                    )
+                )
+                return
+            host_manager.execute_file_transfer(node, action, path1, path2)
+
+        else:
+            remote_command = shlex.join(cmd_args[1:])
+            if print_command:
+                print(
+                    shlex.join(
+                        host_manager.build_interactive_launch_command_args(
+                            node, remote_command
+                        )
+                    )
+                )
+                return
+            host_manager.execute_interactive_connection(node, remote_command)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def run_tui(host_manager):
@@ -110,6 +156,113 @@ def show_history(host_manager, limit, filter_name):
         )
 
 
+def show_config_backups(config_path):
+    backups = HostManager.list_config_backups(config_path)
+    if not backups:
+        print(f"No config backups found for {config_path}.")
+        return 1
+
+    print(f"Config backups for {config_path}:")
+    for backup in backups:
+        print(
+            "[{index}] {path} ({size} bytes, {mtime})".format(
+                index=backup["index"],
+                path=backup["path"],
+                size=backup["size"],
+                mtime=backup["mtime"],
+            )
+        )
+    return 0
+
+
+def restore_config_backup(config_path, index):
+    try:
+        result = HostManager.restore_config_backup(config_path, index)
+    except FileNotFoundError as e:
+        print(f"Error: Backup not found: {e.filename or e}", file=sys.stderr)
+        return 1
+    except (OSError, ValueError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(
+        "Restored backup [{index}] {source} -> {target}".format(
+            index=result["index"],
+            source=result["source"],
+            target=result["target"],
+        )
+    )
+    return 0
+
+
+def _doctor_line(status, label, detail):
+    print(f"[{status}] {label}: {detail}")
+
+
+def run_doctor(host_manager, config_path):
+    failed = False
+
+    if os.path.exists(config_path):
+        _doctor_line("PASS", "Config path", config_path)
+    else:
+        _doctor_line("FAIL", "Config path", f"not found: {config_path}")
+        failed = True
+
+    errors = host_manager.validate_config()
+    if errors:
+        failed = True
+        _doctor_line("FAIL", "Config validation", f"{len(errors)} issue(s)")
+        for error in errors:
+            print(f"  - {error}")
+    else:
+        _doctor_line("PASS", "Config validation", "ok")
+
+    expect_path = shutil.which("expect")
+    if expect_path:
+        _doctor_line("PASS", "expect", expect_path)
+    else:
+        _doctor_line("FAIL", "expect", "not found in PATH")
+        failed = True
+
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    for script in ("login.exp", "sftp_login.exp", "relay_transfer.exp"):
+        script_path = os.path.join(script_dir, script)
+        if not os.path.exists(script_path):
+            _doctor_line("FAIL", script, "missing")
+            failed = True
+        elif os.access(script_path, os.X_OK):
+            _doctor_line("PASS", script, "present and executable")
+        else:
+            _doctor_line("WARN", script, "present but not executable; sshgo will try chmod")
+
+    data_dir = host_manager.audit.data_dir
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        probe_path = os.path.join(data_dir, ".sshgo-doctor.tmp")
+        with open(probe_path, "w", encoding="utf-8") as f:
+            f.write("ok\n")
+        os.unlink(probe_path)
+        _doctor_line("PASS", "Runtime data dir", data_dir)
+    except OSError as e:
+        _doctor_line("FAIL", "Runtime data dir", str(e))
+        failed = True
+
+    if os.environ.get("SSH_AUTH_SOCK"):
+        _doctor_line("PASS", "SSH agent", os.environ["SSH_AUTH_SOCK"])
+    elif host_manager.config.get("use_ssh_agent", False):
+        _doctor_line("WARN", "SSH agent", "use_ssh_agent is enabled but SSH_AUTH_SOCK is not set")
+    else:
+        _doctor_line("PASS", "SSH agent", "not required by global config")
+
+    host_key_mode = "accept-new" if host_manager.config.get("strict_host_key_checking", True) else "no"
+    if host_key_mode == "accept-new":
+        _doctor_line("PASS", "Host key checking", host_key_mode)
+    else:
+        _doctor_line("WARN", "Host key checking", "strict checking is disabled")
+
+    return 1 if failed else 0
+
+
 def main():
     locale.setlocale(locale.LC_ALL, "")
 
@@ -178,6 +331,26 @@ def main():
         help="Validate the configuration file",
     )
     parser.add_argument(
+        "--print-command",
+        action="store_true",
+        help="Print the resolved command for a shortcut without connecting",
+    )
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Run local diagnostics for config, dependencies, scripts, and runtime data",
+    )
+    parser.add_argument(
+        "--list-backups",
+        action="store_true",
+        help="List rotated config backups for the resolved config path",
+    )
+    parser.add_argument(
+        "--restore-backup",
+        metavar="INDEX",
+        help="Restore a rotated config backup by index: 0=.bak, 1=.bak.1",
+    )
+    parser.add_argument(
         "--edit",
         action="store_true",
         help="Edit configuration in TUI mode",
@@ -207,11 +380,17 @@ def main():
         script_dir = os.path.dirname(os.path.realpath(__file__))
         config_path = _default_config_path(script_dir)
 
+    if args.list_backups:
+        sys.exit(show_config_backups(config_path))
+
+    if args.restore_backup is not None:
+        sys.exit(restore_config_backup(config_path, args.restore_backup))
+
     data_dir = os.getenv("SSHGO_DATA_DIR")
     host_manager = HostManager(
         config_path,
         data_dir=data_dir,
-        auto_migrate=not args.validate,
+        auto_migrate=not (args.validate or args.doctor),
     )
 
     lang = host_manager.config.get("language", "en")
@@ -231,6 +410,9 @@ def main():
             print(i18n.get("validate_ok"))
         return
 
+    if args.doctor:
+        sys.exit(run_doctor(host_manager, config_path))
+
     if args.edit:
         tui = Tui(host_manager, mode="edit")
         tui.run()
@@ -241,8 +423,15 @@ def main():
         return
 
     if args.cmd_args:
-        handle_shortcut_commands(args.cmd_args, host_manager)
+        handle_shortcut_commands(
+            args.cmd_args,
+            host_manager,
+            print_command=args.print_command,
+        )
         return
+
+    if args.print_command:
+        parser.error("--print-command requires a shortcut command")
 
     elif args.toggle_encryption:
         host_manager.toggle_encryption()

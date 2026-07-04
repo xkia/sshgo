@@ -102,6 +102,7 @@ sshgo
     ```bash
     sshgo <host_alias>
     ```
+    Exact alias matches are preferred. If a short alias matches multiple hosts, sshgo fails before connecting and prints the candidates instead of guessing.
 
 -   **Send an initial command after login:**
     ```bash
@@ -142,6 +143,18 @@ sshgo
 -   `sshgo --validate`
     Validate the configuration file for errors.
 
+-   `sshgo --doctor`
+    Run local diagnostics for config validity, `expect`, bundled Expect scripts, runtime data directory writability, SSH agent state, and host key mode.
+
+-   `sshgo --list-backups`
+    List rotated backups for the resolved `hosts.json` path.
+
+-   `sshgo --restore-backup <index>`
+    Restore a rotated backup by index. `0` means `hosts.json.bak`, `1` means `hosts.json.bak.1`, and so on.
+
+-   `sshgo --print-command <host_alias> [command|upload|download ...]`
+    Print the resolved sshgo handoff command without connecting. Passwords and MFA secrets are not printed.
+
 -   `sshgo --audit-full`
     Enable full audit logging for this session. Current full records can include command and jump-chain context; final duration and exit code are not recorded because Python hands off to Expect with `execve`.
 
@@ -179,6 +192,8 @@ Before replacing an existing config file, sshgo keeps a small best-effort backup
 - `hosts.json.bak.1`
 - `hosts.json.bak.2`
 
+Use `sshgo --list-backups` to inspect the rotation and `sshgo --restore-backup <index>` to restore one. Restore validates the selected backup first and keeps the pre-restore active config as the newest backup when it exists.
+
 New audit/history records include `node_id`, `host`, `port`, and `endpoint` so Recent can distinguish nodes that share the same host and user but use different ports.
 
 Runtime history and audit data are separate from `hosts.json`. By default, sshgo writes:
@@ -203,6 +218,7 @@ Set `SSHGO_DATA_DIR` or `config.data_dir` to use a different runtime data direct
     "use_ssh_agent": false,
     "data_dir": null,
     "strict_host_key_checking": true,
+    "show_recent": true,
     "recent_expanded": false,
     "default_ssh_jump_mode": "shell",
     "default_transfer_jump_mode": "tunnel",
@@ -231,6 +247,7 @@ Important `config` fields:
 - `use_ssh_agent`: Use SSH agent authentication globally when `SSH_AUTH_SOCK` exists; hosts can override with their own `use_ssh_agent`.
 - `data_dir`: Runtime data directory for history and audit logs.
 - `strict_host_key_checking`: `true` uses OpenSSH `accept-new`; `false` restores the older loose mode with `UserKnownHostsFile=/dev/null`.
+- `show_recent`: Show or hide the TUI Recent group.
 - `recent_expanded`: Stores whether the TUI Recent group is expanded.
 - `default_ssh_jump_mode`: Default nested SSH mode, either `shell` or `tunnel`.
 - `default_transfer_jump_mode`: Default nested transfer mode, either `tunnel` or `relay`.
