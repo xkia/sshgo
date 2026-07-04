@@ -5,7 +5,6 @@
 - slug: config-format-jsonc
 - status: approved
 - owner: PM
-- related_adr: none
 - related_roadmap: docs/roadmap.md#2026-06
 - replaces: earlier TOML/YAML exploration
 

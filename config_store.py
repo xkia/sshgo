@@ -5,9 +5,19 @@ import json
 import os
 import shutil
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback
+    fcntl = None
+
 BACKUP_COUNT = 3
+
+
+class ConfigWriteConflictError(RuntimeError):
+    pass
 
 
 def remove_comments_and_trailing_commas(text: str) -> str:
@@ -129,11 +139,58 @@ class ConfigStore:
     def __init__(self, path):
         self.path = path
 
+    @staticmethod
+    def lock_path_for(config_path):
+        return f"{config_path}.lock"
+
+    @classmethod
+    @contextmanager
+    def _locked_for(cls, config_path):
+        config_dir = os.path.dirname(os.path.abspath(config_path)) or "."
+        os.makedirs(config_dir, exist_ok=True)
+        lock_path = cls.lock_path_for(config_path)
+        with open(lock_path, "a", encoding="utf-8") as lock_file:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _locked(self):
+        return self._locked_for(self.path)
+
+    @staticmethod
+    def _fingerprint_from_stat(stat_result):
+        return (
+            stat_result.st_ino,
+            stat_result.st_size,
+            stat_result.st_mtime_ns,
+            stat_result.st_ctime_ns,
+        )
+
+    @classmethod
+    def fingerprint_for(cls, config_path):
+        try:
+            return cls._fingerprint_from_stat(os.stat(config_path))
+        except FileNotFoundError:
+            return None
+
+    def fingerprint(self):
+        return self.fingerprint_for(self.path)
+
     def read(self):
         with open(self.path, "r", encoding="utf-8") as f:
             return parse_jsonc(f.read())
 
-    def write_json(self, data):
+    def read_with_fingerprint(self):
+        with open(self.path, "r", encoding="utf-8") as f:
+            raw = f.read()
+            fingerprint = self._fingerprint_from_stat(os.fstat(f.fileno()))
+        return parse_jsonc(raw), fingerprint
+
+    def write_json(self, data, expected_fingerprint=None, check_conflict=False):
         config_dir = os.path.dirname(os.path.abspath(self.path)) or "."
         os.makedirs(config_dir, exist_ok=True)
 
@@ -150,14 +207,18 @@ class ConfigStore:
                 f.flush()
                 os.fsync(f.fileno())
 
-            try:
-                current_mode = os.stat(self.path).st_mode & 0o777
-                os.chmod(tmp_path, current_mode)
-            except FileNotFoundError:
-                os.chmod(tmp_path, 0o600)
+            with self._locked():
+                if check_conflict and self.fingerprint() != expected_fingerprint:
+                    raise ConfigWriteConflictError(self.path)
 
-            self.rotate_backups()
-            os.replace(tmp_path, self.path)
+                try:
+                    current_mode = os.stat(self.path).st_mode & 0o777
+                    os.chmod(tmp_path, current_mode)
+                except FileNotFoundError:
+                    os.chmod(tmp_path, 0o600)
+
+                self._rotate_backups_unlocked()
+                os.replace(tmp_path, self.path)
         except Exception:
             try:
                 os.unlink(tmp_path)
@@ -198,10 +259,19 @@ class ConfigStore:
         return backups
 
     def rotate_backups(self):
-        self.rotate_backups_for(self.path)
+        with self._locked():
+            self._rotate_backups_unlocked()
 
     @classmethod
     def rotate_backups_for(cls, config_path):
+        with cls._locked_for(config_path):
+            cls._rotate_backups_for_unlocked(config_path)
+
+    def _rotate_backups_unlocked(self):
+        self._rotate_backups_for_unlocked(self.path)
+
+    @classmethod
+    def _rotate_backups_for_unlocked(cls, config_path):
         if not os.path.exists(config_path):
             return
 
@@ -245,41 +315,42 @@ class ConfigStore:
                 f"Backup index must be between 0 and {BACKUP_COUNT - 1}"
             )
 
-        backup_path = cls.backup_path_for(config_path, index)
-        if not os.path.exists(backup_path):
-            raise FileNotFoundError(backup_path)
+        with cls._locked_for(config_path):
+            backup_path = cls.backup_path_for(config_path, index)
+            if not os.path.exists(backup_path):
+                raise FileNotFoundError(backup_path)
 
-        with open(backup_path, "rb") as f:
-            backup_data = f.read()
-        cls._validate_backup_bytes(backup_data, validate_func=validate_func)
+            with open(backup_path, "rb") as f:
+                backup_data = f.read()
+            cls._validate_backup_bytes(backup_data, validate_func=validate_func)
 
-        config_dir = os.path.dirname(os.path.abspath(config_path)) or "."
-        os.makedirs(config_dir, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(
-            prefix=f".{os.path.basename(config_path)}.",
-            suffix=".restore.tmp",
-            dir=config_dir,
-        )
-        try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(backup_data)
-                f.flush()
-                os.fsync(f.fileno())
-
+            config_dir = os.path.dirname(os.path.abspath(config_path)) or "."
+            os.makedirs(config_dir, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(
+                prefix=f".{os.path.basename(config_path)}.",
+                suffix=".restore.tmp",
+                dir=config_dir,
+            )
             try:
-                current_mode = os.stat(config_path).st_mode & 0o777
-            except FileNotFoundError:
-                current_mode = os.stat(backup_path).st_mode & 0o777
-            os.chmod(tmp_path, current_mode)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(backup_data)
+                    f.flush()
+                    os.fsync(f.fileno())
 
-            cls.rotate_backups_for(config_path)
-            os.replace(tmp_path, config_path)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except FileNotFoundError:
-                pass
-            raise
+                try:
+                    current_mode = os.stat(config_path).st_mode & 0o777
+                except FileNotFoundError:
+                    current_mode = os.stat(backup_path).st_mode & 0o777
+                os.chmod(tmp_path, current_mode)
+
+                cls._rotate_backups_for_unlocked(config_path)
+                os.replace(tmp_path, config_path)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except FileNotFoundError:
+                    pass
+                raise
 
         return {
             "index": index,

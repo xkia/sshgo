@@ -21,6 +21,8 @@ set print_command ""
 set custom_proxy_command ""
 set tunnel_proxy_command ""
 set has_tty [expr {![catch {exec sh -c {test -t 0}}]}]
+set batch_path ""
+set stale_batch_seconds 86400
 
 # Argument parser
 for {set i 0} {$i < $argc} {incr i} {
@@ -67,9 +69,15 @@ if {[info exists env(SSHGO_JUMPER_MFA_SECRET)]} {
 # Get auth.py path
 set script_dir [file dirname [file normalize [info script]]]
 set auth_py [file join $script_dir "auth.py"]
+set ssh_wrapper_py [file join $script_dir "sftp_ssh_wrapper.py"]
 
 proc cleanup {} {
-    global has_tty
+    global has_tty batch_path
+    catch {close}
+    if {$batch_path != ""} {
+        catch {file delete -force $batch_path}
+        set batch_path ""
+    }
     if {$has_tty} {
         catch {stty echo}
     }
@@ -84,6 +92,10 @@ proc fail {message code} {
 proc wait_exit_status {} {
     set wait_result [wait]
     if {[llength $wait_result] >= 4} {
+        if {[llength $wait_result] > 4} {
+            catch {puts stderr "Warning: sftp process did not exit normally: $wait_result"}
+            return 1
+        }
         set exit_status [lindex $wait_result 3]
         if {[string is integer -strict $exit_status]} {
             return $exit_status
@@ -92,6 +104,23 @@ proc wait_exit_status {} {
     catch {puts stderr "Warning: unexpected process wait result: $wait_result"}
     return 1
 }
+
+proc finish_with_status {exit_status} {
+    if {$exit_status != "0"} {
+        fail "\nFile transfer failed with exit status $exit_status.\n" 1
+    }
+    cleanup
+    exit 0
+}
+
+proc cleanup_and_exit {code} {
+    cleanup
+    exit $code
+}
+
+trap {cleanup_and_exit 130} INT
+trap {cleanup_and_exit 143} TERM
+trap {cleanup_and_exit 129} HUP
 
 proc shell_quote {value} {
     set escaped [string map {"'" "'\\''"} $value]
@@ -104,6 +133,106 @@ proc shell_join {parts} {
         lappend quoted [shell_quote $part]
     }
     return [join $quoted " "]
+}
+
+proc sftp_batch_command {} {
+    global action local_path remote_path
+    switch -exact -- $action {
+        "upload" {
+            return "put \"$local_path\" \"$remote_path\""
+        }
+        "download" {
+            return "get \"$remote_path\" \"$local_path\""
+        }
+        default {
+            fail "Error: action must be upload or download." 1
+        }
+    }
+}
+
+proc cleanup_stale_batch_files {temp_dir} {
+    global stale_batch_seconds
+    set now [clock seconds]
+    foreach stale_path [glob -nocomplain [file join $temp_dir "sshgo-sftp-*.batch"]] {
+        if {![file isfile $stale_path]} {
+            continue
+        }
+        if {[catch {set mtime [file mtime $stale_path]}]} {
+            continue
+        }
+        if {$now - $mtime > $stale_batch_seconds} {
+            catch {file delete -force $stale_path}
+        }
+    }
+}
+
+proc create_batch_file {} {
+    global batch_path
+    set temp_dir "/tmp"
+    if {[info exists ::env(TMPDIR)] && [file isdirectory $::env(TMPDIR)]} {
+        set temp_dir $::env(TMPDIR)
+    }
+
+    cleanup_stale_batch_files $temp_dir
+
+    set command [sftp_batch_command]
+    for {set i 0} {$i < 100} {incr i} {
+        set candidate [file join $temp_dir "sshgo-sftp-[pid]-[clock clicks]-$i.batch"]
+        if {[catch {set ch [open $candidate {WRONLY CREAT EXCL} 0600]}]} {
+            continue
+        }
+        if {[catch {
+            puts $ch $command
+            close $ch
+            file attributes $candidate -permissions 0600
+        } err]} {
+            catch {close $ch}
+            catch {file delete -force $candidate}
+            fail "Error: unable to write SFTP batch file: $err" 1
+        }
+        set batch_path $candidate
+        return $batch_path
+    }
+
+    fail "Error: unable to create SFTP batch file." 1
+}
+
+proc build_sftp_command {batch_file} {
+    global host user port jumper id_file host_key_checking custom_proxy_command tunnel_proxy_command ssh_wrapper_py
+
+    set cmd [list sftp -b $batch_file -S $ssh_wrapper_py -o ConnectTimeout=10]
+    if {$host_key_checking == "no"} {
+        lappend cmd -o StrictHostKeyChecking=no
+        lappend cmd -o UserKnownHostsFile=/dev/null
+    } else {
+        lappend cmd -o StrictHostKeyChecking=$host_key_checking
+    }
+    if {$port != "22"} { lappend cmd -P $port }
+    if {$id_file != ""} { lappend cmd -i $id_file }
+    if {$jumper != ""} {
+        if {$tunnel_proxy_command == ""} {
+            fail "Error: missing tunnel proxy command." 1
+        }
+        lappend cmd -o "ProxyCommand=$tunnel_proxy_command"
+    } elseif {$custom_proxy_command != ""} {
+        lappend cmd -o "ProxyCommand=$custom_proxy_command"
+    }
+    lappend cmd "$user@$host"
+    return $cmd
+}
+
+proc ensure_ssh_wrapper_executable {} {
+    global ssh_wrapper_py
+
+    if {![file exists $ssh_wrapper_py]} {
+        fail "Error: missing sftp_ssh_wrapper.py." 1
+    }
+    if {![file executable $ssh_wrapper_py]} {
+        catch {file attributes $ssh_wrapper_py -permissions 0755}
+    }
+    if {![file executable $ssh_wrapper_py]} {
+        fail "Error: sftp_ssh_wrapper.py is not executable." 1
+    }
 }
 
 # Create password queue
@@ -122,30 +251,16 @@ trap {
     stty rows $rows columns $cols < $spawn_out(slave,name)
 } WINCH
 
-# Construct the SFTP command
-set cmd [list sftp -o ConnectTimeout=10]
-if {$host_key_checking == "no"} {
-    lappend cmd -o StrictHostKeyChecking=no
-    lappend cmd -o UserKnownHostsFile=/dev/null
-} else {
-    lappend cmd -o StrictHostKeyChecking=$host_key_checking
-}
-if {$port != "22"} { lappend cmd -P $port }
-if {$id_file != ""} { lappend cmd -i $id_file }
-if {$jumper != ""} {
-    if {$tunnel_proxy_command == ""} {
-        fail "Error: missing tunnel proxy command." 1
-    }
-    lappend cmd -o "ProxyCommand=$tunnel_proxy_command"
-} elseif {$custom_proxy_command != ""} {
-    lappend cmd -o "ProxyCommand=$custom_proxy_command"
-}
-lappend cmd "$user@$host"
-
 if {$print_command != ""} {
+    set batch_preview [sftp_batch_command]
+    set cmd [build_sftp_command "<sshgo-generated-batch-file>"]
     puts [shell_join $cmd]
+    puts "# batch: $batch_preview"
     exit 0
 }
+
+ensure_ssh_wrapper_executable
+set cmd [build_sftp_command [create_batch_file]]
 
 set timeout 20
 
@@ -155,7 +270,10 @@ if {$has_tty} {
 }
 
 log_user 0
-spawn {*}$cmd
+if {[catch {spawn {*}$cmd} spawn_error]} {
+    log_user 1
+    fail "\nError executing sftp: $spawn_error\n" 1
+}
 log_user 1
 
 puts "Connecting to $user@$host for $action..."
@@ -174,6 +292,7 @@ expect {
             exp_continue
         } else {
             interact
+            finish_with_status [wait_exit_status]
         }
     }
     -re {(?i)(MFA|OTP|Verification code).*:} {
@@ -189,63 +308,16 @@ expect {
             exp_continue
         }
         interact
+        finish_with_status [wait_exit_status]
     }
     -re {(?i)Operation timed out} {
         fail "\nError: Connection to host timed out." 1
     }
-    "Permission denied" {
-        fail "\n\nAuthentication failed (Permission denied).\n" 1
-    }
-    "Connection timed out" {
-        fail "\n\nConnection timed out.\n" 1
-    }
     eof {
-        set exit_status [wait_exit_status]
-        if {$exit_status == "0"} {
-            fail "\n\nSFTP exited before opening a session.\n" 1
-        }
-        fail "\n\nSFTP failed before opening a session with exit status $exit_status.\n" 1
+        finish_with_status [wait_exit_status]
     }
     timeout {
         fail "\n\nConnection timed out.\n" 1
-    }
-    "sftp>" {
-        # Authentication successful, perform file transfer
-        if {$action == "upload"} {
-            send "put \"$local_path\" \"$remote_path\"\r"
-        } else {
-            send "get \"$remote_path\" \"$local_path\"\r"
-        }
-        expect {
-            -re {(?i)(^|\r|\n)(Failure:|Couldn't |Could not |No such file|Permission denied|Connection closed|File ("[^"\r\n]+"|[^\r\n]+) not found\.|(remote|local|dest) [^\r\n:]+: [^\r\n]+)} {
-                fail "\nFile transfer failed.\n" 1
-            }
-            "sftp>" {
-                # Transfer complete
-            }
-            eof {
-                set exit_status [wait_exit_status]
-                if {$exit_status == "0"} {
-                    fail "\nFile transfer ended before completion.\n" 1
-                }
-                fail "\nFile transfer failed with exit status $exit_status.\n" 1
-            }
-            timeout {
-                fail "\nFile transfer timed out.\n" 1
-            }
-        }
-        send "bye\r"
-        expect {
-            eof {
-                set exit_status [wait_exit_status]
-                if {$exit_status != "0"} {
-                    fail "\nSFTP exited with status $exit_status.\n" 1
-                }
-            }
-            timeout {
-                fail "\nSFTP did not exit cleanly.\n" 1
-            }
-        }
     }
 }
 

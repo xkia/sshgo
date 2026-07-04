@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -42,6 +43,44 @@ class CliTests(unittest.TestCase):
             json.dump(config, f)
         return HostManager(path, data_dir=os.path.join(temp_dir, "data"))
 
+    def _write_legacy_config(self, temp_dir):
+        path = os.path.join(temp_dir, "hosts.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "config": {"import_ssh_config": False},
+                    "hosts": [
+                        {
+                            "type": "host",
+                            "name": "legacy",
+                            "host": "legacy.example.com",
+                            "user": "deploy",
+                            "password": "pw",
+                        }
+                    ],
+                },
+                f,
+            )
+        return path
+
+    def _run_main_with_args(self, argv, data_dir):
+        old_argv = sys.argv
+        old_data_dir = os.environ.get("SSHGO_DATA_DIR")
+        sys.argv = ["sshgo.py"] + argv
+        os.environ["SSHGO_DATA_DIR"] = data_dir
+        try:
+            return sshgo_module.main()
+        finally:
+            sys.argv = old_argv
+            if old_data_dir is None:
+                os.environ.pop("SSHGO_DATA_DIR", None)
+            else:
+                os.environ["SSHGO_DATA_DIR"] = old_data_dir
+
+    def _saved_host(self, path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)["hosts"][0]
+
     def test_alias_resolution_rejects_ambiguous_prefixes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = {
@@ -80,6 +119,86 @@ class CliTests(unittest.TestCase):
             self.assertIn("ambiguous", message)
             self.assertIn("prod-db", message)
             self.assertIn("prod-web", message)
+
+    def test_print_command_does_not_persist_node_id_migration(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = self._write_legacy_config(temp_dir)
+
+            with redirect_stdout(StringIO()):
+                self._run_main_with_args(
+                    ["-e", path, "--print-command", "legacy"],
+                    os.path.join(temp_dir, "data"),
+                )
+
+            self.assertNotIn("id", self._saved_host(path))
+            self.assertFalse(os.path.exists(path + ".bak"))
+
+    def test_history_does_not_persist_node_id_migration(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = self._write_legacy_config(temp_dir)
+
+            with redirect_stdout(StringIO()):
+                self._run_main_with_args(
+                    ["-e", path, "--history"],
+                    os.path.join(temp_dir, "data"),
+                )
+
+            self.assertNotIn("id", self._saved_host(path))
+            self.assertFalse(os.path.exists(path + ".bak"))
+
+    def test_validate_does_not_persist_node_id_migration(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = self._write_legacy_config(temp_dir)
+
+            with redirect_stdout(StringIO()):
+                self._run_main_with_args(
+                    ["-e", path, "--validate"],
+                    os.path.join(temp_dir, "data"),
+                )
+
+            self.assertNotIn("id", self._saved_host(path))
+            self.assertFalse(os.path.exists(path + ".bak"))
+
+    def test_doctor_does_not_persist_node_id_migration(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = self._write_legacy_config(temp_dir)
+            real_which = sshgo_module.shutil.which
+            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
+            try:
+                with redirect_stdout(StringIO()):
+                    with self.assertRaises(SystemExit) as cm:
+                        self._run_main_with_args(
+                            ["-e", path, "--doctor"],
+                            os.path.join(temp_dir, "data"),
+                        )
+                    self.assertEqual(cm.exception.code, 0)
+            finally:
+                sshgo_module.shutil.which = real_which
+
+            self.assertNotIn("id", self._saved_host(path))
+            self.assertFalse(os.path.exists(path + ".bak"))
+
+    def test_shortcut_execution_persists_node_id_migration_before_handoff(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = self._write_legacy_config(temp_dir)
+            calls = []
+            real_execute = host_manager_module.HostManager.execute_interactive_connection
+
+            def fake_execute(self, node):
+                calls.append(node.get("name"))
+
+            host_manager_module.HostManager.execute_interactive_connection = fake_execute
+            try:
+                self._run_main_with_args(
+                    ["-e", path, "legacy"],
+                    os.path.join(temp_dir, "data"),
+                )
+            finally:
+                host_manager_module.HostManager.execute_interactive_connection = real_execute
+
+            self.assertEqual(calls, ["legacy"])
+            self.assertIn("id", self._saved_host(path))
+            self.assertTrue(os.path.exists(path + ".bak"))
 
     def test_alias_resolution_keeps_unique_prefix_convenience(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -202,7 +321,133 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
             real_which = sshgo_module.shutil.which
+            real_terminal_supports_alternate_screen = (
+                sshgo_module.Tui.terminal_supports_alternate_screen
+            )
             sshgo_module.shutil.which = lambda name: "/usr/bin/expect"
+            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
+                lambda: True
+            )
+            try:
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = sshgo_module.run_doctor(manager, manager.json_path)
+            finally:
+                sshgo_module.shutil.which = real_which
+                sshgo_module.Tui.terminal_supports_alternate_screen = (
+                    real_terminal_supports_alternate_screen
+                )
+
+            self.assertEqual(code, 0)
+            output = stdout.getvalue()
+            self.assertIn("[PASS] Config validation", output)
+            self.assertIn("[PASS] Alternate screen", output)
+            self.assertIn("[PASS] TUI screen policy", output)
+            self.assertIn("[PASS] expect", output)
+            self.assertIn("[PASS] ssh", output)
+            self.assertIn("[PASS] sftp", output)
+            self.assertIn("[PASS] scp", output)
+            self.assertIn("sftp_ssh_wrapper.py", output)
+            self.assertIn("Runtime data dir", output)
+
+    def test_doctor_warns_when_alternate_screen_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            real_which = sshgo_module.shutil.which
+            real_terminal_supports_alternate_screen = (
+                sshgo_module.Tui.terminal_supports_alternate_screen
+            )
+            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
+            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
+                lambda: False
+            )
+            try:
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = sshgo_module.run_doctor(manager, manager.json_path)
+            finally:
+                sshgo_module.shutil.which = real_which
+                sshgo_module.Tui.terminal_supports_alternate_screen = (
+                    real_terminal_supports_alternate_screen
+                )
+
+            self.assertEqual(code, 0)
+            output = stdout.getvalue()
+            self.assertIn("[WARN] Alternate screen", output)
+            self.assertIn("TUI output may remain in terminal history", output)
+
+    def test_doctor_warns_for_invalid_tui_screen_policy_without_crashing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            manager.config["tui_screen_policy"] = []
+            real_which = sshgo_module.shutil.which
+            real_terminal_supports_alternate_screen = (
+                sshgo_module.Tui.terminal_supports_alternate_screen
+            )
+            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
+            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
+                lambda: True
+            )
+            try:
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = sshgo_module.run_doctor(manager, manager.json_path)
+            finally:
+                sshgo_module.shutil.which = real_which
+                sshgo_module.Tui.terminal_supports_alternate_screen = (
+                    real_terminal_supports_alternate_screen
+                )
+
+            self.assertEqual(code, 0)
+            output = stdout.getvalue()
+            self.assertIn("[WARN] TUI screen policy", output)
+            self.assertIn("invalid value: []", output)
+
+    def test_doctor_for_path_handles_parseable_invalid_tui_screen_policy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "hosts.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"config": {"tui_screen_policy": []}, "hosts": []}, f)
+
+            real_which = sshgo_module.shutil.which
+            real_terminal_supports_alternate_screen = (
+                sshgo_module.Tui.terminal_supports_alternate_screen
+            )
+            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
+            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
+                lambda: True
+            )
+            try:
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = sshgo_module.run_doctor_for_path(
+                        path,
+                        data_dir=os.path.join(temp_dir, "data"),
+                    )
+            finally:
+                sshgo_module.shutil.which = real_which
+                sshgo_module.Tui.terminal_supports_alternate_screen = (
+                    real_terminal_supports_alternate_screen
+                )
+
+            self.assertEqual(code, 1)
+            output = stdout.getvalue()
+            self.assertIn("[FAIL] Config validation", output)
+            self.assertIn("config.tui_screen_policy must be a string", output)
+            self.assertIn("[WARN] TUI screen policy", output)
+            self.assertIn("invalid value: []", output)
+
+    def test_doctor_fails_when_openssh_transfer_tool_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            real_which = sshgo_module.shutil.which
+
+            def fake_which(name):
+                if name == "sftp":
+                    return None
+                return f"/usr/bin/{name}"
+
+            sshgo_module.shutil.which = fake_which
             try:
                 stdout = StringIO()
                 with redirect_stdout(stdout):
@@ -210,11 +455,11 @@ class CliTests(unittest.TestCase):
             finally:
                 sshgo_module.shutil.which = real_which
 
-            self.assertEqual(code, 0)
+            self.assertEqual(code, 1)
             output = stdout.getvalue()
-            self.assertIn("[PASS] Config validation", output)
-            self.assertIn("[PASS] expect", output)
-            self.assertIn("Runtime data dir", output)
+            self.assertIn("[FAIL] sftp", output)
+            self.assertIn("[PASS] ssh", output)
+            self.assertIn("[PASS] scp", output)
 
     def test_doctor_reports_malformed_config_without_host_manager_load(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -5,8 +5,7 @@
 - slug: custom-proxy-command
 - status: approved
 - owner: PM/Architect/Engineer
-- related_adr: none
-- related_roadmap: docs/roadmap.md#future-candidates
+- related_roadmap: docs/roadmap.md#2026-07
 - related_specs:
   - docs/specs/config-format-jsonc.md
   - docs/specs/connection-auth-audit-hardening.md
@@ -154,7 +153,7 @@ OpenSSH remains responsible for expanding `%h` to `ssh.example.com` and `%p` to 
 Direct SFTP upload/download should use the same resolved proxy command through the local OpenSSH SFTP client:
 
 ```bash
-sftp -o 'ProxyCommand=nc -X 5 -x 127.0.0.1:1080 %h %p' admin@ssh.example.com
+sftp -b <batchfile> -S ./sftp_ssh_wrapper.py -o 'ProxyCommand=nc -X 5 -x 127.0.0.1:1080 %h %p' admin@ssh.example.com
 ```
 
 ## Interaction With Jump Modes
@@ -312,6 +311,8 @@ if {$custom_proxy_command != ""} {
 The Python layer should avoid calling SFTP with both a nested jump `-J` and a nested target's own custom `proxy_command`.
 
 For nested SFTP, consume the Python-generated `-tunnel-proxy-command` and add it as the SFTP `ProxyCommand` value. `sftp_login.exp` should not rebuild the inner `ssh -W` command and should not accept a separate jump-host identity argument; the jump host identity file belongs inside the generated tunnel command.
+
+Current direct/tunnel SFTP runs OpenSSH `sftp` in batch mode. Keep the custom or tunnel `ProxyCommand` behavior above while preserving `-b <batchfile>` and `-S sftp_ssh_wrapper.py`, which removes OpenSSH `sftp -b`'s implicit `BatchMode=yes` before execing `ssh`.
 
 Add a hidden `-print-command` test hook that renders the final SFTP command and exits without spawning a connection.
 

@@ -5,7 +5,7 @@
 - slug: common-workflow-polish
 - status: approved
 - owner: PM/Architect/Engineer
-- related_roadmap: docs/roadmap.md#future-candidates
+- related_roadmap: docs/roadmap.md#2026-07
 - related_docs:
   - docs/gap-analysis.md
 - related_specs:
@@ -36,7 +36,7 @@ The project should avoid broad, low-frequency feature expansion unless repeated 
 
 - Do not implement directory transfer.
 - Do not replace the TUI form system.
-- Do not add tags, favorites, batch operations, or health checks.
+- Do not add tags, favorites, multi-host batch operations, or health checks.
 - Do not change relay path quoting behavior.
 - Do not add external dependencies.
 
@@ -48,7 +48,7 @@ The project should avoid broad, low-frequency feature expansion unless repeated 
 4. The detail pane shows resolved target, auth method, SSH jump mode, transfer mode, host key mode, parent jump host, and proxy command where relevant.
 5. Detail rendering must not expose saved passwords or MFA secrets.
 6. Direct/tunnel SFTP paths containing newline, carriage return, double quote, or backslash fail before Expect handoff with a clear error.
-7. Direct/tunnel SFTP exits non-zero when the SFTP subprocess exits before a prompt or prints a transfer failure such as `Failure: ...`.
+7. Direct/tunnel SFTP exits non-zero when the OpenSSH `sftp` subprocess exits non-zero; output text is not required for failure detection.
 8. Relay transfers keep their existing path handling.
 9. README, docs index, roadmap, and gap analysis are updated.
 
@@ -71,7 +71,7 @@ The TUI should call these helpers after form data is normalized but before `add_
 
 ### SFTP Path Guard
 
-SFTP command mode sends `put/get` commands to the interactive `sftp>` prompt. The current string protocol is fragile for some characters. Until a fuller SFTP escaping model exists, direct/tunnel SFTP should reject paths containing:
+Direct/tunnel SFTP uses an OpenSSH `sftp` batch command for single-file `put/get`. The batch command still uses quoted local and remote paths, so direct/tunnel SFTP should reject paths containing:
 
 ```text
 \n
@@ -84,7 +84,7 @@ Relay mode is not changed because it already uses shell-quoting in `relay_transf
 
 ### SFTP Failure Handling
 
-`sftp_login.exp` should treat early EOF, non-zero SFTP process exit, and common transfer failure output as failed transfers. It should not fall through to cleanup with exit code 0 when the SFTP subprocess reports a connection failure or a `put/get` failure.
+This spec originally reduced direct/tunnel SFTP failure risk with early EOF and output-text checks. The current replacement behavior is captured in [sftp-batch-mode-hardening](sftp-batch-mode-hardening.md): `sftp_login.exp` uses OpenSSH `sftp -b` for direct/tunnel transfers and treats the `sftp` process exit status as the success/failure source of truth.
 
 ## Review Status
 

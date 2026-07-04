@@ -4,7 +4,6 @@
 - slug: security-hardening
 - status: approved
 - owner: Engineer
-- related_adr: (none)
 - related_roadmap: docs/roadmap.md#2026-06
 
 ## 背景与范围
@@ -72,13 +71,14 @@ Python 只负责配置解析、审计启动事件和启动 Expect。进入会话
 
 ```text
 sshgo.py --execve--> login.exp / sftp_login.exp --spawn--> ssh / sftp
+sftp batch mode: sftp --exec--> sftp_ssh_wrapper.py --exec--> ssh
 ```
 
 由于 Python 不等待会话结束，审计不记录会话退出码和时长，只记录 `started` 或 `exec_failed`。
 
 ### Expect vs Python pty 决策
 
-当前版本继续保留 Expect。它已经覆盖 SSH/SFTP 的交互式认证、MFA prompt、窗口尺寸同步和 `interact`，迁移到 Python pty 需要重新实现稳定的终端读写循环、prompt 匹配、窗口尺寸同步和 SFTP 错误识别。
+当前版本继续保留 Expect。它已经覆盖 SSH/SFTP 的交互式认证、MFA prompt、窗口尺寸同步和 `interact`，迁移到 Python pty 需要重新实现稳定的终端读写循环、prompt 匹配、窗口尺寸同步和 SFTP batch 退出状态处理。
 
 Python pty 的主要优势是统一语言和更容易单元测试，但当前产品的核心路径是完整交互式 SSH/SFTP，会话稳定性比减少 Tcl 脚本更重要。因此 Python 只作为配置 manager 和启动器，通过 `execve` 移交给 Expect，不持有 SSH/SFTP 会话生命周期。
 

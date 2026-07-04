@@ -22,7 +22,7 @@ This file provides repository guidance for coding agents and maintainers working
 | Toggle detail pane | `./sshgo.sh --toggle-details` |
 | Use alternate config | `./sshgo.sh -e /path/to/hosts.json` |
 
-**Dependencies**: Only `expect` (system package, e.g. `brew install expect`). No Python pip packages needed.
+**Dependencies**: No Python pip packages needed. Runtime shell tools must include `expect` plus OpenSSH client commands (`ssh`, `sftp`, `scp`).
 
 ## Agent Workflow
 
@@ -43,8 +43,10 @@ This file provides repository guidance for coding agents and maintainers working
 |------|---------------|
 | `sshgo.py` | Entry point: arg parsing, config path resolution, dispatches to TUI or shortcut commands |
 | `sshgo.sh` | Thin shell wrapper that `cd`s to script dir and invokes `python3 -B sshgo.py` |
-| `host_manager.py` | `HostManager` class — owns host/group domain behavior: stable node ID migration, credential encryption/decryption, CRUD, validation, SSH/file-transfer command planning, audit start events, and Expect handoff |
-| `config_store.py` | `ConfigStore` plus JSONC parser — reads `hosts.json`, writes JSON atomically, rotates/list/restores backups, and preserves JSONC comments/trailing-comma read support |
+| `host_manager.py` | `HostManager` class — owns host/group domain behavior: stable node ID assignment, explicit node ID migration persistence, credential encryption/decryption, CRUD, config validation delegation, SSH/file-transfer command planning, audit start events, and Expect handoff |
+| `host_tree.py` | Pure host/group tree helpers — traversal, lookup, replacement, parent/index lookup, potential parent listing, node ID assignment, and runtime parent-link rebuilding |
+| `config_store.py` | `ConfigStore` plus JSONC parser — reads `hosts.json`, fingerprints loaded files, writes JSON atomically with optional stale-write detection, rotates/list/restores backups, and preserves JSONC comments/trailing-comma read support |
+| `config_validation.py` | Pure parsed-config validation helpers — validates top-level config, placeholders, host/group nodes, jump modes, relay temp paths, and keeps a compatibility export through `host_manager.py` |
 | `audit_logger.py` | `AuditLogger` class — manages runtime data dir (`~/.sshgo/` or `$SSHGO_DATA_DIR`), writes audit logs in JSONL format with node identity/endpoint fields and retention limits (history: 1000, audit-simple: 5000, audit-full: 2000) |
 | `tui.py` | `Tui` class — curses-based interactive interface (tree view, search, add/edit/delete forms, detail preview pane) |
 | `config_parser.py` | `SshConfigParser` — parses `~/.ssh/config` into sshgo host nodes |
@@ -53,6 +55,7 @@ This file provides repository guidance for coding agents and maintainers working
 | `i18n.py` | Simple English/Chinese string localization (`I18N` class, global `i18n` instance) |
 | `login.exp` | Expect script that handles interactive SSH login (password, passphrase, prompt-time MFA generation, jump host chaining) |
 | `sftp_login.exp` | Expect script for SFTP file transfer (upload/download) with same authentication logic as login.exp |
+| `sftp_ssh_wrapper.py` | Small stdlib-only ssh wrapper used by `sftp_login.exp` batch mode to remove OpenSSH `sftp -b`'s implicit `BatchMode=yes` while preserving all other ssh args |
 | `relay_transfer.exp` | Expect script for non-SFTP relay file transfer through a jump host using temporary jump-host storage and `scp` |
 | `hosts.json` | Project fallback config file: `{"config": {...}, "hosts": [...]}` with `group` and `host` nodes |
 
@@ -64,13 +67,13 @@ This file provides repository guidance for coding agents and maintainers working
 
 ### Key Flows
 
-1. **Startup**: `sshgo.sh` → `sshgo.py:main()` → resolve config path (CLI arg > env var > `~/.config/sshgo/hosts.json` when present > default `hosts.json`) → `HostManager` delegates JSONC config read to `ConfigStore` → optional `~/.ssh/config` import → dispatch to TUI or shortcut handler.
+1. **Startup**: `sshgo.sh` → `sshgo.py:main()` → resolve config path (CLI arg > env var > `~/.config/sshgo/hosts.json` when present > default `hosts.json`) → `HostManager` delegates JSONC config read to `ConfigStore`, assigns missing saved-node IDs in memory, and optionally imports `~/.ssh/config` → non-read-only CLI paths explicitly persist pending saved-node ID migration → dispatch to TUI or shortcut handler.
 
 2. **TUI**: `Tui.run()` enters curses main loop — render tree, handle keyboard input (j/k navigation, a/e/d CRUD, f search, h/l fold/unfold, q quit), forms for add/edit.
 
 3. **SSH Connection**: `HostManager.execute_interactive_connection()` builds args, stores password/MFA secrets only in the `SSHGO_*` environment copy, records a `started` audit event, then uses `os.execve()` to replace Python with `login.exp`. Target and jump host auth are computed independently. Hosts can use a custom `proxy_command`; when such a host is used as a jump-host parent, child connections use the parent `proxy_command` for the first hop. Nested interactive SSH supports `ssh_jump_mode=shell` (default, login to jump then run target SSH from the jump shell) and `ssh_jump_mode=tunnel` (OpenSSH `ProxyCommand` / `ssh -W`). Python does not wait for the SSH session and cannot record final duration or exit code.
 
-4. **File Transfer**: `execute_file_transfer()` keeps the public shortcut path but dispatches by `transfer_jump_mode`. `tunnel` (default) uses true local SFTP via `sftp_login.exp` and requires jump-host TCP forwarding; nested tunnel mode receives a Python-generated `-tunnel-proxy-command`, including any parent jump-host key/proxy options. `relay` uses `relay_transfer.exp`, copies regular files through a temporary path on the jump host with `scp`, retries local-to-jump scp with legacy protocol only for protocol-incompatibility failures, is not SFTP, and reports final transfer/cleanup status in Expect output rather than Python audit.
+4. **File Transfer**: `execute_file_transfer()` keeps the public shortcut path but dispatches by `transfer_jump_mode`. `tunnel` (default) uses true local SFTP via `sftp_login.exp`, runs a single `put/get` through OpenSSH `sftp -b`, and requires jump-host TCP forwarding; nested tunnel mode receives a Python-generated `-tunnel-proxy-command`, including any parent jump-host key/proxy options. Because OpenSSH `sftp -b` injects `BatchMode=yes`, `sftp_login.exp` launches SFTP with `-S sftp_ssh_wrapper.py` so password/passphrase/MFA prompts keep working. `relay` uses `relay_transfer.exp`, copies regular files through a temporary path on the jump host with `scp`, retries local-to-jump scp with legacy protocol only for protocol-incompatibility failures, is not SFTP, and reports final transfer/cleanup status in Expect output rather than Python audit.
 
 5. **Recent Resolution**: TUI builds the Recent group from audit history. It resolves current nodes by `node_id` first, then legacy name/endpoint fields, and only falls back to read-only history snapshots when the configured node no longer exists.
 
@@ -91,7 +94,7 @@ This file provides repository guidance for coding agents and maintainers working
 ### Documentation Layers
 
 - `docs/vision.md`: product goals and non-goals.
-- `docs/roadmap.md`: milestones, exit criteria, and future candidates.
+- `docs/roadmap.md`: completed milestones and exit criteria.
 - `docs/gap-analysis.md`: current risks, closed gaps, optimization outcomes, and future candidate boundaries.
 - `docs/specs/*.md`: accepted behavior and implementation boundaries.
 - `docs/specs/jump-host-connection-modes.md`: configurable SSH/transfer jump modes (`shell`, `tunnel`, `relay`).
@@ -101,15 +104,16 @@ This file provides repository guidance for coding agents and maintainers working
 ## Development Notes
 
 - **Python**: Uses only stdlib modules (`curses`, `json`, `argparse`, `getpass`, `hmac`, `hashlib`, `base64`, `struct`, `shlex`, `curses.textpad`). Run with `~/.venv/bin/python` per project rules.
-- **External dependency**: `expect` is the only required non-Python package for interactive SSH/SFTP prompt handling.
-- **Expect scripts**: `login.exp`, `sftp_login.exp`, and `relay_transfer.exp` must be executable (`chmod +x`). HostManager ensures this before shortcut `execve`.
+- **External tools**: `expect` is required for interactive prompt handling, and OpenSSH client commands (`ssh`, `sftp`, `scp`) must be available for connections and transfers.
+- **Expect scripts**: `login.exp`, `sftp_login.exp`, and `relay_transfer.exp` must be executable (`chmod +x`). HostManager ensures this before shortcut `execve`. `sftp_ssh_wrapper.py` must also remain executable so OpenSSH `sftp -S` can launch it.
 - **MFA generation**: Expect scripts generate TOTP codes when an MFA prompt arrives by invoking `auth.py` with the secret from the transient `SSHGO_*` environment copy. Secrets are not passed in argv.
 - **Process handoff**: Shortcut connections and transfers replace Python via `os.execve()`. The Python manager records start/exec failure events only; it does not supervise the live SSH/SFTP session.
 - **Audit logging**: JSONL files in `~/.sshgo/`. History and audit-simple are always written for SSH and SFTP starts; audit-full requires `--audit-full` flag. New records include `node_id`, `port`, and `endpoint`. Because of the execve handoff, final duration and exit code are not available in current audit records.
-- **Config saves**: `ConfigStore` writes JSON atomically and keeps best-effort backups at `hosts.json.bak`, `hosts.json.bak.1`, and `hosts.json.bak.2`; `HostManager` delegates save/backup operations to it.
+- **Config saves**: `ConfigStore` writes JSON atomically and keeps best-effort backups at `hosts.json.bak`, `hosts.json.bak.1`, and `hosts.json.bak.2`; `HostManager` delegates save/backup operations to it. `HostManager` saves pass the loaded file fingerprint so a stale instance fails instead of silently overwriting a newer save. This is conflict detection, not automatic merge.
+- **SSH agent scope**: Global `config.use_ssh_agent` applies to direct hosts and tunnel-mode targets. In `ssh_jump_mode=shell` and `transfer_jump_mode=relay`, target authentication happens from the jump-host environment, so target hosts must use `password`, `id_file`, or explicit `use_ssh_agent=true`.
 - **Placeholders**: `config.placeholders` is resolved after JSONC parsing only for `host`, `user`, `id_file`, `proxy_command`, and `relay_temp_dir`; do not apply it to secrets or identity fields. `proxy_command` is executed locally by OpenSSH and must be treated as trusted user configuration.
 - **i18n**: All UI strings go through `i18n.get(key)`. New strings must be added to both `en` and `zh` dicts in `i18n.py`.
-- **Screen management**: TUI uses `curses` and must call `restore_screen()` on exit (handled via `finally` block in `sshgo.py`).
+- **Screen management**: TUI uses `curses` and must call `restore_screen()` on exit (handled via `finally` block in `sshgo.py`). `config.tui_screen_policy=isolated` is the default and must not clear scrollback; `private` is opt-in and clears visible screen plus scrollback after curses teardown.
 - **JSONC support**: `hosts.json` supports `//` and `#` comments plus trailing commas via `config_store.parse_jsonc()`.
 
 ## Verification Commands
@@ -118,7 +122,7 @@ Use the smallest set that matches the change. For broad code or documentation sy
 
 ```bash
 python3 -m unittest discover -s tests -p 'test*.py'
-python3 -m py_compile sshgo.py host_manager.py config_store.py tui.py audit_logger.py auth.py crypto.py config_parser.py i18n.py tests/test_connection_auth_audit.py tests/test_command_plan.py tests/test_tui.py tests/test_audit.py tests/test_config_backup.py tests/test_config_store.py tests/test_validation.py tests/test_cli.py tests/test_host_manager.py
+python3 -m py_compile sshgo.py host_manager.py host_tree.py config_store.py config_validation.py tui.py audit_logger.py auth.py crypto.py config_parser.py i18n.py sftp_ssh_wrapper.py tests/test_connection_auth_audit.py tests/test_command_plan.py tests/test_tui.py tests/test_audit.py tests/test_config_backup.py tests/test_config_store.py tests/test_config_validation.py tests/test_validation.py tests/test_cli.py tests/test_host_manager.py tests/test_host_tree.py
 python3 sshgo.py --validate
 git diff --check
 ```

@@ -54,6 +54,127 @@ class ValidationTests(unittest.TestCase):
         )
         self.assertEqual(errors, [])
 
+    def test_global_agent_does_not_satisfy_shell_or_relay_target_auth(self):
+        errors = validate_hosts_config(
+            {
+                "config": {
+                    "use_ssh_agent": True,
+                    "default_ssh_jump_mode": "shell",
+                    "default_transfer_jump_mode": "relay",
+                },
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "jump",
+                        "host": "jump.example.com",
+                        "user": "jumpuser",
+                        "password": "pw",
+                        "children": [
+                            {
+                                "type": "host",
+                                "name": "target",
+                                "host": "target.internal",
+                                "user": "targetuser",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        joined = "\n".join(errors)
+        self.assertIn("cannot rely on global use_ssh_agent", joined)
+        self.assertIn("ssh_jump_mode=shell", joined)
+        self.assertIn("transfer_jump_mode=relay", joined)
+
+    def test_missing_shell_target_auth_without_global_agent_uses_generic_error(self):
+        errors = validate_hosts_config(
+            {
+                "config": {"default_ssh_jump_mode": "shell"},
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "jump",
+                        "host": "jump.example.com",
+                        "user": "jumpuser",
+                        "password": "pw",
+                        "children": [
+                            {
+                                "type": "host",
+                                "name": "target",
+                                "host": "target.internal",
+                                "user": "targetuser",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        joined = "\n".join(errors)
+        self.assertIn("No auth method configured", joined)
+        self.assertNotIn("cannot rely on global use_ssh_agent", joined)
+
+    def test_global_agent_satisfies_tunnel_target_auth(self):
+        errors = validate_hosts_config(
+            {
+                "config": {
+                    "use_ssh_agent": True,
+                    "default_ssh_jump_mode": "tunnel",
+                    "default_transfer_jump_mode": "tunnel",
+                },
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "jump",
+                        "host": "jump.example.com",
+                        "user": "jumpuser",
+                        "password": "pw",
+                        "children": [
+                            {
+                                "type": "host",
+                                "name": "target",
+                                "host": "target.internal",
+                                "user": "targetuser",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(errors, [])
+
+    def test_explicit_agent_satisfies_shell_or_relay_target_auth(self):
+        errors = validate_hosts_config(
+            {
+                "config": {
+                    "default_ssh_jump_mode": "shell",
+                    "default_transfer_jump_mode": "relay",
+                },
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "jump",
+                        "host": "jump.example.com",
+                        "user": "jumpuser",
+                        "password": "pw",
+                        "children": [
+                            {
+                                "type": "host",
+                                "name": "target",
+                                "host": "target.internal",
+                                "user": "targetuser",
+                                "use_ssh_agent": True,
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(errors, [])
+
     def test_validation_reports_identity_schema_and_port_errors(self):
         errors = validate_hosts_config(
             {
@@ -135,6 +256,37 @@ class ValidationTests(unittest.TestCase):
         )
 
         self.assertEqual(errors, [])
+
+    def test_validate_tui_screen_policy(self):
+        for policy in ("isolated", "private"):
+            with self.subTest(policy=policy):
+                errors = validate_hosts_config(
+                    {
+                        "config": {"tui_screen_policy": policy},
+                        "hosts": [],
+                    }
+                )
+                self.assertEqual(errors, [])
+
+        invalid = validate_hosts_config(
+            {
+                "config": {"tui_screen_policy": "inline"},
+                "hosts": [],
+            }
+        )
+        self.assertIn("Invalid tui_screen_policy: inline", "\n".join(invalid))
+
+        for policy in ([], {}, None):
+            with self.subTest(policy=policy):
+                invalid_type = validate_hosts_config(
+                    {
+                        "config": {"tui_screen_policy": policy},
+                        "hosts": [],
+                    }
+                )
+                joined = "\n".join(invalid_type)
+                self.assertIn("config.tui_screen_policy must be a string", joined)
+                self.assertIn("Invalid tui_screen_policy", joined)
 
     def test_validation_rejects_unsupported_deep_host_nesting(self):
         errors = validate_hosts_config(
@@ -386,7 +538,7 @@ class ValidationTests(unittest.TestCase):
 
             self.assertNotIn("leak", second.config["placeholders"])
 
-    def test_validate_style_load_does_not_persist_node_id_migration(self):
+    def test_default_load_does_not_persist_node_id_migration(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = {
                 "config": {"import_ssh_config": False},
@@ -407,13 +559,39 @@ class ValidationTests(unittest.TestCase):
             manager = HostManager(
                 path,
                 data_dir=os.path.join(temp_dir, "data"),
-                auto_migrate=False,
             )
             self.assertTrue(manager.find_host_by_alias("legacy").get("id"))
             with open(path, "r", encoding="utf-8") as f:
                 saved = json.load(f)
             self.assertNotIn("id", saved["hosts"][0])
             self.assertFalse(os.path.exists(path + ".bak"))
+
+    def test_explicit_node_id_migration_persists_ids(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = {
+                "config": {"import_ssh_config": False},
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "legacy",
+                        "host": "legacy.example.com",
+                        "user": "deploy",
+                        "password": "pw",
+                    }
+                ],
+            }
+            path = os.path.join(temp_dir, "hosts.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(config, f)
+
+            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            self.assertTrue(manager.persist_node_id_migration_if_needed())
+
+            with open(path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertIn("id", saved["hosts"][0])
+            self.assertTrue(os.path.exists(path + ".bak"))
+            self.assertFalse(manager.persist_node_id_migration_if_needed())
 
     def test_validate_add_candidate_rejects_invalid_nodes_without_mutating_tree(self):
         with tempfile.TemporaryDirectory() as temp_dir:

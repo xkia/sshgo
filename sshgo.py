@@ -8,6 +8,7 @@ import textwrap
 import argparse
 import shlex
 import shutil
+from config_validation import DEFAULT_TUI_SCREEN_POLICY, TUI_SCREEN_POLICIES
 from config_store import ConfigStore
 from host_manager import HostManager, validate_hosts_config
 from tui import Tui
@@ -113,7 +114,12 @@ def run_tui(host_manager):
             print("\nOperation cancelled.")
         sys.exit(0)
 
-    for script in ["login.exp", "sftp_login.exp", "relay_transfer.exp"]:
+    for script in [
+        "login.exp",
+        "sftp_login.exp",
+        "relay_transfer.exp",
+        "sftp_ssh_wrapper.py",
+    ]:
         script_path = os.path.join(script_dir, script)
         try:
             os.chmod(script_path, 0o755)
@@ -210,8 +216,55 @@ def restore_config_backup(config_path, index):
     return 0
 
 
+def _should_persist_node_id_migration(args):
+    if args.validate or args.doctor or args.history or args.print_command:
+        return False
+    if args.toggle_encryption or args.toggle_ssh_config or args.toggle_language:
+        return False
+    if args.toggle_details or args.toggle_ssh_agent:
+        return False
+    return True
+
+
 def _doctor_line(status, label, detail):
     print(f"[{status}] {label}: {detail}")
+
+
+def _doctor_terminal_screen(effective_config):
+    term = os.environ.get("TERM", "")
+    if term:
+        _doctor_line("PASS", "Terminal TERM", term)
+    else:
+        _doctor_line("WARN", "Terminal TERM", "not set")
+
+    if Tui.terminal_supports_alternate_screen():
+        _doctor_line("PASS", "Alternate screen", "smcup/rmcup available")
+    else:
+        _doctor_line(
+            "WARN",
+            "Alternate screen",
+            "smcup/rmcup not available; TUI output may remain in terminal history",
+        )
+
+    policy = effective_config.get("tui_screen_policy", DEFAULT_TUI_SCREEN_POLICY)
+    if policy == "private":
+        _doctor_line(
+            "WARN",
+            "TUI screen policy",
+            "private; exits will attempt to clear terminal scrollback",
+        )
+    elif not isinstance(policy, str) or policy not in TUI_SCREEN_POLICIES:
+        _doctor_line("WARN", "TUI screen policy", f"invalid value: {policy}")
+    else:
+        _doctor_line("PASS", "TUI screen policy", policy)
+
+    term_program = os.environ.get("TERM_PROGRAM", "")
+    if term_program and "iterm" in term_program.lower() and policy == "isolated":
+        _doctor_line(
+            "WARN",
+            "iTerm scrollback",
+            "profile settings may preserve alternate-screen output",
+        )
 
 
 def _doctor_runtime_data_dir(config_snapshot, env_data_dir=None):
@@ -290,15 +343,21 @@ def run_doctor(host_manager, config_path, config_errors=None,
     else:
         _doctor_line("PASS", "Config validation", "ok")
 
-    expect_path = shutil.which("expect")
-    if expect_path:
-        _doctor_line("PASS", "expect", expect_path)
-    else:
-        _doctor_line("FAIL", "expect", "not found in PATH")
-        failed = True
+    for tool in ("expect", "ssh", "sftp", "scp"):
+        tool_path = shutil.which(tool)
+        if tool_path:
+            _doctor_line("PASS", tool, tool_path)
+        else:
+            _doctor_line("FAIL", tool, "not found in PATH")
+            failed = True
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    for script in ("login.exp", "sftp_login.exp", "relay_transfer.exp"):
+    for script in (
+        "login.exp",
+        "sftp_login.exp",
+        "relay_transfer.exp",
+        "sftp_ssh_wrapper.py",
+    ):
         script_path = os.path.join(script_dir, script)
         if not os.path.exists(script_path):
             _doctor_line("FAIL", script, "missing")
@@ -314,6 +373,8 @@ def run_doctor(host_manager, config_path, config_errors=None,
     else:
         data_dir = _doctor_runtime_data_dir(config_snapshot or {}, data_dir)
         effective_config = config_snapshot or {}
+
+    _doctor_terminal_screen(effective_config)
 
     try:
         os.makedirs(data_dir, exist_ok=True)
@@ -387,7 +448,7 @@ def main():
     parser.add_argument(
         "--audit-full",
         action="store_true",
-        help="Enable full audit logging for this session",
+        help="Enable full audit logging; command/path context may include sensitive arguments",
     )
     parser.add_argument(
         "--history",
@@ -474,14 +535,17 @@ def main():
     host_manager = HostManager(
         config_path,
         data_dir=data_dir,
-        auto_migrate=not (args.validate or args.doctor),
+        auto_migrate=False,
     )
 
     lang = host_manager.config.get("language", "en")
     i18n.set_language(lang)
 
     if args.audit_full:
-        host_manager._audit_full = True
+        host_manager.enable_full_audit()
+
+    if _should_persist_node_id_migration(args):
+        host_manager.persist_node_id_migration_if_needed()
 
     if args.validate:
         errors = host_manager.validate_config()

@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from io import StringIO
 
 import tui as tui_module
 from host_manager import HostManager
@@ -281,6 +282,8 @@ class TuiTests(unittest.TestCase):
             tui = object.__new__(Tui)
             tui.screen = FakeScreen()
             tui._screen_restored = False
+            tui._alternate_screen_supported = False
+            tui.screen_policy = "isolated"
 
             Tui.restore_screen(tui)
             Tui.restore_screen(tui)
@@ -298,6 +301,109 @@ class TuiTests(unittest.TestCase):
             calls,
             [("curs_set", 1), ("nocbreak",), ("echo",), ("endwin",)],
         )
+
+    def test_restore_screen_preserves_alternate_screen_until_endwin(self):
+        class FakeScreen:
+            def __init__(self):
+                self.calls = []
+
+            def keypad(self, value):
+                self.calls.append(("keypad", value))
+
+            def clear(self):
+                self.calls.append(("clear",))
+
+            def refresh(self):
+                self.calls.append(("refresh",))
+
+        calls = []
+        old_curs_set = tui_module.curses.curs_set
+        old_nocbreak = tui_module.curses.nocbreak
+        old_echo = tui_module.curses.echo
+        old_endwin = tui_module.curses.endwin
+        tui_module.curses.curs_set = lambda value: calls.append(("curs_set", value))
+        tui_module.curses.nocbreak = lambda: calls.append(("nocbreak",))
+        tui_module.curses.echo = lambda: calls.append(("echo",))
+        tui_module.curses.endwin = lambda: calls.append(("endwin",))
+        try:
+            tui = object.__new__(Tui)
+            tui.screen = FakeScreen()
+            tui._screen_restored = False
+            tui._alternate_screen_supported = True
+            tui.screen_policy = "isolated"
+
+            Tui.restore_screen(tui)
+        finally:
+            tui_module.curses.curs_set = old_curs_set
+            tui_module.curses.nocbreak = old_nocbreak
+            tui_module.curses.echo = old_echo
+            tui_module.curses.endwin = old_endwin
+
+        self.assertEqual(tui.screen.calls, [("keypad", 0)])
+        self.assertEqual(
+            calls,
+            [("curs_set", 1), ("nocbreak",), ("echo",), ("endwin",)],
+        )
+
+    def test_restore_screen_private_policy_clears_scrollback_after_endwin(self):
+        class FakeScreen:
+            def __init__(self):
+                self.calls = []
+
+            def keypad(self, value):
+                self.calls.append(("keypad", value))
+
+            def clear(self):
+                self.calls.append(("clear",))
+
+            def refresh(self):
+                self.calls.append(("refresh",))
+
+        calls = []
+        stdout = StringIO()
+        old_stdout = tui_module.sys.stdout
+        old_curs_set = tui_module.curses.curs_set
+        old_nocbreak = tui_module.curses.nocbreak
+        old_echo = tui_module.curses.echo
+        old_endwin = tui_module.curses.endwin
+        tui_module.sys.stdout = stdout
+        tui_module.curses.curs_set = lambda value: calls.append(("curs_set", value))
+        tui_module.curses.nocbreak = lambda: calls.append(("nocbreak",))
+        tui_module.curses.echo = lambda: calls.append(("echo",))
+        tui_module.curses.endwin = lambda: calls.append(("endwin",))
+        try:
+            tui = object.__new__(Tui)
+            tui.screen = FakeScreen()
+            tui._screen_restored = False
+            tui._alternate_screen_supported = True
+            tui.screen_policy = "private"
+
+            Tui.restore_screen(tui)
+            Tui.restore_screen(tui)
+        finally:
+            tui_module.sys.stdout = old_stdout
+            tui_module.curses.curs_set = old_curs_set
+            tui_module.curses.nocbreak = old_nocbreak
+            tui_module.curses.echo = old_echo
+            tui_module.curses.endwin = old_endwin
+
+        self.assertEqual(tui.screen.calls, [("keypad", 0)])
+        self.assertEqual(stdout.getvalue(), "\033[H\033[2J\033[3J")
+        self.assertEqual(
+            calls,
+            [("curs_set", 1), ("nocbreak",), ("echo",), ("endwin",)],
+        )
+
+    def test_effective_screen_policy_falls_back_for_invalid_values(self):
+        class FakeManager:
+            def __init__(self, policy):
+                self.config = {"tui_screen_policy": policy}
+
+        tui = object.__new__(Tui)
+        for policy in ([], {}, None, "inline"):
+            with self.subTest(policy=policy):
+                tui.host_manager = FakeManager(policy)
+                self.assertEqual(Tui._effective_screen_policy(tui), "isolated")
 
     def test_theme_uses_terminal_default_color_for_footer_status(self):
         class FakeManager:
@@ -355,6 +461,7 @@ class TuiTests(unittest.TestCase):
         old_nocbreak = tui_module.curses.nocbreak
         old_echo = tui_module.curses.echo
         old_endwin = tui_module.curses.endwin
+        old_terminal_supports_alternate_screen = Tui.terminal_supports_alternate_screen
         tui_module.curses.initscr = lambda: screen
         tui_module.curses.noecho = lambda: calls.append(("noecho",))
         tui_module.curses.cbreak = lambda: calls.append(("cbreak",))
@@ -362,6 +469,7 @@ class TuiTests(unittest.TestCase):
         tui_module.curses.nocbreak = lambda: calls.append(("nocbreak",))
         tui_module.curses.echo = lambda: calls.append(("echo",))
         tui_module.curses.endwin = lambda: calls.append(("endwin",))
+        Tui.terminal_supports_alternate_screen = staticmethod(lambda: False)
         try:
             with self.assertRaisesRegex(RuntimeError, "keypad failed"):
                 Tui(FakeManager())
@@ -373,6 +481,7 @@ class TuiTests(unittest.TestCase):
             tui_module.curses.nocbreak = old_nocbreak
             tui_module.curses.echo = old_echo
             tui_module.curses.endwin = old_endwin
+            Tui.terminal_supports_alternate_screen = old_terminal_supports_alternate_screen
 
         self.assertEqual(
             screen.calls,
@@ -1049,6 +1158,181 @@ class TuiTests(unittest.TestCase):
             )
             self.assertTrue(advanced_toggle["value"])
 
+    def test_tui_edit_updates_selected_node_by_id(self):
+        selected = {
+            "id": "selected-id",
+            "type": "group",
+            "name": "old-name",
+            "children": [],
+        }
+        calls = []
+
+        class FakeManager:
+            def find_node_and_parent(self, name):
+                calls.append(("find_by_name", name))
+                return None, None, -1
+
+            def validate_update_candidate_by_id(self, node_id, data):
+                calls.append(("validate_by_id", node_id, dict(data)))
+                return []
+
+            def validate_update_candidate(self, name, data):
+                calls.append(("validate_by_name", name, dict(data)))
+                return ["should not use name validation"]
+
+            def update_node_by_id(self, node_id, data):
+                calls.append(("update_by_id", node_id, dict(data)))
+                return True
+
+            def update_node(self, name, data):
+                calls.append(("update_by_name", name, dict(data)))
+                return True
+
+        tui = object.__new__(Tui)
+        tui.host_manager = FakeManager()
+        tui.get_current_node = lambda: selected
+        tui._run_form_loop = lambda fields, title="", **kwargs: {
+            "name": "new-name",
+        }
+        tui._show_success = lambda message: None
+        tui._recent_group = None
+        tui._recent_group_ts = 0
+
+        Tui.run_edit_flow(tui)
+
+        self.assertIn(("validate_by_id", "selected-id", {"name": "new-name"}), calls)
+        self.assertIn(("update_by_id", "selected-id", {"name": "new-name"}), calls)
+        self.assertFalse(any(call[0] == "update_by_name" for call in calls))
+
+    def test_tui_add_flow_uses_preselected_parent_id(self):
+        parent = {
+            "id": "parent-id",
+            "type": "group",
+            "name": "parent",
+            "children": [],
+        }
+        calls = []
+        responses = iter([
+            {"type": "group"},
+            {"name": "child"},
+        ])
+
+        class FakeManager:
+            def find_node_and_parent(self, name):
+                calls.append(("find_by_name", name))
+                return None, None, -1
+
+            def validate_add_candidate_by_parent_id(self, node, parent_id):
+                calls.append(("validate_by_parent_id", node["name"], parent_id))
+                return []
+
+            def validate_add_candidate(self, node, parent_name=None):
+                calls.append(("validate_by_parent_name", node["name"], parent_name))
+                return ["should not use parent name validation"]
+
+            def add_node_to_parent_id(self, node, parent_id):
+                calls.append(("add_by_parent_id", node["name"], parent_id))
+                return True
+
+            def add_node(self, node, parent_name=None):
+                calls.append(("add_by_parent_name", node["name"], parent_name))
+                return True
+
+        tui = object.__new__(Tui)
+        tui.host_manager = FakeManager()
+        tui.mode = "connect"
+        tui._run_form_loop = lambda fields, title="", **kwargs: next(responses)
+        tui._show_success = lambda message: None
+
+        Tui.run_add_flow(tui, preselected_parent=parent)
+
+        self.assertIn(("validate_by_parent_id", "child", "parent-id"), calls)
+        self.assertIn(("add_by_parent_id", "child", "parent-id"), calls)
+        self.assertFalse(any(call[0] == "add_by_parent_name" for call in calls))
+
+    def test_tui_parent_select_lines_only_include_editable_saved_nodes(self):
+        hosts = [
+            {
+                "id": "saved-group-id",
+                "type": "group",
+                "name": "saved-group",
+                "expanded": True,
+                "children": [
+                    {
+                        "id": "saved-child-id",
+                        "type": "host",
+                        "name": "saved-child",
+                        "host": "saved-child.example.com",
+                        "user": "deploy",
+                    }
+                ],
+            },
+            {
+                "type": "group",
+                "name": "imported",
+                "source": "ssh_config_group",
+                "expanded": True,
+                "children": [
+                    {
+                        "type": "host",
+                        "name": "imported-host",
+                        "source": "ssh_config",
+                    }
+                ],
+            },
+            {
+                "id": "saved-host-id",
+                "type": "host",
+                "name": "saved-host",
+                "host": "saved-host.example.com",
+                "user": "deploy",
+            },
+            {
+                "type": "host",
+                "name": "history-host",
+                "source": "history",
+            },
+        ]
+
+        class FakeManager:
+            def get_hosts(self):
+                return hosts
+
+        tui = object.__new__(Tui)
+        tui.host_manager = FakeManager()
+        tui.mode = "select_parent"
+        tui.search_query = ""
+
+        names = [line["name"] for line in Tui.get_lines_with_level(tui)]
+
+        self.assertEqual(
+            names,
+            ["[Top Level]", "saved-group", "saved-child", "saved-host"],
+        )
+
+    def test_tui_add_flow_rejects_readonly_preselected_parent(self):
+        calls = []
+
+        tui = object.__new__(Tui)
+        tui.mode = "connect"
+        tui._show_readonly_error = lambda: calls.append("readonly")
+
+        def fail_form(*args, **kwargs):
+            raise AssertionError("form should not open for read-only parent")
+
+        tui._run_form_loop = fail_form
+
+        Tui.run_add_flow(
+            tui,
+            preselected_parent={
+                "type": "host",
+                "name": "recent-host",
+                "source": "history",
+            },
+        )
+
+        self.assertEqual(calls, ["readonly"])
+
     def test_tui_form_validation_stays_in_form_and_preserves_value(self):
         class FakeScreen:
             def __init__(self):
@@ -1145,6 +1429,35 @@ class TuiTests(unittest.TestCase):
             self.assertTrue(
                 any("targetuser@target.internal:2222" in label for label in labels)
             )
+
+    def test_tui_delete_removes_selected_node_by_id(self):
+        selected = {
+            "id": "selected-id",
+            "type": "group",
+            "name": "group",
+            "children": [],
+        }
+        calls = []
+
+        class FakeManager:
+            def delete_node_by_id(self, node_id):
+                calls.append(("delete_by_id", node_id))
+                return True
+
+            def delete_host(self, name):
+                calls.append(("delete_by_name", name))
+                return True
+
+        tui = object.__new__(Tui)
+        tui.host_manager = FakeManager()
+        tui.get_current_node = lambda: selected
+        tui._run_form_loop = lambda fields, title="", **kwargs: {"confirm": True}
+        tui.highlight_line_number = 1
+
+        Tui.run_delete_flow(tui)
+
+        self.assertEqual(calls, [("delete_by_id", "selected-id")])
+        self.assertEqual(tui.highlight_line_number, 0)
 
 if __name__ == "__main__":
     unittest.main()

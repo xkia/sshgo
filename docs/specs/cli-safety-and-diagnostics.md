@@ -62,7 +62,7 @@ This work optimizes common paths before adding broad new features:
 7. `sshgo --print-command <alias> upload <local> <remote>` and download variants print the resolved SFTP or relay command.
 8. Printed commands include resolved placeholders, jump mode, proxy command, key options, host key options, and transfer mode where applicable.
 9. Printed commands do not include passwords, MFA secrets, or `SSHGO_*` environment values.
-10. `sshgo --doctor` checks config validity, Expect availability, script presence/executability, runtime data directory writability, SSH agent state, and selected config path.
+10. `sshgo --doctor` checks config validity, Expect and OpenSSH client tool availability, script presence/executability, runtime data directory writability, SSH agent state, and selected config path.
 11. Remote command shortcuts use shell-safe argument joining.
 12. README, README.zh, roadmap, gap analysis, and docs index mention the new accepted spec or commands.
 
@@ -113,7 +113,8 @@ The rendered command should use `shlex.join()` so arguments with spaces are insp
 - config file path and existence
 - config validation result
 - Expect executable availability
-- `login.exp`, `sftp_login.exp`, and `relay_transfer.exp` presence and executable bit
+- OpenSSH client tool availability for `ssh`, `sftp`, and `scp`
+- `login.exp`, `sftp_login.exp`, `relay_transfer.exp`, and `sftp_ssh_wrapper.py` presence and executable bit
 - runtime data directory creation/writability
 - SSH agent environment state
 - strict host key checking mode
