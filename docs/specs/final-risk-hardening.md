@@ -9,8 +9,8 @@
 - related_docs:
   - docs/gap-analysis.md
 - related_specs:
-  - docs/specs/config-store-extraction.md
-  - docs/specs/tui-form-interaction-polish.md
+  - docs/specs/internal-refactors-and-tests.md
+  - docs/specs/tui-interaction-polish.md
   - docs/specs/node-identity-recent-hardening.md
 
 ## Background

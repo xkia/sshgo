@@ -235,6 +235,10 @@ Set `SSHGO_DATA_DIR` or `config.data_dir` to use a different runtime data direct
     "show_recent": true,
     "recent_expanded": false,
     "tui_screen_policy": "isolated",
+    "terminal_title_enabled": false,
+    "terminal_title_target": "tab",
+    "terminal_title_format": "alias_host",
+    "terminal_title_scope": "auto",
     "default_ssh_jump_mode": "shell",
     "default_transfer_jump_mode": "tunnel",
     "relay_temp_dir": "/tmp",
@@ -265,6 +269,10 @@ Important `config` fields:
 - `show_recent`: Show or hide the TUI Recent group.
 - `recent_expanded`: Stores whether the TUI Recent group is expanded.
 - `tui_screen_policy`: `isolated` uses the terminal alternate screen and does not clear scrollback; `private` also attempts to clear the visible screen and scrollback after TUI exit.
+- `terminal_title_enabled`: When `true`, set the terminal tab/window title before SSH, SFTP, upload/download, or relay handoff. Defaults to `false`.
+- `terminal_title_target`: Title target, one of `tab`, `window`, or `both`.
+- `terminal_title_format`: Title body format, one of `alias`, `host`, or `alias_host`.
+- `terminal_title_scope`: `auto` only emits title sequences for known compatible terminal contexts; `always` emits when enabled. sshgo does not restore the previous title after the remote session exits.
 - `default_ssh_jump_mode`: Default nested SSH mode, either `shell` or `tunnel`.
 - `default_transfer_jump_mode`: Default nested transfer mode, either `tunnel` or `relay`.
 - `relay_temp_dir`: Absolute temporary directory on the jump host for `transfer_jump_mode: "relay"`.

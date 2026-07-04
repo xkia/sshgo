@@ -288,6 +288,37 @@ class ValidationTests(unittest.TestCase):
                 self.assertIn("config.tui_screen_policy must be a string", joined)
                 self.assertIn("Invalid tui_screen_policy", joined)
 
+    def test_validate_terminal_title_options(self):
+        errors = validate_hosts_config(
+            {
+                "config": {
+                    "terminal_title_enabled": True,
+                    "terminal_title_target": "both",
+                    "terminal_title_format": "alias_host",
+                    "terminal_title_scope": "always",
+                },
+                "hosts": [],
+            }
+        )
+        self.assertEqual(errors, [])
+
+        invalid = validate_hosts_config(
+            {
+                "config": {
+                    "terminal_title_enabled": "yes",
+                    "terminal_title_target": "pane",
+                    "terminal_title_format": "template",
+                    "terminal_title_scope": "tty",
+                },
+                "hosts": [],
+            }
+        )
+        joined = "\n".join(invalid)
+        self.assertIn("config.terminal_title_enabled must be true or false", joined)
+        self.assertIn("Invalid terminal_title_target: pane", joined)
+        self.assertIn("Invalid terminal_title_format: template", joined)
+        self.assertIn("Invalid terminal_title_scope: tty", joined)
+
     def test_validation_rejects_unsupported_deep_host_nesting(self):
         errors = validate_hosts_config(
             {

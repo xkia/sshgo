@@ -499,6 +499,36 @@ exit 0
             self.assertIn("sftp_ssh_wrapper.py", output)
             self.assertIn("Runtime data dir", output)
 
+    def test_doctor_uses_sshgo_module_dependency_bindings(self):
+        class FakeShutil:
+            @staticmethod
+            def which(name):
+                return f"/fake/{name}"
+
+        class FakeTui:
+            @staticmethod
+            def terminal_supports_alternate_screen():
+                return False
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            real_shutil = sshgo_module.shutil
+            real_tui = sshgo_module.Tui
+            sshgo_module.shutil = FakeShutil
+            sshgo_module.Tui = FakeTui
+            try:
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = sshgo_module.run_doctor(manager, manager.json_path)
+            finally:
+                sshgo_module.shutil = real_shutil
+                sshgo_module.Tui = real_tui
+
+            self.assertEqual(code, 0)
+            output = stdout.getvalue()
+            self.assertIn("[PASS] expect: /fake/expect", output)
+            self.assertIn("[WARN] Alternate screen", output)
+
     def test_doctor_warns_when_alternate_screen_is_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
@@ -639,6 +669,53 @@ exit 0
             self.assertIn("[FAIL] Config validation", output)
             self.assertIn("[PASS] expect", output)
             self.assertIn("Runtime data dir", output)
+
+    def test_doctor_for_path_uses_sshgo_host_manager_binding(self):
+        class FakeAudit:
+            data_dir = ""
+
+        class FakeHostManager:
+            constructed = False
+
+            def __init__(self, config_path, data_dir=None, auto_migrate=False):
+                FakeHostManager.constructed = True
+                self.config = {
+                    "import_ssh_config": False,
+                    "tui_screen_policy": "isolated",
+                }
+                self.audit = FakeAudit()
+                self.audit.data_dir = data_dir
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = self._write_legacy_config(temp_dir)
+            data_dir = os.path.join(temp_dir, "data")
+            real_which = sshgo_module.shutil.which
+            real_host_manager = sshgo_module.HostManager
+            real_terminal_supports_alternate_screen = (
+                sshgo_module.Tui.terminal_supports_alternate_screen
+            )
+            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
+            sshgo_module.HostManager = FakeHostManager
+            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
+                lambda: True
+            )
+            try:
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = sshgo_module.run_doctor_for_path(
+                        path,
+                        data_dir=data_dir,
+                    )
+            finally:
+                sshgo_module.shutil.which = real_which
+                sshgo_module.HostManager = real_host_manager
+                sshgo_module.Tui.terminal_supports_alternate_screen = (
+                    real_terminal_supports_alternate_screen
+                )
+
+            self.assertTrue(FakeHostManager.constructed)
+            self.assertEqual(code, 0)
+            self.assertIn("[PASS] Runtime data dir", stdout.getvalue())
 
     def test_run_tui_preserves_constructor_failure(self):
         class FakeManager:

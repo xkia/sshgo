@@ -235,6 +235,10 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
     "show_recent": true,
     "recent_expanded": false,
     "tui_screen_policy": "isolated",
+    "terminal_title_enabled": false,
+    "terminal_title_target": "tab",
+    "terminal_title_format": "alias_host",
+    "terminal_title_scope": "auto",
     "default_ssh_jump_mode": "shell",
     "default_transfer_jump_mode": "tunnel",
     "relay_temp_dir": "/tmp",
@@ -265,6 +269,10 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 - `show_recent`: 显示或隐藏 TUI Recent 分组。
 - `recent_expanded`: 存储 TUI Recent 分组是否展开。
 - `tui_screen_policy`: `isolated` 使用终端 alternate screen 且不清理滚屏历史；`private` 会在 TUI 退出后尝试清理当前可见屏幕和滚屏历史。
+- `terminal_title_enabled`: 设为 `true` 时, 在 SSH、SFTP、上传/下载或 relay 交接前设置终端 tab/window 标题。默认关闭。
+- `terminal_title_target`: 标题目标, 可选 `tab`、`window` 或 `both`。
+- `terminal_title_format`: 标题内容格式, 可选 `alias`、`host` 或 `alias_host`。
+- `terminal_title_scope`: `auto` 仅在已知兼容的终端环境中输出标题序列；`always` 会在启用后总是尝试输出。sshgo 不会在远程会话退出后恢复旧标题。
 - `default_ssh_jump_mode`: 嵌套 SSH 的默认模式, 可选 `shell` 或 `tunnel`。
 - `default_transfer_jump_mode`: 嵌套文件传输的默认模式, 可选 `tunnel` 或 `relay`。
 - `relay_temp_dir`: `transfer_jump_mode: "relay"` 使用的跳板机绝对临时目录。

@@ -12,8 +12,15 @@ TRANSFER_JUMP_MODES = frozenset({"tunnel", "relay"})
 DEFAULT_SSH_JUMP_MODE = "shell"
 DEFAULT_TRANSFER_JUMP_MODE = "tunnel"
 DEFAULT_TUI_SCREEN_POLICY = "isolated"
+DEFAULT_TERMINAL_TITLE_ENABLED = False
+DEFAULT_TERMINAL_TITLE_TARGET = "tab"
+DEFAULT_TERMINAL_TITLE_FORMAT = "alias_host"
+DEFAULT_TERMINAL_TITLE_SCOPE = "auto"
 DEFAULT_RELAY_TEMP_DIR = "/tmp"
 TUI_SCREEN_POLICIES = frozenset({"isolated", "private"})
+TERMINAL_TITLE_TARGETS = frozenset({"tab", "window", "both"})
+TERMINAL_TITLE_FORMATS = frozenset({"alias", "host", "alias_host"})
+TERMINAL_TITLE_SCOPES = frozenset({"auto", "always"})
 PLACEHOLDER_RE = re.compile(r"{{([A-Za-z_][A-Za-z0-9_]*)}}")
 PLACEHOLDER_TOKEN_RE = re.compile(r"{{([^{}]*)}}")
 PLACEHOLDER_BRACE_RE = re.compile(r"{{|}}")
@@ -29,12 +36,16 @@ CONFIG_BOOL_FIELDS = frozenset({
     "strict_host_key_checking",
     "show_recent",
     "recent_expanded",
+    "terminal_title_enabled",
 })
 CONFIG_STRING_FIELDS = frozenset({
     "language",
     "default_ssh_jump_mode",
     "default_transfer_jump_mode",
     "tui_screen_policy",
+    "terminal_title_target",
+    "terminal_title_format",
+    "terminal_title_scope",
     "relay_temp_dir",
 })
 CONFIG_OPTIONAL_STRING_FIELDS = frozenset({"data_dir", "encryption_salt"})
@@ -71,6 +82,10 @@ DEFAULT_CONFIG = {
     "default_ssh_jump_mode": DEFAULT_SSH_JUMP_MODE,
     "default_transfer_jump_mode": DEFAULT_TRANSFER_JUMP_MODE,
     "tui_screen_policy": DEFAULT_TUI_SCREEN_POLICY,
+    "terminal_title_enabled": DEFAULT_TERMINAL_TITLE_ENABLED,
+    "terminal_title_target": DEFAULT_TERMINAL_TITLE_TARGET,
+    "terminal_title_format": DEFAULT_TERMINAL_TITLE_FORMAT,
+    "terminal_title_scope": DEFAULT_TERMINAL_TITLE_SCOPE,
     "relay_temp_dir": DEFAULT_RELAY_TEMP_DIR,
     "placeholders": {},
 }
@@ -142,6 +157,42 @@ def validate_hosts_config(data: dict) -> list[str]:
             i18n.get(
                 "validate_invalid_tui_screen_policy",
                 policy=tui_screen_policy,
+            )
+        )
+
+    terminal_title_target = config.get("terminal_title_target")
+    if (
+        not isinstance(terminal_title_target, str)
+        or terminal_title_target not in TERMINAL_TITLE_TARGETS
+    ):
+        errors.append(
+            i18n.get(
+                "validate_invalid_terminal_title_target",
+                target=terminal_title_target,
+            )
+        )
+
+    terminal_title_format = config.get("terminal_title_format")
+    if (
+        not isinstance(terminal_title_format, str)
+        or terminal_title_format not in TERMINAL_TITLE_FORMATS
+    ):
+        errors.append(
+            i18n.get(
+                "validate_invalid_terminal_title_format",
+                format=terminal_title_format,
+            )
+        )
+
+    terminal_title_scope = config.get("terminal_title_scope")
+    if (
+        not isinstance(terminal_title_scope, str)
+        or terminal_title_scope not in TERMINAL_TITLE_SCOPES
+    ):
+        errors.append(
+            i18n.get(
+                "validate_invalid_terminal_title_scope",
+                scope=terminal_title_scope,
             )
         )
 

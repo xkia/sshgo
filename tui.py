@@ -4,13 +4,14 @@
 import sys
 import time
 import curses
-import getpass
 import textwrap
 import curses.textpad as textpad
 
 from config_validation import DEFAULT_TUI_SCREEN_POLICY, TUI_SCREEN_POLICIES
 from host_manager import HostManager
 from i18n import i18n
+import tui_forms
+import tui_text
 
 _AUTO_GENERATED_SOURCES = frozenset({"ssh_config_group", "recent_group"})
 _READONLY_SOURCES = frozenset({"ssh_config", "history"})
@@ -159,62 +160,16 @@ class Tui:
             pass
 
     def _ellipsize(self, value, width, tail=False):
-        value = str(value)
-        if width <= 0:
-            return ""
-        if len(value) <= width:
-            return value
-        if width <= 3:
-            return value[:width]
-        if tail:
-            return "..." + value[-(width - 3) :]
-        return value[: width - 3] + "..."
+        return tui_text.ellipsize(value, width, tail=tail)
 
     def _matches_key(self, key, *candidates):
-        return any(key == candidate for candidate in candidates)
+        return tui_text.matches_key(key, *candidates)
 
     def _insertable_text_for_key(self, key):
-        if isinstance(key, str):
-            return "".join(ch for ch in key if ch.isprintable())
-        if isinstance(key, int) and 32 <= key <= 126:
-            return chr(key)
-        return ""
+        return tui_text.insertable_text_for_key(key)
 
     def _apply_text_edit_key(self, value, cursor, key):
-        value = str(value)
-        cursor = max(0, min(int(cursor), len(value)))
-
-        if self._matches_key(key, "\n", "\r", curses.KEY_ENTER, 10, 13):
-            return value, cursor, "commit"
-        if self._matches_key(key, "\x1b", 27):
-            return value, cursor, "cancel"
-        if self._matches_key(key, "\x15", 21):  # Ctrl+U
-            return "", 0, None
-        if self._matches_key(key, "\x01", 1, curses.KEY_HOME):  # Ctrl+A / Home
-            return value, 0, None
-        if self._matches_key(key, "\x05", 5, curses.KEY_END):  # Ctrl+E / End
-            return value, len(value), None
-        if self._matches_key(key, curses.KEY_LEFT):
-            return value, max(0, cursor - 1), None
-        if self._matches_key(key, curses.KEY_RIGHT):
-            return value, min(len(value), cursor + 1), None
-        if self._matches_key(key, curses.KEY_BACKSPACE, "\x7f", "\b", 127, 8):
-            if cursor == 0:
-                return value, cursor, None
-            return value[: cursor - 1] + value[cursor:], cursor - 1, None
-        if self._matches_key(key, curses.KEY_DC, 330):
-            if cursor >= len(value):
-                return value, cursor, None
-            return value[:cursor] + value[cursor + 1 :], cursor, None
-
-        insert_text = self._insertable_text_for_key(key)
-        if insert_text:
-            return (
-                value[:cursor] + insert_text + value[cursor:],
-                cursor + len(insert_text),
-                None,
-            )
-        return value, cursor, None
+        return tui_text.apply_text_edit_key(value, cursor, key)
 
     def _draw_edit_window(self, edit_win, value, cursor, input_width, password=False):
         input_width = max(1, int(input_width))
@@ -497,11 +452,7 @@ class Tui:
         }
 
     def _clean_form_data(self, form_data):
-        return {
-            key: value
-            for key, value in form_data.items()
-            if not str(key).startswith("_")
-        }
+        return tui_forms.clean_form_data(form_data)
 
     def _host_form_fields(
         self,
@@ -510,181 +461,24 @@ class Tui:
         advanced_open=False,
         include_context=False,
     ):
-        values = values or {}
-        fields = []
-        if include_context and values.get("name"):
-            fields.append(
-                {
-                    "label": i18n.get("editing_context", name=values.get("name")),
-                    "type": "static_text",
-                }
-            )
-            if values.get("host"):
-                fields.append(
-                    {
-                        "label": i18n.get(
-                            "target_context",
-                            target=f"{values.get('user', '')}@{values.get('host')}",
-                        ),
-                        "type": "static_text",
-                    }
-                )
-
-        fields.extend(
-            [
-                {"label": i18n.get("form_section_basic"), "type": "section"},
-                {
-                    "label": i18n.get("name"),
-                    "type": "text",
-                    "name": "name",
-                    "required": True,
-                    "value": values.get("name"),
-                },
-                {
-                    "label": i18n.get("host_domain"),
-                    "type": "text",
-                    "name": "host",
-                    "required": True,
-                    "value": values.get("host"),
-                },
-                {
-                    "label": i18n.get("port"),
-                    "type": "text",
-                    "name": "port",
-                    "required": True,
-                    "value": values.get("port", "22"),
-                },
-                {
-                    "label": i18n.get("username"),
-                    "type": "text",
-                    "name": "user",
-                    "required": True,
-                    "value": values.get("user", getpass.getuser()),
-                },
-                {"label": i18n.get("form_section_auth"), "type": "section"},
-                {
-                    "label": i18n.get("auth_method"),
-                    "type": "radio",
-                    "name": "auth",
-                    "options": ["password", "key", "none"],
-                    "value": values.get("auth", "password"),
-                },
-                {
-                    "label": i18n.get("password"),
-                    "type": "password",
-                    "name": "password",
-                    "required": values.get("auth") == "password",
-                    "value": values.get("password", ""),
-                },
-                {
-                    "label": i18n.get("key_path"),
-                    "type": "text",
-                    "name": "id_file",
-                    "required": values.get("auth") == "key",
-                    "value": values.get("id_file", ""),
-                },
-                {
-                    "label": i18n.get("auth_none_hint"),
-                    "type": "static_text",
-                    "auth_visible": "none",
-                },
-                {
-                    "label": i18n.get("mfa_secret"),
-                    "type": "text",
-                    "name": "mfa_secret",
-                    "value": values.get("mfa_secret", ""),
-                },
-                {
-                    "label": i18n.get("form_section_advanced"),
-                    "type": "toggle",
-                    "name": "_advanced_open",
-                    "value": advanced_open,
-                },
-            ]
+        return tui_forms.host_form_fields(
+            values=values,
+            include_proxy=include_proxy,
+            advanced_open=advanced_open,
+            include_context=include_context,
         )
-
-        if include_proxy:
-            fields.append(
-                {
-                    "label": i18n.get("proxy_command"),
-                    "type": "text",
-                    "name": "proxy_command",
-                    "advanced": True,
-                    "value": values.get("proxy_command", ""),
-                }
-            )
-
-        fields.extend(
-            [
-                {
-                    "label": i18n.get("ssh_jump_mode"),
-                    "type": "radio",
-                    "name": "ssh_jump_mode",
-                    "options": ["default", "shell", "tunnel"],
-                    "advanced": True,
-                    "value": values.get("ssh_jump_mode", "default"),
-                },
-                {
-                    "label": i18n.get("transfer_jump_mode"),
-                    "type": "radio",
-                    "name": "transfer_jump_mode",
-                    "options": ["default", "tunnel", "relay"],
-                    "advanced": True,
-                    "value": values.get("transfer_jump_mode", "default"),
-                },
-                {"label": i18n.get("save"), "type": "button"},
-                {"label": i18n.get("cancel"), "type": "button", "name": "cancel"},
-            ]
-        )
-        return fields
 
     def _group_form_fields(self, name=""):
-        return [
-            {"label": i18n.get("form_section_basic"), "type": "section"},
-            {
-                "label": i18n.get("name"),
-                "type": "text",
-                "name": "name",
-                "required": True,
-                "value": name,
-            },
-            {"label": i18n.get("save"), "type": "button"},
-            {"label": i18n.get("cancel"), "type": "button", "name": "cancel"},
-        ]
+        return tui_forms.group_form_fields(name)
 
     def _host_node_from_form(self, final_data):
-        data = self._clean_form_data(final_data)
-        node = {
-            "type": "host",
-            "name": data["name"],
-            "host": f"{data['host']}:{data['port']}",
-            "user": data["user"],
-            "password": data.get("password", ""),
-            "id_file": data.get("id_file", ""),
-            "mfa_secret": data.get("mfa_secret", ""),
-        }
-        if data.get("ssh_jump_mode") != "default":
-            node["ssh_jump_mode"] = data.get("ssh_jump_mode")
-        if data.get("transfer_jump_mode") != "default":
-            node["transfer_jump_mode"] = data.get("transfer_jump_mode")
-        if data.get("proxy_command"):
-            node["proxy_command"] = data.get("proxy_command")
-        return node
+        return tui_forms.host_node_from_form(final_data)
 
     def _group_node_from_form(self, final_data):
-        data = self._clean_form_data(final_data)
-        return {
-            "type": "group",
-            "name": data["name"],
-            "expanded": True,
-            "children": [],
-        }
+        return tui_forms.group_node_from_form(final_data)
 
     def _update_data_from_form(self, final_data):
-        data = self._clean_form_data(final_data)
-        if "host" in data and "port" in data:
-            data["host"] = f"{data['host']}:{data['port']}"
-        return data
+        return tui_forms.update_data_from_form(final_data)
 
     def _infer_validation_focus(self, errors):
         joined = "\n".join(errors).lower()
@@ -1029,23 +823,7 @@ class Tui:
 
         while True:
             # Dynamically adjust field visibility based on other field values
-            auth_method = form_data.get("auth")
-            advanced_open = bool(form_data.get("_advanced_open"))
-            for field in fields:
-                if auth_method:
-                    if field.get("name") == "password":
-                        field["visible"] = auth_method == "password"
-                        field["required"] = auth_method == "password"
-                    elif field.get("name") == "id_file":
-                        field["visible"] = auth_method == "key"
-                        field["required"] = auth_method == "key"
-                    elif field.get("auth_visible") is not None:
-                        allowed = field.get("auth_visible")
-                        if isinstance(allowed, str):
-                            allowed = {allowed}
-                        field["visible"] = auth_method in allowed
-                if field.get("advanced"):
-                    field["visible"] = advanced_open
+            tui_forms.apply_dynamic_visibility(fields, form_data)
 
             visible_fields = [f for f in fields if f.get("visible", True)]
 
@@ -1202,19 +980,7 @@ class Tui:
                 None if parent_node.get("type") == "system" else parent_node.get("id")
             )
 
-            node_type_fields = [
-                {
-                    "label": i18n.get("node_type"),
-                    "type": "radio",
-                    "name": "type",
-                    "options": ["host", "group"],
-                    "value": "host",
-                    "y": 3,
-                    "x": 2,
-                },
-                {"label": i18n.get("continue"), "type": "button", "y": 6, "x": 2},
-                {"label": i18n.get("cancel"), "type": "button", "y": 6, "x": 15},
-            ]
+            node_type_fields = tui_forms.node_type_form_fields()
             type_data = self._run_form_loop(
                 node_type_fields, i18n.get("select_node_type")
             )

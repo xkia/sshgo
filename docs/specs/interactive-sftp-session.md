@@ -11,7 +11,7 @@
 - related_specs:
   - docs/specs/jump-host-connection-modes.md
   - docs/specs/sftp-batch-mode-hardening.md
-  - docs/specs/command-planning-extraction.md
+  - docs/specs/internal-refactors-and-tests.md
   - docs/specs/security-hardening.md
 
 ## Problem Background

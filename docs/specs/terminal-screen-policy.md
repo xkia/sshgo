@@ -8,7 +8,7 @@
 - related_roadmap: docs/roadmap.md#2026-07
 - related_specs:
   - docs/specs/cli-safety-and-diagnostics.md
-  - docs/specs/tui-style-system.md
+  - docs/specs/tui-interaction-polish.md
 
 ## Problem Background
 
