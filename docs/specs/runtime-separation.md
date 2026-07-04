@@ -2,9 +2,8 @@
 
 ## 元数据
 - slug: runtime-separation
-- status: implemented_with_followup_changes
+- status: approved
 - owner: PM
-- related_adr: (none yet)
 - related_roadmap: docs/roadmap.md#2026-05
 - related_followup: docs/specs/security-hardening.md (process handoff and audit final-result behavior)
 
@@ -293,7 +292,7 @@ def get_history(self, limit=10, filter_name=None):
 | 结构完整性 | ✓ PASS | 背景/范围/场景/技术设计/风险齐全 |
 | 可执行性 | ✓ PASS | 有代码示例、文件变更清单、实现细节 |
 | 风险识别 | ✓ PASS | 有 4 项风险及缓解策略 |
-| ADR 一致性 | ✓ N/A | 无现有 ADR 约束 |
+| 当前架构约束 | ✓ PASS | 与后续 security-hardening 的 execve handoff 约束保持一致 |
 | 向后兼容 | ✓ PASS | 所有新字段有默认值 |
 
 ### 已修复的问题

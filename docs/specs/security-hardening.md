@@ -4,7 +4,6 @@
 - slug: security-hardening
 - status: approved
 - owner: Engineer
-- related_adr: (none)
 - related_roadmap: docs/roadmap.md#2026-06
 
 ## 背景与范围

@@ -22,4 +22,4 @@ sshgo 是一个**现代、安全、易用的 SSH 连接管理器**，通过 TUI 
 
 ## 路线图引用
 
-当前里程碑、状态和未来候选项维护在 [roadmap.md](roadmap.md)。愿景文档只保留产品目标和非目标。
+当前里程碑和状态维护在 [roadmap.md](roadmap.md)，未来候选边界维护在 [gap-analysis.md](gap-analysis.md)。愿景文档只保留产品目标和非目标。

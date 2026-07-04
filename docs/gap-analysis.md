@@ -45,15 +45,6 @@ Common workflows should get the highest polish:
 - Validation and diagnostics should produce actionable messages rather than generic failures.
 - Preview output should reflect the real resolved command while redacting secrets.
 
-The following high-maintenance ideas are intentionally out of the current plan unless the user explicitly reopens them:
-
-- Batch multi-host commands.
-- Connection health checks.
-- Directory transfer support.
-- Full OpenSSH config compatibility.
-
-Other low-frequency ideas, such as final-result audit events or tags/favorites, should also stay out of active planning until repeated personal usage justifies them.
-
 The 2026-07 safety and polish slice has closed the immediate focus items: alias safety, validation, command preview, doctor checks, TUI save-time feedback, backup recovery, command planning extraction, config storage extraction, config validation extraction, stale-write guarding, editable-only parent selection, focused test organization, and SFTP batch-mode failure handling. There is no active implementation work in this document; future behavior changes should start as a new spec.
 
 ## Risk Register
@@ -86,15 +77,20 @@ The 2026-07 safety and polish slice has closed the immediate focus items: alias 
 | Host tree extraction | Traversal, lookup, parent-link rebuilding, and node ID assignment are testable outside HostManager. | [host-tree-extraction](specs/host-tree-extraction.md) |
 | Test suite organization | Focused modules make common workflow regressions easier to locate. | [test-suite-organization](specs/test-suite-organization.md) |
 
-## Feature Candidates
+## Feature Candidates And Deferred Work
 
 No active feature candidates are scheduled. Any new feature should start with a focused spec and justify its maintenance cost for a personal tool.
 
 Deferred unless repeated real usage justifies reopening:
 
-- Final-result audit events for SSH/SFTP/relay sessions. This would need a new design because Python currently uses `execve` and does not supervise the live session.
-- Tags, favorites, or other organization metadata beyond current groups and Recent.
-- Richer `~/.ssh/config` compatibility beyond the intentionally shallow import.
+| Candidate | Current stance | Reopen only if |
+|---|---|---|
+| Batch multi-host commands | Out of current plan | Repeated usage needs show that manual loops or shell aliases are insufficient. |
+| Connection health checks | Out of current plan | Connection failures become frequent enough that a diagnostic probe would materially reduce daily friction. |
+| Directory transfer support | Out of current plan | Single-file upload/download is no longer enough for common workflows. |
+| Full OpenSSH config compatibility | Accepted non-goal | The shallow import blocks important daily hosts and the maintenance cost is justified. |
+| Final-result audit events | Deferred | A new supervision design is accepted, because Python currently uses `execve` and does not observe live session exit status. |
+| Tags/favorites or richer organization metadata | Deferred | Current groups and Recent no longer cover common navigation needs. |
 
 ## Suggested Priority
 

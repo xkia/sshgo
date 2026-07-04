@@ -5,7 +5,6 @@
 - slug: jump-host-connection-modes
 - status: approved
 - owner: PM/Architect/Engineer
-- related_adr: none
 - related_roadmap: docs/roadmap.md#2026-06
 - related_specs:
   - docs/specs/connection-auth-audit-hardening.md

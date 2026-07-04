@@ -5,7 +5,6 @@
 - slug: custom-proxy-command
 - status: approved
 - owner: PM/Architect/Engineer
-- related_adr: none
 - related_roadmap: docs/roadmap.md#2026-07
 - related_specs:
   - docs/specs/config-format-jsonc.md

@@ -39,11 +39,6 @@
 
 ## Future Candidates
 
-No active future candidates are currently scheduled. New work should first pass the personal-tool scope filters in [gap-analysis.md](gap-analysis.md), then get a focused spec under `docs/specs/`.
+No active future candidates are currently scheduled.
 
-Explicitly out of the current plan unless repeated real usage justifies reopening:
-
-- Batch multi-host commands.
-- Connection health checks.
-- Directory transfer support.
-- Full OpenSSH config compatibility.
+Future-candidate boundaries and deferred/non-goal items are maintained in [gap-analysis.md](gap-analysis.md) so roadmap state has a single source of truth. New work should first pass those personal-tool scope filters, then get a focused spec under `docs/specs/`.

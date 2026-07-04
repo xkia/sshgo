@@ -5,7 +5,6 @@
 - slug: connection-auth-audit-hardening
 - status: approved
 - owner: PM/Engineer
-- related_adr: none
 - related_roadmap: docs/roadmap.md#2026-06
 - related_specs:
   - docs/specs/runtime-separation.md

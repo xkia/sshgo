@@ -94,7 +94,7 @@ This file provides repository guidance for coding agents and maintainers working
 ### Documentation Layers
 
 - `docs/vision.md`: product goals and non-goals.
-- `docs/roadmap.md`: milestones, exit criteria, and future candidates.
+- `docs/roadmap.md`: completed milestones and exit criteria.
 - `docs/gap-analysis.md`: current risks, closed gaps, optimization outcomes, and future candidate boundaries.
 - `docs/specs/*.md`: accepted behavior and implementation boundaries.
 - `docs/specs/jump-host-connection-modes.md`: configurable SSH/transfer jump modes (`shell`, `tunnel`, `relay`).
