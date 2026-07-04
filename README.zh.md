@@ -144,7 +144,7 @@ sshgo
     验证配置文件是否有错误.
 
 -   `sshgo --doctor`
-    运行本地诊断, 检查配置有效性、`expect`、内置 Expect 脚本、运行时数据目录可写性、SSH agent 状态和 host key 模式。
+    运行本地诊断, 检查配置有效性、`expect`、内置 Expect 脚本和传输辅助脚本、运行时数据目录可写性、SSH agent 状态和 host key 模式。
 
 -   `sshgo --list-backups`
     列出当前解析到的 `hosts.json` 路径对应的轮转备份。

@@ -113,7 +113,7 @@ The rendered command should use `shlex.join()` so arguments with spaces are insp
 - config file path and existence
 - config validation result
 - Expect executable availability
-- `login.exp`, `sftp_login.exp`, and `relay_transfer.exp` presence and executable bit
+- `login.exp`, `sftp_login.exp`, `relay_transfer.exp`, and `sftp_ssh_wrapper.py` presence and executable bit
 - runtime data directory creation/writability
 - SSH agent environment state
 - strict host key checking mode

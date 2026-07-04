@@ -5,7 +5,7 @@
 - slug: command-planning-extraction
 - status: approved
 - owner: Architect/Engineer
-- related_roadmap: docs/roadmap.md#future-candidates
+- related_roadmap: docs/roadmap.md#2026-07
 - related_docs:
   - docs/gap-analysis.md
 - related_specs:

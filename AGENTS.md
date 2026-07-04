@@ -71,7 +71,7 @@ This file provides repository guidance for coding agents and maintainers working
 
 3. **SSH Connection**: `HostManager.execute_interactive_connection()` builds args, stores password/MFA secrets only in the `SSHGO_*` environment copy, records a `started` audit event, then uses `os.execve()` to replace Python with `login.exp`. Target and jump host auth are computed independently. Hosts can use a custom `proxy_command`; when such a host is used as a jump-host parent, child connections use the parent `proxy_command` for the first hop. Nested interactive SSH supports `ssh_jump_mode=shell` (default, login to jump then run target SSH from the jump shell) and `ssh_jump_mode=tunnel` (OpenSSH `ProxyCommand` / `ssh -W`). Python does not wait for the SSH session and cannot record final duration or exit code.
 
-4. **File Transfer**: `execute_file_transfer()` keeps the public shortcut path but dispatches by `transfer_jump_mode`. `tunnel` (default) uses true local SFTP via `sftp_login.exp` and requires jump-host TCP forwarding; nested tunnel mode receives a Python-generated `-tunnel-proxy-command`, including any parent jump-host key/proxy options. `relay` uses `relay_transfer.exp`, copies regular files through a temporary path on the jump host with `scp`, retries local-to-jump scp with legacy protocol only for protocol-incompatibility failures, is not SFTP, and reports final transfer/cleanup status in Expect output rather than Python audit.
+4. **File Transfer**: `execute_file_transfer()` keeps the public shortcut path but dispatches by `transfer_jump_mode`. `tunnel` (default) uses true local SFTP via `sftp_login.exp`, runs a single `put/get` through OpenSSH `sftp -b`, and requires jump-host TCP forwarding; nested tunnel mode receives a Python-generated `-tunnel-proxy-command`, including any parent jump-host key/proxy options. Because OpenSSH `sftp -b` injects `BatchMode=yes`, `sftp_login.exp` launches SFTP with `-S sftp_ssh_wrapper.py` so password/passphrase/MFA prompts keep working. `relay` uses `relay_transfer.exp`, copies regular files through a temporary path on the jump host with `scp`, retries local-to-jump scp with legacy protocol only for protocol-incompatibility failures, is not SFTP, and reports final transfer/cleanup status in Expect output rather than Python audit.
 
 5. **Recent Resolution**: TUI builds the Recent group from audit history. It resolves current nodes by `node_id` first, then legacy name/endpoint fields, and only falls back to read-only history snapshots when the configured node no longer exists.
 
@@ -119,7 +119,7 @@ Use the smallest set that matches the change. For broad code or documentation sy
 
 ```bash
 python3 -m unittest discover -s tests -p 'test*.py'
-python3 -m py_compile sshgo.py host_manager.py config_store.py tui.py audit_logger.py auth.py crypto.py config_parser.py i18n.py tests/test_connection_auth_audit.py tests/test_command_plan.py tests/test_tui.py tests/test_audit.py tests/test_config_backup.py tests/test_config_store.py tests/test_validation.py tests/test_cli.py tests/test_host_manager.py
+python3 -m py_compile sshgo.py host_manager.py config_store.py tui.py audit_logger.py auth.py crypto.py config_parser.py i18n.py sftp_ssh_wrapper.py tests/test_connection_auth_audit.py tests/test_command_plan.py tests/test_tui.py tests/test_audit.py tests/test_config_backup.py tests/test_config_store.py tests/test_validation.py tests/test_cli.py tests/test_host_manager.py
 python3 sshgo.py --validate
 git diff --check
 ```

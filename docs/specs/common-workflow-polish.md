@@ -5,7 +5,7 @@
 - slug: common-workflow-polish
 - status: approved
 - owner: PM/Architect/Engineer
-- related_roadmap: docs/roadmap.md#future-candidates
+- related_roadmap: docs/roadmap.md#2026-07
 - related_docs:
   - docs/gap-analysis.md
 - related_specs:
@@ -36,7 +36,7 @@ The project should avoid broad, low-frequency feature expansion unless repeated 
 
 - Do not implement directory transfer.
 - Do not replace the TUI form system.
-- Do not add tags, favorites, batch operations, or health checks.
+- Do not add tags, favorites, multi-host batch operations, or health checks.
 - Do not change relay path quoting behavior.
 - Do not add external dependencies.
 
@@ -84,7 +84,7 @@ Relay mode is not changed because it already uses shell-quoting in `relay_transf
 
 ### SFTP Failure Handling
 
-This spec originally reduced direct/tunnel SFTP failure risk with early EOF and output-text checks. The accepted replacement direction is captured in [sftp-batch-mode-hardening](sftp-batch-mode-hardening.md): `sftp_login.exp` should use OpenSSH `sftp -b` for direct/tunnel transfers and treat the `sftp` process exit status as the success/failure source of truth.
+This spec originally reduced direct/tunnel SFTP failure risk with early EOF and output-text checks. The current replacement behavior is captured in [sftp-batch-mode-hardening](sftp-batch-mode-hardening.md): `sftp_login.exp` uses OpenSSH `sftp -b` for direct/tunnel transfers and treats the `sftp` process exit status as the success/failure source of truth.
 
 ## Review Status
 

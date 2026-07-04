@@ -54,7 +54,7 @@ The following high-maintenance ideas are intentionally out of the current plan u
 
 Other low-frequency ideas, such as final-result audit events or tags/favorites, should also stay out of active planning until repeated personal usage justifies them.
 
-The 2026-07 safety and polish slice has closed the immediate focus items: alias safety, validation, command preview, doctor checks, TUI save-time feedback, backup recovery, command planning extraction, config storage extraction, and focused test organization. The only active implementation candidate tracked here is SFTP batch mode hardening; other future behavior changes should start as a new spec.
+The 2026-07 safety and polish slice has closed the immediate focus items: alias safety, validation, command preview, doctor checks, TUI save-time feedback, backup recovery, command planning extraction, config storage extraction, focused test organization, and SFTP batch-mode failure handling. There is no active implementation work in this document; future behavior changes should start as a new spec.
 
 ## Risk Register
 
@@ -63,7 +63,7 @@ The 2026-07 safety and polish slice has closed the immediate focus items: alias 
 | R1 | CLI alias resolution | High | closed | Exact aliases are preferred and ambiguous prefixes fail before connecting. | Covered by [cli-safety-and-diagnostics](specs/cli-safety-and-diagnostics.md). |
 | R2 | Jump-host topology | High | closed | Validation and runtime command builders reject unsupported deeper-than-direct host nesting. | Covered by [cli-safety-and-diagnostics](specs/cli-safety-and-diagnostics.md). |
 | R3 | Remote command shortcuts | Medium | closed with documented semantics | Shortcut arguments are shell-joined safely for the interactive handoff; sshgo still does not behave as a non-interactive remote command runner. | Covered by [cli-safety-and-diagnostics](specs/cli-safety-and-diagnostics.md). |
-| R4 | SFTP path and failure handling | Medium | in progress | Fragile local SFTP upload paths fail before Expect handoff. Batch-mode hardening is moving direct/tunnel SFTP success detection to OpenSSH `sftp` exit status instead of output text. | Covered by [common-workflow-polish](specs/common-workflow-polish.md); batch-mode hardening is in progress in [sftp-batch-mode-hardening](specs/sftp-batch-mode-hardening.md). |
+| R4 | SFTP path and failure handling | Medium | closed with manual-smoke residual | Fragile direct/tunnel SFTP paths fail before Expect handoff. Direct/tunnel SFTP now uses OpenSSH batch mode and process exit status instead of localized output text for transfer success. Real password/passphrase/MFA/tunnel environments still deserve manual smoke when changing this path. | Covered by [common-workflow-polish](specs/common-workflow-polish.md) and [sftp-batch-mode-hardening](specs/sftp-batch-mode-hardening.md). |
 | R5 | Audit log retention | Medium | closed | Audit trim uses lock coordination and atomic replacement; final session results remain unavailable because Python hands off with `execve`. | Covered by [config-and-audit-durability](specs/config-and-audit-durability.md). |
 | R6 | HostManager scope | Medium | reduced | `HostManager` still owns domain behavior, but command planning and config storage are isolated behind focused helpers with dedicated tests. | Covered by [command-planning-extraction](specs/command-planning-extraction.md) and [config-store-extraction](specs/config-store-extraction.md). |
 | R7 | Config validation depth | Medium | closed | Known top-level config fields and node candidates are validated; unknown top-level config keys remain allowed for compatibility. | Covered by [config-and-audit-durability](specs/config-and-audit-durability.md) and [common-workflow-polish](specs/common-workflow-polish.md). |
@@ -77,7 +77,7 @@ The 2026-07 safety and polish slice has closed the immediate focus items: alias 
 | Command planning extraction | SSH/SFTP/relay launch data can be tested without patching `os.execve`. | [command-planning-extraction](specs/command-planning-extraction.md) |
 | Safer alias UX | Exact aliases win and ambiguous prefixes fail before connecting. | [cli-safety-and-diagnostics](specs/cli-safety-and-diagnostics.md) |
 | Validation hardening | Runtime surprises move into `--validate` and TUI save-time feedback. | [config-and-audit-durability](specs/config-and-audit-durability.md), [common-workflow-polish](specs/common-workflow-polish.md) |
-| File-transfer robustness | Single-file SFTP upload rejects fragile local paths before Expect handoff. | [common-workflow-polish](specs/common-workflow-polish.md) |
+| File-transfer robustness | Direct/tunnel single-file SFTP rejects fragile paths before handoff and relies on OpenSSH batch-mode exit status for transfer success. | [common-workflow-polish](specs/common-workflow-polish.md), [sftp-batch-mode-hardening](specs/sftp-batch-mode-hardening.md) |
 | Audit durability | JSONL trim uses lock coordination and atomic replacement without changing handoff semantics. | [config-and-audit-durability](specs/config-and-audit-durability.md) |
 | TUI daily-use polish | Shared templates, safer forms, delete confirmation, and cursor-aware editing improve common add/edit flows. | [tui-style-system](specs/tui-style-system.md), [tui-form-interaction-polish](specs/tui-form-interaction-polish.md), [tui-input-editing-polish](specs/tui-input-editing-polish.md) |
 | Config doctor and recovery tools | Users can diagnose local setup and restore rotated config backups. | [cli-safety-and-diagnostics](specs/cli-safety-and-diagnostics.md), [config-backup-recovery](specs/config-backup-recovery.md) |
@@ -85,11 +85,7 @@ The 2026-07 safety and polish slice has closed the immediate focus items: alias 
 
 ## Feature Candidates
 
-Active implementation candidate:
-
-- SFTP batch mode hardening: use OpenSSH `sftp -b` for direct/tunnel single-file transfers so transfer success is determined by process exit status instead of output text. See [sftp-batch-mode-hardening](specs/sftp-batch-mode-hardening.md).
-
-Any new feature should start with a focused spec and justify its maintenance cost for a personal tool.
+No active feature candidates are scheduled. Any new feature should start with a focused spec and justify its maintenance cost for a personal tool.
 
 Deferred unless repeated real usage justifies reopening:
 

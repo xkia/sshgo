@@ -29,7 +29,7 @@
 | [tui-input-editing-polish.md](specs/tui-input-editing-polish.md) | Cursor-aware text/password editing for TUI forms |
 | [command-planning-extraction.md](specs/command-planning-extraction.md) | Pure SSH/SFTP/relay command plan objects for safer launch testing |
 | [test-suite-organization.md](specs/test-suite-organization.md) | Focused test modules for isolated implementation areas |
-| [sftp-batch-mode-hardening.md](specs/sftp-batch-mode-hardening.md) | In-progress batch-mode SFTP transfer hardening to reduce output-text failure detection risk |
+| [sftp-batch-mode-hardening.md](specs/sftp-batch-mode-hardening.md) | Batch-mode SFTP transfer hardening to reduce output-text failure detection risk |
 
 ## Documentation Rules
 

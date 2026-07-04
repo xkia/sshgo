@@ -144,7 +144,7 @@ sshgo
     Validate the configuration file for errors.
 
 -   `sshgo --doctor`
-    Run local diagnostics for config validity, `expect`, bundled Expect scripts, runtime data directory writability, SSH agent state, and host key mode.
+    Run local diagnostics for config validity, `expect`, bundled Expect scripts and transfer helpers, runtime data directory writability, SSH agent state, and host key mode.
 
 -   `sshgo --list-backups`
     List rotated backups for the resolved `hosts.json` path.

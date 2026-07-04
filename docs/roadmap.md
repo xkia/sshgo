@@ -31,14 +31,11 @@
 | TUI form interaction polish | done | Add/Edit forms use Basic/Auth/Advanced sections; validation stays in-form; delete defaults to Cancel with impact summary | [tui-form-interaction-polish](specs/tui-form-interaction-polish.md) |
 | TUI input editing polish | done | Text/password fields support cursor movement, Home/End, Delete, Ctrl+U clear, and paste-friendly insertion | [tui-input-editing-polish](specs/tui-input-editing-polish.md) |
 | Test suite organization | done | CommandPlan, TUI, audit, validation, CLI, and HostManager CRUD coverage move into focused test modules while keeping unittest discovery unchanged | [test-suite-organization](specs/test-suite-organization.md) |
+| SFTP batch mode hardening | done | Direct/tunnel SFTP transfer success is determined by OpenSSH `sftp` batch-mode exit status rather than localized output text, while password/key/MFA prompt handling remains compatible | [sftp-batch-mode-hardening](specs/sftp-batch-mode-hardening.md) |
 
 ## Future Candidates
 
-| Candidate | Status | Exit Criteria | Related Spec/Doc |
-|---|---|---|---|
-| SFTP batch mode hardening | in progress | Direct/tunnel SFTP transfer success is determined by OpenSSH `sftp` batch-mode exit status rather than localized output text, while password/key/MFA prompt handling remains compatible | [sftp-batch-mode-hardening](specs/sftp-batch-mode-hardening.md) |
-
-New work should first pass the personal-tool scope filters in [gap-analysis.md](gap-analysis.md), then get a focused spec under `docs/specs/`.
+No active future candidates are currently scheduled. New work should first pass the personal-tool scope filters in [gap-analysis.md](gap-analysis.md), then get a focused spec under `docs/specs/`.
 
 Explicitly out of the current plan unless repeated real usage justifies reopening:
 

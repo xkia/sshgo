@@ -3,9 +3,9 @@
 ## Metadata
 
 - slug: sftp-batch-mode-hardening
-- status: in_progress
+- status: approved
 - owner: PM/Architect/Engineer
-- related_roadmap: docs/roadmap.md#future-candidates
+- related_roadmap: docs/roadmap.md#2026-07
 - related_docs:
   - docs/gap-analysis.md
 - related_specs:
@@ -17,9 +17,9 @@
 
 Before this hardening, direct and tunnel SFTP transfers used Expect to open an interactive `sftp>` session, send a single `put` or `get` command, then infer failure from a mix of SFTP output and process exit status.
 
-The current implementation now exits non-zero for common failures, but one residual risk remains: some failure detection still depends on OpenSSH `sftp` text output. That output can vary across OpenSSH versions, platforms, or locale settings.
+That reduced common failures, but it left residual risk because some failure detection depended on OpenSSH `sftp` text output. That output can vary across OpenSSH versions, platforms, or locale settings.
 
-This proposal reduces that risk by using OpenSSH `sftp` batch mode for single-file direct/tunnel transfers while keeping Expect responsible for password, passphrase, MFA, and host-key prompts.
+This change reduces that risk by using OpenSSH `sftp` batch mode for single-file direct/tunnel transfers while keeping Expect responsible for password, passphrase, MFA, and host-key prompts.
 
 ## Scope
 
@@ -174,4 +174,4 @@ Output text may still be shown to the user as context, but it should not be requ
 
 - status: reviewed
 - verdict: PASS
-- notes: Implementation is in progress on `feature/sftp-batch-mode-hardening`; scope remains limited to direct/tunnel single-file SFTP hardening.
+- notes: Implementation is complete; scope remains limited to direct/tunnel single-file SFTP hardening. Unit and command-behavior tests cover batch lifecycle, exit status handling, dry-run preview, and the `sftp_ssh_wrapper.py` BatchMode override. Real password/passphrase/MFA/tunnel smoke remains recommended when changing this path.
