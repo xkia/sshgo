@@ -1,5 +1,7 @@
 import json
 import os
+import pty
+import select
 import signal
 import subprocess
 import tempfile
@@ -74,6 +76,29 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             self.assertEqual(env["SSHGO_MFA_SECRET"], "JBSWY3DPEHPK3PXP")
             self.assertEqual(env["SSHGO_JUMPER_MFA_SECRET"], "JBSWY3DPEHPK3PXP")
 
+    def test_expect_handoff_env_forces_utf8_locale(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            old_env = {
+                key: os.environ.get(key)
+                for key in ("LANG", "LC_ALL", "LC_CTYPE")
+            }
+            os.environ["LANG"] = "C"
+            os.environ["LC_ALL"] = "C"
+            os.environ["LC_CTYPE"] = "C"
+            try:
+                env = manager._env_for_secret_values({})
+            finally:
+                for key, value in old_env.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+        self.assertIn("UTF", env["LANG"].upper())
+        self.assertIn("UTF", env["LC_ALL"].upper())
+        self.assertIn("UTF", env["LC_CTYPE"].upper())
+
     def test_login_exp_supports_shell_and_tunnel_jump_modes(self):
         with open("login.exp", "r", encoding="utf-8") as f:
             script = f.read()
@@ -90,6 +115,15 @@ class ConnectionAuthAuditTests(unittest.TestCase):
         self.assertIn("\"-tunnel-proxy-command\" { set tunnel_proxy_command $value }", script)
         self.assertIn("\"-print-command\" { set print_command $value }", script)
         self.assertIn("ProxyCommand=$custom_proxy_command", script)
+
+    def test_expect_scripts_configure_utf8_channels(self):
+        for path in ("login.exp", "sftp_login.exp", "relay_transfer.exp"):
+            with self.subTest(path=path):
+                with open(path, "r", encoding="utf-8") as f:
+                    script = f.read()
+                self.assertIn("encoding system utf-8", script)
+                self.assertIn("configure_utf8_channel stdin", script)
+                self.assertIn("configure_utf8_channel $spawn_id", script)
 
     def test_sftp_exp_supports_custom_proxy_command(self):
         with open("sftp_login.exp", "r", encoding="utf-8") as f:
@@ -924,6 +958,19 @@ exit 0
         )
         self.assertFalse(download.sftp_meta["batch_exists_after"])
 
+    def test_sftp_exp_writes_utf8_paths_to_batch(self):
+        result = self._run_sftp_with_fake_binary(
+            "success",
+            local_path="./测试文件.zip",
+            remote_path="/remote/测试文件.zip",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            result.sftp_meta["batch_content"],
+            'put "./测试文件.zip" "/remote/测试文件.zip"\n',
+        )
+
     def test_sftp_exp_removes_stale_batch_files_before_transfer(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             stale_path = os.path.join(temp_dir, "sshgo-sftp-stale.batch")
@@ -1022,6 +1069,79 @@ exit 0
         self.assertFalse(result.sftp_meta["has_wrapper"])
         self.assertEqual(result.sftp_meta["batch_path"], "")
         self.assertFalse(result.sftp_meta["batch_exists_after"])
+
+    def test_sftp_exp_interactive_mode_preserves_utf8_user_input(self):
+        command = "put ./测试文件.zip /remote/测试文件.zip"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fake_sftp = os.path.join(temp_dir, "sftp")
+            meta_path = os.path.join(temp_dir, "meta.json")
+            with open(fake_sftp, "w", encoding="utf-8") as f:
+                f.write(
+                    """#!/bin/sh
+printf 'sftp> '
+IFS= read -r command
+python3 - "$SSHGO_FAKE_SFTP_META" "$command" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    json.dump({"interactive_command": sys.argv[2]}, f, ensure_ascii=False)
+PY
+exit 0
+"""
+                )
+            os.chmod(fake_sftp, 0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = temp_dir + os.pathsep + env.get("PATH", "")
+            env["SSHGO_FAKE_SFTP_META"] = meta_path
+            master_fd, slave_fd = pty.openpty()
+            proc = subprocess.Popen(
+                [
+                    "./sftp_login.exp",
+                    "-h",
+                    "target.internal",
+                    "-u",
+                    "targetuser",
+                    "-action",
+                    "interactive",
+                ],
+                cwd=os.getcwd(),
+                env=env,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                close_fds=True,
+            )
+            os.close(slave_fd)
+            output = b""
+            try:
+                deadline = time.time() + 5
+                while b"sftp> " not in output and time.time() < deadline:
+                    ready, _, _ = select.select([master_fd], [], [], 0.1)
+                    if master_fd not in ready:
+                        continue
+                    try:
+                        chunk = os.read(master_fd, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    output += chunk
+
+                self.assertIn(b"sftp> ", output)
+                os.write(master_fd, (command + "\n").encode("utf-8"))
+                returncode = proc.wait(timeout=5)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                os.close(master_fd)
+
+            self.assertEqual(returncode, 0, output.decode("utf-8", "replace"))
+            with open(meta_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+            self.assertEqual(metadata["interactive_command"], command)
 
     def test_sftp_exp_interactive_mode_handles_auth_prompts(self):
         cases = [

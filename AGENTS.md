@@ -43,7 +43,7 @@ This file provides repository guidance for coding agents and maintainers working
 | File | Responsibility |
 |------|---------------|
 | `sshgo.py` | Entry point: arg parsing, config path resolution, dispatches to TUI or shortcut commands |
-| `sshgo.sh` | Thin shell wrapper that `cd`s to script dir and invokes `python3 -B sshgo.py` |
+| `sshgo.sh` | Thin shell wrapper that resolves `sshgo.py` by script path while preserving the caller's current working directory |
 | `host_manager.py` | `HostManager` class — owns host/group domain behavior: stable node ID assignment, explicit node ID migration persistence, credential encryption/decryption, CRUD, config validation delegation, SSH/file-transfer command planning, audit start events, and Expect handoff |
 | `host_tree.py` | Pure host/group tree helpers — traversal, lookup, replacement, parent/index lookup, potential parent listing, node ID assignment, and runtime parent-link rebuilding |
 | `config_store.py` | `ConfigStore` plus JSONC parser — reads `hosts.json`, fingerprints loaded files, writes JSON atomically with optional stale-write detection, rotates/list/restores backups, and preserves JSONC comments/trailing-comma read support |

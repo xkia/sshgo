@@ -2,6 +2,17 @@
 
 # Unified SSH Login Script for sshgo
 
+encoding system utf-8
+
+proc configure_utf8_channel {channel} {
+    catch {fconfigure $channel -encoding utf-8}
+}
+
+configure_utf8_channel stdin
+configure_utf8_channel stdout
+configure_utf8_channel stderr
+catch {configure_utf8_channel $user_spawn_id}
+
 # Default values
 set host ""
 set user ""
@@ -22,7 +33,7 @@ set tunnel_proxy_command ""
 set jump_mfa_used 0
 set connection_stage "direct"
 set host_key_checking "accept-new"
-set has_tty [expr {![catch {exec sh -c {test -t 0}}]}]
+set has_tty [expr {![catch {stty size}]}]
 
 # Argument parser
 for {set i 0} {$i < $argc} {incr i} {
@@ -212,6 +223,7 @@ if {$jumper != "" && $jump_mode == "shell"} {
 # Temporarily disable logging to hide the spawn command itself
 log_user 0
 spawn {*}$cmd
+configure_utf8_channel $spawn_id
 # Re-enable logging to show the user the remote shell
 log_user 1
 

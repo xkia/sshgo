@@ -1,6 +1,5 @@
 #!/bin/bash
 
-cd "`dirname $0`"
-BASE_HOME=`pwd`
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
 
-python3 -B ./sshgo.py "$@"
+exec python3 -B "$SCRIPT_DIR/sshgo.py" "$@"

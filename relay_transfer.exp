@@ -3,6 +3,17 @@
 # Relay file transfer script for sshgo. This is not SFTP: files are copied
 # through a temporary path on the jump host.
 
+encoding system utf-8
+
+proc configure_utf8_channel {channel} {
+    catch {fconfigure $channel -encoding utf-8}
+}
+
+configure_utf8_channel stdin
+configure_utf8_channel stdout
+configure_utf8_channel stderr
+catch {configure_utf8_channel $user_spawn_id}
+
 set host ""
 set user ""
 set port "22"
@@ -22,7 +33,7 @@ set remote_path ""
 set temp_path ""
 set print_command ""
 set jumper_proxy_command ""
-set has_tty [expr {![catch {exec sh -c {test -t 0}}]}]
+set has_tty [expr {![catch {stty size}]}]
 
 for {set i 0} {$i < $argc} {incr i} {
     set arg [lindex $argv $i]
@@ -207,6 +218,7 @@ proc expect_auth_until_eof {stage {fatal 1}} {
 proc run_local_command {cmd stage {fatal 1}} {
     log_user 0
     spawn {*}$cmd
+    configure_utf8_channel $spawn_id
     log_user 1
     return [expect_auth_until_eof $stage $fatal]
 }
@@ -231,6 +243,7 @@ proc run_jump_command {command expects_target_auth fatal} {
 
     log_user 0
     spawn {*}$cmd
+    configure_utf8_channel $spawn_id
     log_user 1
 
     set stage "jump"

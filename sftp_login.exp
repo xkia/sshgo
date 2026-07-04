@@ -2,6 +2,17 @@
 
 # SFTP File Transfer Script for sshgo
 
+encoding system utf-8
+
+proc configure_utf8_channel {channel} {
+    catch {fconfigure $channel -encoding utf-8}
+}
+
+configure_utf8_channel stdin
+configure_utf8_channel stdout
+configure_utf8_channel stderr
+catch {configure_utf8_channel $user_spawn_id}
+
 # Default values
 set host ""
 set user ""
@@ -20,7 +31,7 @@ set remote_path ""
 set print_command ""
 set custom_proxy_command ""
 set tunnel_proxy_command ""
-set has_tty [expr {![catch {exec sh -c {test -t 0}}]}]
+set has_tty [expr {![catch {stty size}]}]
 set batch_path ""
 set stale_batch_seconds 86400
 set interactive_prompt_seen 0
@@ -219,6 +230,7 @@ proc create_batch_file {} {
             continue
         }
         if {[catch {
+            fconfigure $ch -encoding utf-8 -translation lf
             puts $ch $command
             close $ch
             file attributes $candidate -permissions 0600
@@ -324,6 +336,7 @@ if {[catch {spawn {*}$cmd} spawn_error]} {
     log_user 1
     fail "\nError executing sftp: $spawn_error\n" 1
 }
+configure_utf8_channel $spawn_id
 log_user 1
 
 if {$action == "interactive"} {
