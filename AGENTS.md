@@ -110,9 +110,10 @@ This file provides repository guidance for coding agents and maintainers working
 - **Process handoff**: Shortcut connections and transfers replace Python via `os.execve()`. The Python manager records start/exec failure events only; it does not supervise the live SSH/SFTP session.
 - **Audit logging**: JSONL files in `~/.sshgo/`. History and audit-simple are always written for SSH and SFTP starts; audit-full requires `--audit-full` flag. New records include `node_id`, `port`, and `endpoint`. Because of the execve handoff, final duration and exit code are not available in current audit records.
 - **Config saves**: `ConfigStore` writes JSON atomically and keeps best-effort backups at `hosts.json.bak`, `hosts.json.bak.1`, and `hosts.json.bak.2`; `HostManager` delegates save/backup operations to it. `HostManager` saves pass the loaded file fingerprint so a stale instance fails instead of silently overwriting a newer save. This is conflict detection, not automatic merge.
+- **SSH agent scope**: Global `config.use_ssh_agent` applies to direct hosts and tunnel-mode targets. In `ssh_jump_mode=shell` and `transfer_jump_mode=relay`, target authentication happens from the jump-host environment, so target hosts must use `password`, `id_file`, or explicit `use_ssh_agent=true`.
 - **Placeholders**: `config.placeholders` is resolved after JSONC parsing only for `host`, `user`, `id_file`, `proxy_command`, and `relay_temp_dir`; do not apply it to secrets or identity fields. `proxy_command` is executed locally by OpenSSH and must be treated as trusted user configuration.
 - **i18n**: All UI strings go through `i18n.get(key)`. New strings must be added to both `en` and `zh` dicts in `i18n.py`.
-- **Screen management**: TUI uses `curses` and must call `restore_screen()` on exit (handled via `finally` block in `sshgo.py`).
+- **Screen management**: TUI uses `curses` and must call `restore_screen()` on exit (handled via `finally` block in `sshgo.py`). `config.tui_screen_policy=isolated` is the default and must not clear scrollback; `private` is opt-in and clears visible screen plus scrollback after curses teardown.
 - **JSONC support**: `hosts.json` supports `//` and `#` comments plus trailing commas via `config_store.parse_jsonc()`.
 
 ## Verification Commands

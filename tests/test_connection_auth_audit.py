@@ -793,11 +793,20 @@ exit 0
                 start_new_session=True,
             )
             try:
-                for _ in range(50):
+                for _ in range(200):
                     if os.path.exists(meta_path):
                         break
+                    if proc.poll() is not None:
+                        break
                     time.sleep(0.05)
-                self.assertTrue(os.path.exists(meta_path))
+                if not os.path.exists(meta_path):
+                    stdout, stderr = proc.communicate(timeout=5)
+                    self.fail(
+                        "fake sftp did not write metadata; "
+                        f"returncode={proc.returncode}; "
+                        f"stdout={stdout}; stderr={stderr}; "
+                        f"files={os.listdir(temp_dir)}"
+                    )
                 with open(meta_path, "r", encoding="utf-8") as f:
                     metadata = json.load(f)
                 self.assertTrue(metadata["exists"])

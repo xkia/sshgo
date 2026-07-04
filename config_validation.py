@@ -11,7 +11,9 @@ SSH_JUMP_MODES = frozenset({"shell", "tunnel"})
 TRANSFER_JUMP_MODES = frozenset({"tunnel", "relay"})
 DEFAULT_SSH_JUMP_MODE = "shell"
 DEFAULT_TRANSFER_JUMP_MODE = "tunnel"
+DEFAULT_TUI_SCREEN_POLICY = "isolated"
 DEFAULT_RELAY_TEMP_DIR = "/tmp"
+TUI_SCREEN_POLICIES = frozenset({"isolated", "private"})
 PLACEHOLDER_RE = re.compile(r"{{([A-Za-z_][A-Za-z0-9_]*)}}")
 PLACEHOLDER_TOKEN_RE = re.compile(r"{{([^{}]*)}}")
 PLACEHOLDER_BRACE_RE = re.compile(r"{{|}}")
@@ -32,6 +34,7 @@ CONFIG_STRING_FIELDS = frozenset({
     "language",
     "default_ssh_jump_mode",
     "default_transfer_jump_mode",
+    "tui_screen_policy",
     "relay_temp_dir",
 })
 CONFIG_OPTIONAL_STRING_FIELDS = frozenset({"data_dir", "encryption_salt"})
@@ -67,6 +70,7 @@ DEFAULT_CONFIG = {
     "recent_expanded": False,
     "default_ssh_jump_mode": DEFAULT_SSH_JUMP_MODE,
     "default_transfer_jump_mode": DEFAULT_TRANSFER_JUMP_MODE,
+    "tui_screen_policy": DEFAULT_TUI_SCREEN_POLICY,
     "relay_temp_dir": DEFAULT_RELAY_TEMP_DIR,
     "placeholders": {},
 }
@@ -126,6 +130,18 @@ def validate_hosts_config(data: dict) -> list[str]:
             i18n.get(
                 "validate_invalid_transfer_jump_mode",
                 mode=default_transfer_jump_mode,
+            )
+        )
+
+    tui_screen_policy = config.get("tui_screen_policy")
+    if (
+        not isinstance(tui_screen_policy, str)
+        or tui_screen_policy not in TUI_SCREEN_POLICIES
+    ):
+        errors.append(
+            i18n.get(
+                "validate_invalid_tui_screen_policy",
+                policy=tui_screen_policy,
             )
         )
 
@@ -218,6 +234,18 @@ def _validate_port(port):
     return 1 <= value <= 65535
 
 
+def _effective_nested_mode(node, field, parent_mode, config, config_field, default):
+    return node.get(field) or parent_mode or config.get(config_field, default)
+
+
+def _has_host_local_auth(node):
+    return bool(
+        node.get("password")
+        or node.get("id_file")
+        or bool(node.get("use_ssh_agent"))
+    )
+
+
 def _validate_placeholders(raw_placeholders, errors):
     if raw_placeholders is None:
         return {}
@@ -281,6 +309,8 @@ def _validate_hosts_nodes(
     seen_ids=None,
     parent_is_host=False,
     host_parent_depth=0,
+    parent_ssh_jump_mode=None,
+    parent_transfer_jump_mode=None,
 ):
     if config is None:
         config = {}
@@ -381,6 +411,23 @@ def _validate_hosts_nodes(
             ):
                 errors.append(i18n.get("validate_relay_requires_jump"))
 
+            effective_ssh_jump_mode = _effective_nested_mode(
+                node,
+                "ssh_jump_mode",
+                parent_ssh_jump_mode,
+                config,
+                "default_ssh_jump_mode",
+                DEFAULT_SSH_JUMP_MODE,
+            )
+            effective_transfer_jump_mode = _effective_nested_mode(
+                node,
+                "transfer_jump_mode",
+                parent_transfer_jump_mode,
+                config,
+                "default_transfer_jump_mode",
+                DEFAULT_TRANSFER_JUMP_MODE,
+            )
+
             host_val = _resolve_placeholders_for_validation(
                 node.get("host"),
                 placeholders,
@@ -403,7 +450,21 @@ def _validate_hosts_nodes(
                 if node.get("use_ssh_agent") is not None
                 else bool(config.get("use_ssh_agent", False))
             )
-            if not node.get("password") and not node.get("id_file") and not uses_agent:
+            jump_target_agent_only_modes = []
+            if parent_is_host and uses_agent and not _has_host_local_auth(node):
+                if effective_ssh_jump_mode == "shell":
+                    jump_target_agent_only_modes.append("ssh_jump_mode=shell")
+                if effective_transfer_jump_mode == "relay":
+                    jump_target_agent_only_modes.append("transfer_jump_mode=relay")
+
+            if jump_target_agent_only_modes:
+                errors.append(
+                    i18n.get(
+                        "validate_missing_jump_target_auth",
+                        modes=", ".join(jump_target_agent_only_modes),
+                    )
+                )
+            elif not node.get("password") and not node.get("id_file") and not uses_agent:
                 errors.append(i18n.get("validate_missing_auth"))
 
         if node_type == "group" or node.get("children"):
@@ -425,5 +486,15 @@ def _validate_hosts_nodes(
                             host_parent_depth + 1
                             if node_type == "host"
                             else host_parent_depth
+                        ),
+                        parent_ssh_jump_mode=(
+                            node.get("ssh_jump_mode")
+                            if node_type == "host"
+                            else parent_ssh_jump_mode
+                        ),
+                        parent_transfer_jump_mode=(
+                            node.get("transfer_jump_mode")
+                            if node_type == "host"
+                            else parent_transfer_jump_mode
                         ),
                     )

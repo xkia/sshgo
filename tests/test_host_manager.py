@@ -6,6 +6,7 @@ import unittest
 from contextlib import redirect_stderr
 from io import StringIO
 
+from config_store import ConfigStore, ConfigWriteConflictError
 from host_manager import HostManager
 
 
@@ -139,6 +140,239 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
             with open(path, "r", encoding="utf-8") as f:
                 saved = json.load(f)
             self.assertEqual([node["name"] for node in saved["hosts"]], ["current"])
+
+    def test_write_conflict_reload_discards_failed_in_memory_mutation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "hosts.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "config": {"import_ssh_config": False},
+                        "hosts": [],
+                    },
+                    f,
+                )
+
+            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            current_data = {
+                "config": {"import_ssh_config": False},
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "current",
+                        "host": "current.example.com",
+                        "user": "deploy",
+                    }
+                ],
+            }
+
+            def conflicting_write(_data, expected_fingerprint=None, check_conflict=False):
+                ConfigStore(path).write_json(current_data)
+                raise ConfigWriteConflictError(path)
+
+            manager.store.write_json = conflicting_write
+
+            with redirect_stderr(StringIO()):
+                result = manager.add_node(
+                    {
+                        "type": "host",
+                        "name": "unsaved",
+                        "host": "unsaved.example.com",
+                        "user": "deploy",
+                    },
+                    None,
+                )
+
+            self.assertFalse(result)
+            self.assertIsNone(manager.find_host_by_alias("unsaved"))
+            self.assertIsNotNone(manager.find_host_by_alias("current"))
+
+            with open(path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertEqual([node["name"] for node in saved["hosts"]], ["current"])
+
+    def test_write_conflict_reload_refreshes_runtime_state_from_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "hosts.json")
+            new_data_dir = os.path.join(temp_dir, "new-data")
+            old_home = os.environ.get("HOME")
+            old_data_dir = os.environ.pop("SSHGO_DATA_DIR", None)
+            os.environ["HOME"] = temp_dir
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "config": {"import_ssh_config": False},
+                            "hosts": [],
+                        },
+                        f,
+                    )
+
+                manager = HostManager(path)
+                current_data = {
+                    "config": {
+                        "import_ssh_config": False,
+                        "data_dir": new_data_dir,
+                        "audit_full": True,
+                    },
+                    "hosts": [
+                        {
+                            "type": "host",
+                            "name": "current",
+                            "host": "current.example.com",
+                            "user": "deploy",
+                        }
+                    ],
+                }
+
+                def conflicting_write(
+                    _data,
+                    expected_fingerprint=None,
+                    check_conflict=False,
+                ):
+                    ConfigStore(path).write_json(current_data)
+                    raise ConfigWriteConflictError(path)
+
+                manager.store.write_json = conflicting_write
+
+                with redirect_stderr(StringIO()):
+                    result = manager.add_node(
+                        {
+                            "type": "host",
+                            "name": "unsaved",
+                            "host": "unsaved.example.com",
+                            "user": "deploy",
+                        },
+                        None,
+                    )
+
+                self.assertFalse(result)
+                self.assertEqual(manager.audit.data_dir, new_data_dir)
+                self.assertTrue(manager._audit_full)
+            finally:
+                if old_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = old_home
+                if old_data_dir is None:
+                    os.environ.pop("SSHGO_DATA_DIR", None)
+                else:
+                    os.environ["SSHGO_DATA_DIR"] = old_data_dir
+
+    def test_write_conflict_reload_preserves_runtime_overrides(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "hosts.json")
+            override_dir = os.path.join(temp_dir, "override-data")
+            config_dir = os.path.join(temp_dir, "config-data")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "config": {"import_ssh_config": False},
+                        "hosts": [],
+                    },
+                    f,
+                )
+
+            manager = HostManager(path, data_dir=override_dir)
+            manager.enable_full_audit()
+            current_data = {
+                "config": {
+                    "import_ssh_config": False,
+                    "data_dir": config_dir,
+                    "audit_full": False,
+                },
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "current",
+                        "host": "current.example.com",
+                        "user": "deploy",
+                    }
+                ],
+            }
+
+            def conflicting_write(_data, expected_fingerprint=None, check_conflict=False):
+                ConfigStore(path).write_json(current_data)
+                raise ConfigWriteConflictError(path)
+
+            manager.store.write_json = conflicting_write
+
+            with redirect_stderr(StringIO()):
+                result = manager.add_node(
+                    {
+                        "type": "host",
+                        "name": "unsaved",
+                        "host": "unsaved.example.com",
+                        "user": "deploy",
+                    },
+                    None,
+                )
+
+            self.assertFalse(result)
+            self.assertEqual(manager.audit.data_dir, override_dir)
+            self.assertTrue(manager._audit_full)
+
+    def test_write_conflict_reload_preserves_env_data_dir_override(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "hosts.json")
+            override_dir = os.path.join(temp_dir, "env-data")
+            config_dir = os.path.join(temp_dir, "config-data")
+            old_data_dir = os.environ.get("SSHGO_DATA_DIR")
+            os.environ["SSHGO_DATA_DIR"] = override_dir
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "config": {"import_ssh_config": False},
+                            "hosts": [],
+                        },
+                        f,
+                    )
+
+                manager = HostManager(path)
+                current_data = {
+                    "config": {
+                        "import_ssh_config": False,
+                        "data_dir": config_dir,
+                    },
+                    "hosts": [
+                        {
+                            "type": "host",
+                            "name": "current",
+                            "host": "current.example.com",
+                            "user": "deploy",
+                        }
+                    ],
+                }
+
+                def conflicting_write(
+                    _data,
+                    expected_fingerprint=None,
+                    check_conflict=False,
+                ):
+                    ConfigStore(path).write_json(current_data)
+                    raise ConfigWriteConflictError(path)
+
+                manager.store.write_json = conflicting_write
+
+                with redirect_stderr(StringIO()):
+                    result = manager.add_node(
+                        {
+                            "type": "host",
+                            "name": "unsaved",
+                            "host": "unsaved.example.com",
+                            "user": "deploy",
+                        },
+                        None,
+                    )
+
+                self.assertFalse(result)
+                self.assertEqual(manager.audit.data_dir, override_dir)
+            finally:
+                if old_data_dir is None:
+                    os.environ.pop("SSHGO_DATA_DIR", None)
+                else:
+                    os.environ["SSHGO_DATA_DIR"] = old_data_dir
 
     def test_validate_config_does_not_refresh_stale_save_fingerprint(self):
         with tempfile.TemporaryDirectory() as temp_dir:

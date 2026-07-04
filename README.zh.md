@@ -157,7 +157,7 @@ sshgo
     打印解析后的 sshgo 移交命令但不发起连接。不会打印密码或 MFA secret。
 
 -   `sshgo --audit-full`
-    启用完整审计日志记录。当前完整记录可包含命令和跳转链上下文；由于 Python 通过 `execve` 移交给 Expect，不记录最终时长和退出码.
+    启用完整审计日志记录。当前完整记录可包含命令、路径和跳转链上下文, 其中可能包含敏感参数；由于 Python 通过 `execve` 移交给 Expect，不记录最终时长和退出码.
 
 -   `sshgo --edit`
     直接以编辑模式打开 TUI。
@@ -221,6 +221,7 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
     "strict_host_key_checking": true,
     "show_recent": true,
     "recent_expanded": false,
+    "tui_screen_policy": "isolated",
     "default_ssh_jump_mode": "shell",
     "default_transfer_jump_mode": "tunnel",
     "relay_temp_dir": "/tmp",
@@ -244,12 +245,13 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 
 - `import_ssh_config`: 从 `~/.ssh/config` 导入只读主机。
 - `show_detail_pane`: 显示或隐藏 TUI 主机详情预览窗口。
-- `audit_full`: 默认持久化完整审计记录, 等同于始终使用 `--audit-full`。
-- `use_ssh_agent`: 当 `SSH_AUTH_SOCK` 存在时全局使用 SSH agent 认证；主机节点可用自己的 `use_ssh_agent` 覆盖。
+- `audit_full`: 默认持久化完整审计记录, 等同于始终使用 `--audit-full`。完整记录可包含命令/路径上下文, 其中可能包含敏感参数。
+- `use_ssh_agent`: 当 `SSH_AUTH_SOCK` 存在时全局使用 SSH agent 认证；主机节点可用自己的 `use_ssh_agent` 覆盖。使用 `ssh_jump_mode: "shell"` 或 `transfer_jump_mode: "relay"` 的嵌套目标不能依赖全局设置, 因为目标认证运行在跳板机环境；这些模式下请为目标显式配置 `password`、`id_file` 或 `use_ssh_agent: true`。
 - `data_dir`: history 和 audit 日志的运行时数据目录。
 - `strict_host_key_checking`: `true` 使用 OpenSSH `accept-new`；`false` 恢复旧的宽松模式并使用 `UserKnownHostsFile=/dev/null`。
 - `show_recent`: 显示或隐藏 TUI Recent 分组。
 - `recent_expanded`: 存储 TUI Recent 分组是否展开。
+- `tui_screen_policy`: `isolated` 使用终端 alternate screen 且不清理滚屏历史；`private` 会在 TUI 退出后尝试清理当前可见屏幕和滚屏历史。
 - `default_ssh_jump_mode`: 嵌套 SSH 的默认模式, 可选 `shell` 或 `tunnel`。
 - `default_transfer_jump_mode`: 嵌套文件传输的默认模式, 可选 `tunnel` 或 `relay`。
 - `relay_temp_dir`: `transfer_jump_mode: "relay"` 使用的跳板机绝对临时目录。

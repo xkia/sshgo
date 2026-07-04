@@ -27,6 +27,7 @@
 | [config-validation-extraction.md](specs/config-validation-extraction.md) | Isolated parsed-config validation helpers with HostManager compatibility export |
 | [final-risk-hardening.md](specs/final-risk-hardening.md) | Stale config write guard and editable-only TUI parent selection |
 | [tui-style-system.md](specs/tui-style-system.md) | Shared TUI layout, form, message, and detail templates |
+| [terminal-screen-policy.md](specs/terminal-screen-policy.md) | TUI alternate-screen isolation and optional private scrollback cleanup |
 | [tui-form-interaction-polish.md](specs/tui-form-interaction-polish.md) | Add/Edit/Delete form grouping, in-form validation, and safer delete confirmation |
 | [tui-input-editing-polish.md](specs/tui-input-editing-polish.md) | Cursor-aware text/password editing for TUI forms |
 | [command-planning-extraction.md](specs/command-planning-extraction.md) | Pure SSH/SFTP/relay command plan objects for safer launch testing |

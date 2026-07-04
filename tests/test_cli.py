@@ -321,23 +321,121 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
             real_which = sshgo_module.shutil.which
+            real_terminal_supports_alternate_screen = (
+                sshgo_module.Tui.terminal_supports_alternate_screen
+            )
             sshgo_module.shutil.which = lambda name: "/usr/bin/expect"
+            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
+                lambda: True
+            )
             try:
                 stdout = StringIO()
                 with redirect_stdout(stdout):
                     code = sshgo_module.run_doctor(manager, manager.json_path)
             finally:
                 sshgo_module.shutil.which = real_which
+                sshgo_module.Tui.terminal_supports_alternate_screen = (
+                    real_terminal_supports_alternate_screen
+                )
 
             self.assertEqual(code, 0)
             output = stdout.getvalue()
             self.assertIn("[PASS] Config validation", output)
+            self.assertIn("[PASS] Alternate screen", output)
+            self.assertIn("[PASS] TUI screen policy", output)
             self.assertIn("[PASS] expect", output)
             self.assertIn("[PASS] ssh", output)
             self.assertIn("[PASS] sftp", output)
             self.assertIn("[PASS] scp", output)
             self.assertIn("sftp_ssh_wrapper.py", output)
             self.assertIn("Runtime data dir", output)
+
+    def test_doctor_warns_when_alternate_screen_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            real_which = sshgo_module.shutil.which
+            real_terminal_supports_alternate_screen = (
+                sshgo_module.Tui.terminal_supports_alternate_screen
+            )
+            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
+            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
+                lambda: False
+            )
+            try:
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = sshgo_module.run_doctor(manager, manager.json_path)
+            finally:
+                sshgo_module.shutil.which = real_which
+                sshgo_module.Tui.terminal_supports_alternate_screen = (
+                    real_terminal_supports_alternate_screen
+                )
+
+            self.assertEqual(code, 0)
+            output = stdout.getvalue()
+            self.assertIn("[WARN] Alternate screen", output)
+            self.assertIn("TUI output may remain in terminal history", output)
+
+    def test_doctor_warns_for_invalid_tui_screen_policy_without_crashing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            manager.config["tui_screen_policy"] = []
+            real_which = sshgo_module.shutil.which
+            real_terminal_supports_alternate_screen = (
+                sshgo_module.Tui.terminal_supports_alternate_screen
+            )
+            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
+            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
+                lambda: True
+            )
+            try:
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = sshgo_module.run_doctor(manager, manager.json_path)
+            finally:
+                sshgo_module.shutil.which = real_which
+                sshgo_module.Tui.terminal_supports_alternate_screen = (
+                    real_terminal_supports_alternate_screen
+                )
+
+            self.assertEqual(code, 0)
+            output = stdout.getvalue()
+            self.assertIn("[WARN] TUI screen policy", output)
+            self.assertIn("invalid value: []", output)
+
+    def test_doctor_for_path_handles_parseable_invalid_tui_screen_policy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "hosts.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"config": {"tui_screen_policy": []}, "hosts": []}, f)
+
+            real_which = sshgo_module.shutil.which
+            real_terminal_supports_alternate_screen = (
+                sshgo_module.Tui.terminal_supports_alternate_screen
+            )
+            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
+            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
+                lambda: True
+            )
+            try:
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = sshgo_module.run_doctor_for_path(
+                        path,
+                        data_dir=os.path.join(temp_dir, "data"),
+                    )
+            finally:
+                sshgo_module.shutil.which = real_which
+                sshgo_module.Tui.terminal_supports_alternate_screen = (
+                    real_terminal_supports_alternate_screen
+                )
+
+            self.assertEqual(code, 1)
+            output = stdout.getvalue()
+            self.assertIn("[FAIL] Config validation", output)
+            self.assertIn("config.tui_screen_policy must be a string", output)
+            self.assertIn("[WARN] TUI screen policy", output)
+            self.assertIn("invalid value: []", output)
 
     def test_doctor_fails_when_openssh_transfer_tool_is_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:

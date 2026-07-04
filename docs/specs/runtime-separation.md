@@ -22,7 +22,7 @@
 因此当前审计记录语义为：
 
 - `history.jsonl` 和 `audit-simple.jsonl`：记录连接启动事件。
-- `audit-full.jsonl`：在 full 模式下额外记录命令、跳转链等 Python 启动时已知上下文。
+- `audit-full.jsonl`：在 full 模式下额外记录命令、路径、跳转链等 Python 启动时已知上下文；这些上下文可能包含敏感参数。
 - 当前不记录最终登录成功/失败、会话耗时或远端退出码，除非 Expect 启动失败。
 
 ## 背景与范围（PM）
@@ -34,7 +34,7 @@ sshgo 当前将所有运行时行为（登录历史、连接状态）与配置�
 1. **配置文件膨胀**：`hosts.json` 随时间积累大量历史数据
 2. **Git 同步噪音**：每次登录产生 diff，掩盖了真正的主机配置变更
 3. **并发写入风险**：多终端同时使用 sshgo 可能导致 `hosts.json` 损坏
-4. **缺乏审计能力**：无法追溯"谁在何时连接了哪台机器"，运维合规性不足
+4. **缺乏启动审计线索**：无法记录"谁在何时发起了到哪台机器的连接", 不利于个人排查和轻量审计
 
 ### 需求概述
 
@@ -173,7 +173,7 @@ class AuditLogger:
 
 ### 配置扩展（hosts.json config 节）
 
-新增三个可选字段（全部向后兼容，有默认值）：
+新增可选字段（全部向后兼容，有默认值）：
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -205,27 +205,35 @@ class AuditLogger:
 
 #### 1. SSH Agent 集成路径
 
-在 `host_manager.py` 的连接构建逻辑中：
+当前 `host_manager.py` 的连接构建逻辑区分本机认证和跳板机环境认证：
 
 ```python
 def _should_use_ssh_agent(self, node):
-    """检查 host 级 -> 全局 config 级的 use_ssh_agent 配置"""
     if node.get("use_ssh_agent") is not None:
         return bool(node.get("use_ssh_agent"))
     return self.config.get("use_ssh_agent", False)
 
+def _uses_target_agent_for_mode(self, node, mode):
+    if mode in ("shell", "relay"):
+        return bool(node.get("use_ssh_agent"))
+    return self._uses_ssh_agent(node)
+```
+
+直接连接和 `tunnel` 模式目标在本机 OpenSSH 进程中认证，因此可继承全局 `config.use_ssh_agent=true`。`shell` 和 `relay` 模式的目标认证发生在跳板机环境中，不能自动继承本机全局 agent；目标主机必须显式配置 `password`、`id_file` 或 `use_ssh_agent=true`。其中目标 `id_file` 和显式 `use_ssh_agent=true` 都按跳板机环境解释，sshgo 不负责转发本机 agent。
+
+```python
 def execute_interactive_connection(self, node, remote_command=None):
     ...
-    if self._should_use_ssh_agent(node) and os.environ.get("SSH_AUTH_SOCK"):
+    if self._uses_target_agent_for_mode(node, ssh_mode):
         # 使用 agent: 不传 -tp (target password)、不传 -mfa
-        # login.exp 中 SSH 命令自动使用已加载的 agent 密钥
+        # direct/tunnel 使用本机 agent; shell target 使用跳板机环境中的 agent
         pass
     else:
         # 原有逻辑：传 -tp、-mfa 等
         ...
 ```
 
-SSH 连接本身：当 `SSH_AUTH_SOCK` 存在时，OpenSSH 客户端会自动使用本地 agent 进行密钥认证，无需额外 ssh 选项。无需 `-o AddKeysToAgent=yes`（该选项用于远程 agent 转发，非本地认证）。SFTP 同理。
+SSH/SFTP 连接本身：当对应执行环境中 `SSH_AUTH_SOCK` 存在时，OpenSSH 客户端会自动使用 agent 进行密钥认证，无需额外 ssh 选项。无需 `-o AddKeysToAgent=yes`（该选项用于把密钥加入 agent，非本地认证）。
 
 #### 2. 审计记录时机（已被 security-hardening 调整）
 

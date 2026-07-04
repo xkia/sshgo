@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from io import StringIO
 
 import tui as tui_module
 from host_manager import HostManager
@@ -281,6 +282,8 @@ class TuiTests(unittest.TestCase):
             tui = object.__new__(Tui)
             tui.screen = FakeScreen()
             tui._screen_restored = False
+            tui._alternate_screen_supported = False
+            tui.screen_policy = "isolated"
 
             Tui.restore_screen(tui)
             Tui.restore_screen(tui)
@@ -298,6 +301,109 @@ class TuiTests(unittest.TestCase):
             calls,
             [("curs_set", 1), ("nocbreak",), ("echo",), ("endwin",)],
         )
+
+    def test_restore_screen_preserves_alternate_screen_until_endwin(self):
+        class FakeScreen:
+            def __init__(self):
+                self.calls = []
+
+            def keypad(self, value):
+                self.calls.append(("keypad", value))
+
+            def clear(self):
+                self.calls.append(("clear",))
+
+            def refresh(self):
+                self.calls.append(("refresh",))
+
+        calls = []
+        old_curs_set = tui_module.curses.curs_set
+        old_nocbreak = tui_module.curses.nocbreak
+        old_echo = tui_module.curses.echo
+        old_endwin = tui_module.curses.endwin
+        tui_module.curses.curs_set = lambda value: calls.append(("curs_set", value))
+        tui_module.curses.nocbreak = lambda: calls.append(("nocbreak",))
+        tui_module.curses.echo = lambda: calls.append(("echo",))
+        tui_module.curses.endwin = lambda: calls.append(("endwin",))
+        try:
+            tui = object.__new__(Tui)
+            tui.screen = FakeScreen()
+            tui._screen_restored = False
+            tui._alternate_screen_supported = True
+            tui.screen_policy = "isolated"
+
+            Tui.restore_screen(tui)
+        finally:
+            tui_module.curses.curs_set = old_curs_set
+            tui_module.curses.nocbreak = old_nocbreak
+            tui_module.curses.echo = old_echo
+            tui_module.curses.endwin = old_endwin
+
+        self.assertEqual(tui.screen.calls, [("keypad", 0)])
+        self.assertEqual(
+            calls,
+            [("curs_set", 1), ("nocbreak",), ("echo",), ("endwin",)],
+        )
+
+    def test_restore_screen_private_policy_clears_scrollback_after_endwin(self):
+        class FakeScreen:
+            def __init__(self):
+                self.calls = []
+
+            def keypad(self, value):
+                self.calls.append(("keypad", value))
+
+            def clear(self):
+                self.calls.append(("clear",))
+
+            def refresh(self):
+                self.calls.append(("refresh",))
+
+        calls = []
+        stdout = StringIO()
+        old_stdout = tui_module.sys.stdout
+        old_curs_set = tui_module.curses.curs_set
+        old_nocbreak = tui_module.curses.nocbreak
+        old_echo = tui_module.curses.echo
+        old_endwin = tui_module.curses.endwin
+        tui_module.sys.stdout = stdout
+        tui_module.curses.curs_set = lambda value: calls.append(("curs_set", value))
+        tui_module.curses.nocbreak = lambda: calls.append(("nocbreak",))
+        tui_module.curses.echo = lambda: calls.append(("echo",))
+        tui_module.curses.endwin = lambda: calls.append(("endwin",))
+        try:
+            tui = object.__new__(Tui)
+            tui.screen = FakeScreen()
+            tui._screen_restored = False
+            tui._alternate_screen_supported = True
+            tui.screen_policy = "private"
+
+            Tui.restore_screen(tui)
+            Tui.restore_screen(tui)
+        finally:
+            tui_module.sys.stdout = old_stdout
+            tui_module.curses.curs_set = old_curs_set
+            tui_module.curses.nocbreak = old_nocbreak
+            tui_module.curses.echo = old_echo
+            tui_module.curses.endwin = old_endwin
+
+        self.assertEqual(tui.screen.calls, [("keypad", 0)])
+        self.assertEqual(stdout.getvalue(), "\033[H\033[2J\033[3J")
+        self.assertEqual(
+            calls,
+            [("curs_set", 1), ("nocbreak",), ("echo",), ("endwin",)],
+        )
+
+    def test_effective_screen_policy_falls_back_for_invalid_values(self):
+        class FakeManager:
+            def __init__(self, policy):
+                self.config = {"tui_screen_policy": policy}
+
+        tui = object.__new__(Tui)
+        for policy in ([], {}, None, "inline"):
+            with self.subTest(policy=policy):
+                tui.host_manager = FakeManager(policy)
+                self.assertEqual(Tui._effective_screen_policy(tui), "isolated")
 
     def test_theme_uses_terminal_default_color_for_footer_status(self):
         class FakeManager:
@@ -355,6 +461,7 @@ class TuiTests(unittest.TestCase):
         old_nocbreak = tui_module.curses.nocbreak
         old_echo = tui_module.curses.echo
         old_endwin = tui_module.curses.endwin
+        old_terminal_supports_alternate_screen = Tui.terminal_supports_alternate_screen
         tui_module.curses.initscr = lambda: screen
         tui_module.curses.noecho = lambda: calls.append(("noecho",))
         tui_module.curses.cbreak = lambda: calls.append(("cbreak",))
@@ -362,6 +469,7 @@ class TuiTests(unittest.TestCase):
         tui_module.curses.nocbreak = lambda: calls.append(("nocbreak",))
         tui_module.curses.echo = lambda: calls.append(("echo",))
         tui_module.curses.endwin = lambda: calls.append(("endwin",))
+        Tui.terminal_supports_alternate_screen = staticmethod(lambda: False)
         try:
             with self.assertRaisesRegex(RuntimeError, "keypad failed"):
                 Tui(FakeManager())
@@ -373,6 +481,7 @@ class TuiTests(unittest.TestCase):
             tui_module.curses.nocbreak = old_nocbreak
             tui_module.curses.echo = old_echo
             tui_module.curses.endwin = old_endwin
+            Tui.terminal_supports_alternate_screen = old_terminal_supports_alternate_screen
 
         self.assertEqual(
             screen.calls,

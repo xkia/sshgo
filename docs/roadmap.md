@@ -31,6 +31,7 @@
 | Command planning extraction | done | SSH, SFTP, and relay launch data are built through pure command-plan objects with focused tests and no behavior change | [command-planning-extraction](specs/command-planning-extraction.md) |
 | Host tree extraction | done | Pure host-tree traversal, lookup, parent-link rebuilding, and node ID assignment helpers are isolated outside HostManager without behavior change | [host-tree-extraction](specs/host-tree-extraction.md) |
 | TUI style system | done | Main list, forms, messages, and details use one shared TUI template without adding dependencies | [tui-style-system](specs/tui-style-system.md) |
+| Terminal screen policy | done | TUI output is isolated by default, optional private mode can clear scrollback, and doctor reports terminal alternate-screen support | [terminal-screen-policy](specs/terminal-screen-policy.md) |
 | TUI form interaction polish | done | Add/Edit forms use Basic/Auth/Advanced sections; validation stays in-form; delete defaults to Cancel with impact summary | [tui-form-interaction-polish](specs/tui-form-interaction-polish.md) |
 | TUI input editing polish | done | Text/password fields support cursor movement, Home/End, Delete, Ctrl+U clear, and paste-friendly insertion | [tui-input-editing-polish](specs/tui-input-editing-polish.md) |
 | Test suite organization | done | CommandPlan, TUI, audit, validation, CLI, and HostManager CRUD coverage move into focused test modules while keeping unittest discovery unchanged | [test-suite-organization](specs/test-suite-organization.md) |

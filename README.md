@@ -157,7 +157,7 @@ sshgo
     Print the resolved sshgo handoff command without connecting. Passwords and MFA secrets are not printed.
 
 -   `sshgo --audit-full`
-    Enable full audit logging for this session. Current full records can include command and jump-chain context; final duration and exit code are not recorded because Python hands off to Expect with `execve`.
+    Enable full audit logging for this session. Current full records can include command, path, and jump-chain context that may contain sensitive arguments; final duration and exit code are not recorded because Python hands off to Expect with `execve`.
 
 -   `sshgo --edit`
     Open the TUI directly in edit mode.
@@ -221,6 +221,7 @@ Set `SSHGO_DATA_DIR` or `config.data_dir` to use a different runtime data direct
     "strict_host_key_checking": true,
     "show_recent": true,
     "recent_expanded": false,
+    "tui_screen_policy": "isolated",
     "default_ssh_jump_mode": "shell",
     "default_transfer_jump_mode": "tunnel",
     "relay_temp_dir": "/tmp",
@@ -244,12 +245,13 @@ Important `config` fields:
 
 - `import_ssh_config`: Import read-only hosts from `~/.ssh/config`.
 - `show_detail_pane`: Show or hide the TUI host detail preview pane.
-- `audit_full`: Persist full audit records by default, equivalent to always using `--audit-full`.
-- `use_ssh_agent`: Use SSH agent authentication globally when `SSH_AUTH_SOCK` exists; hosts can override with their own `use_ssh_agent`.
+- `audit_full`: Persist full audit records by default, equivalent to always using `--audit-full`. Full records can include command/path context that may contain sensitive arguments.
+- `use_ssh_agent`: Use SSH agent authentication globally when `SSH_AUTH_SOCK` exists; hosts can override with their own `use_ssh_agent`. Nested targets using `ssh_jump_mode: "shell"` or `transfer_jump_mode: "relay"` cannot rely on the global setting because target authentication runs from the jump-host environment; configure target `password`, `id_file`, or `use_ssh_agent: true` explicitly for those modes.
 - `data_dir`: Runtime data directory for history and audit logs.
 - `strict_host_key_checking`: `true` uses OpenSSH `accept-new`; `false` restores the older loose mode with `UserKnownHostsFile=/dev/null`.
 - `show_recent`: Show or hide the TUI Recent group.
 - `recent_expanded`: Stores whether the TUI Recent group is expanded.
+- `tui_screen_policy`: `isolated` uses the terminal alternate screen and does not clear scrollback; `private` also attempts to clear the visible screen and scrollback after TUI exit.
 - `default_ssh_jump_mode`: Default nested SSH mode, either `shell` or `tunnel`.
 - `default_transfer_jump_mode`: Default nested transfer mode, either `tunnel` or `relay`.
 - `relay_temp_dir`: Absolute temporary directory on the jump host for `transfer_jump_mode: "relay"`.

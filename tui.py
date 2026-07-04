@@ -8,6 +8,7 @@ import getpass
 import textwrap
 import curses.textpad as textpad
 
+from config_validation import DEFAULT_TUI_SCREEN_POLICY, TUI_SCREEN_POLICIES
 from host_manager import HostManager
 from i18n import i18n
 
@@ -29,6 +30,8 @@ class Tui:
         self.exit_reason = None
         self._screen_restored = False
         self.screen = None
+        self.screen_policy = self._effective_screen_policy()
+        self._alternate_screen_supported = self.terminal_supports_alternate_screen()
         try:
             self.screen = curses.initscr()
             curses.noecho()
@@ -92,6 +95,30 @@ class Tui:
 
     def __del__(self):
         self.restore_screen()
+
+    def _effective_screen_policy(self):
+        config = getattr(self.host_manager, "config", {}) or {}
+        if not isinstance(config, dict):
+            return DEFAULT_TUI_SCREEN_POLICY
+        policy = config.get("tui_screen_policy", DEFAULT_TUI_SCREEN_POLICY)
+        if not isinstance(policy, str) or policy not in TUI_SCREEN_POLICIES:
+            return DEFAULT_TUI_SCREEN_POLICY
+        return policy
+
+    @staticmethod
+    def terminal_supports_alternate_screen():
+        try:
+            curses.setupterm()
+            return bool(curses.tigetstr("smcup") and curses.tigetstr("rmcup"))
+        except (curses.error, OSError, TypeError):
+            return False
+
+    def _clear_terminal_scrollback(self):
+        try:
+            sys.stdout.write("\033[H\033[2J\033[3J")
+            sys.stdout.flush()
+        except OSError:
+            pass
 
     def _window_size(self, window=None):
         window = window or self.screen
@@ -1893,11 +1920,11 @@ class Tui:
 
         screen = getattr(self, "screen", None)
         if screen:
-            for action in (
-                lambda: screen.keypad(0),
-                lambda: screen.clear(),
-                lambda: screen.refresh(),
-            ):
+            actions = [lambda: screen.keypad(0)]
+            if not getattr(self, "_alternate_screen_supported", False):
+                actions.extend((lambda: screen.clear(), lambda: screen.refresh()))
+
+            for action in actions:
                 try:
                     action()
                 except (curses.error, AttributeError):
@@ -1913,3 +1940,6 @@ class Tui:
                 action()
             except (curses.error, AttributeError):
                 pass
+
+        if getattr(self, "screen_policy", DEFAULT_TUI_SCREEN_POLICY) == "private":
+            self._clear_terminal_scrollback()

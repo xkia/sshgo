@@ -90,6 +90,8 @@ class HostManager:
         self.master_password = None
         self.config = {}
         self.hosts = []
+        self._data_dir_override = data_dir or os.getenv("SSHGO_DATA_DIR")
+        self._audit_full_override = False
         self._audit_full = False
         self._nodes_migrated = False
         self._config_fingerprint = None
@@ -97,16 +99,21 @@ class HostManager:
         self._load_and_decrypt_hosts()
         self._load_from_ssh_config()
         self._rebuild_nest_parents(self.hosts)
-
-        resolved_data_dir = data_dir or self.config.get("data_dir")
-        self.audit = AuditLogger(resolved_data_dir)
-
-        # Set audit_full from config if CLI didn't override
-        if self.config.get("audit_full"):
-            self._audit_full = True
+        self._sync_runtime_state_from_config()
 
         if auto_migrate:
             self.persist_node_id_migration_if_needed()
+
+    def _sync_runtime_state_from_config(self):
+        resolved_data_dir = self._data_dir_override or self.config.get("data_dir")
+        self.audit = AuditLogger(resolved_data_dir)
+        self._audit_full = (
+            bool(self.config.get("audit_full")) or self._audit_full_override
+        )
+
+    def enable_full_audit(self):
+        self._audit_full_override = True
+        self._audit_full = True
 
     def _parse_jsonc(self, json_string: str) -> dict:
         return parse_jsonc(json_string)
@@ -637,7 +644,20 @@ class HostManager:
     def _record_save_conflict(self):
         self.last_save_error = i18n.get("config_save_conflict")
         print(self.last_save_error, file=sys.stderr)
+        self._reload_config_state_after_conflict()
         return False
+
+    def _reload_config_state_after_conflict(self):
+        try:
+            self._load_and_decrypt_hosts()
+            self._load_from_ssh_config()
+            self._rebuild_nest_parents(self.hosts)
+            self._sync_runtime_state_from_config()
+        except SystemExit:
+            return False
+        except Exception:
+            return False
+        return True
 
     def _atomic_write_json(self, data):
         self.store.write_json(
