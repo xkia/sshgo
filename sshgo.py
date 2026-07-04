@@ -8,7 +8,8 @@ import textwrap
 import argparse
 import shlex
 import shutil
-from host_manager import HostManager
+from config_store import ConfigStore
+from host_manager import HostManager, validate_hosts_config
 from tui import Tui
 from i18n import i18n
 
@@ -97,11 +98,13 @@ def run_tui(host_manager):
                 input("Would you like to add your first host? [Y/n]: ").strip().lower()
             )
             if choice != "n":
+                tui = None
                 try:
                     tui = Tui(host_manager, mode="add")
                     tui.run_add_flow()
                 finally:
-                    tui.restore_screen()
+                    if tui is not None:
+                        tui.restore_screen()
             else:
                 print(
                     "Exiting. You can add a host later by running sshgo and pressing 'a'."
@@ -117,14 +120,26 @@ def run_tui(host_manager):
         except FileNotFoundError:
             pass
 
+    tui = None
     try:
         tui = Tui(host_manager)
         tui.run()
     finally:
-        tui.restore_screen()
+        if tui is not None:
+            tui.restore_screen()
 
-    if tui.exit_reason == "connected":
+    if tui is not None and tui.exit_reason == "connected":
         sys.exit(128)
+
+
+def run_edit_tui(host_manager):
+    tui = None
+    try:
+        tui = Tui(host_manager, mode="edit")
+        tui.run()
+    finally:
+        if tui is not None:
+            tui.restore_screen()
 
 
 def _probe_config_files(base_dir):
@@ -199,7 +214,63 @@ def _doctor_line(status, label, detail):
     print(f"[{status}] {label}: {detail}")
 
 
-def run_doctor(host_manager, config_path):
+def _doctor_runtime_data_dir(config_snapshot, env_data_dir=None):
+    if env_data_dir:
+        return os.path.expanduser(env_data_dir)
+    if isinstance(config_snapshot, dict):
+        configured = config_snapshot.get("data_dir")
+        if isinstance(configured, str) and configured:
+            return os.path.expanduser(configured)
+    return os.path.expanduser("~/.sshgo")
+
+
+def _doctor_config_snapshot(config_path):
+    try:
+        data = ConfigStore(config_path).read()
+    except FileNotFoundError:
+        return None, [i18n.get("validate_config_not_found", path=config_path)]
+    except Exception as e:
+        return None, [f"{i18n.get('validate_config_invalid')}: {e}"]
+
+    return data, validate_hosts_config(data)
+
+
+def run_doctor_for_path(config_path, data_dir=None):
+    data, config_errors = _doctor_config_snapshot(config_path)
+    config_snapshot = (
+        data.get("config", {})
+        if isinstance(data, dict) and isinstance(data.get("config", {}), dict)
+        else {}
+    )
+    lang = config_snapshot.get("language")
+    if isinstance(lang, str):
+        i18n.set_language(lang)
+
+    host_manager = None
+    if not config_errors:
+        try:
+            host_manager = HostManager(
+                config_path,
+                data_dir=data_dir,
+                auto_migrate=False,
+            )
+            i18n.set_language(host_manager.config.get("language", "en"))
+        except SystemExit as e:
+            config_errors = [
+                f"{i18n.get('validate_config_invalid')}: HostManager exited with {e.code}"
+            ]
+
+    return run_doctor(
+        host_manager,
+        config_path,
+        config_errors=config_errors,
+        config_snapshot=config_snapshot,
+        data_dir=data_dir,
+    )
+
+
+def run_doctor(host_manager, config_path, config_errors=None,
+               config_snapshot=None, data_dir=None):
     failed = False
 
     if os.path.exists(config_path):
@@ -208,7 +279,9 @@ def run_doctor(host_manager, config_path):
         _doctor_line("FAIL", "Config path", f"not found: {config_path}")
         failed = True
 
-    errors = host_manager.validate_config()
+    errors = config_errors
+    if errors is None:
+        errors = host_manager.validate_config()
     if errors:
         failed = True
         _doctor_line("FAIL", "Config validation", f"{len(errors)} issue(s)")
@@ -235,7 +308,13 @@ def run_doctor(host_manager, config_path):
         else:
             _doctor_line("WARN", script, "present but not executable; sshgo will try chmod")
 
-    data_dir = host_manager.audit.data_dir
+    if host_manager is not None:
+        data_dir = host_manager.audit.data_dir
+        effective_config = host_manager.config
+    else:
+        data_dir = _doctor_runtime_data_dir(config_snapshot or {}, data_dir)
+        effective_config = config_snapshot or {}
+
     try:
         os.makedirs(data_dir, exist_ok=True)
         probe_path = os.path.join(data_dir, ".sshgo-doctor.tmp")
@@ -249,12 +328,13 @@ def run_doctor(host_manager, config_path):
 
     if os.environ.get("SSH_AUTH_SOCK"):
         _doctor_line("PASS", "SSH agent", os.environ["SSH_AUTH_SOCK"])
-    elif host_manager.config.get("use_ssh_agent", False):
+    elif effective_config.get("use_ssh_agent", False) is True:
         _doctor_line("WARN", "SSH agent", "use_ssh_agent is enabled but SSH_AUTH_SOCK is not set")
     else:
         _doctor_line("PASS", "SSH agent", "not required by global config")
 
-    host_key_mode = "accept-new" if host_manager.config.get("strict_host_key_checking", True) else "no"
+    strict_host_keys = effective_config.get("strict_host_key_checking", True)
+    host_key_mode = "accept-new" if strict_host_keys is not False else "no"
     if host_key_mode == "accept-new":
         _doctor_line("PASS", "Host key checking", host_key_mode)
     else:
@@ -387,6 +467,10 @@ def main():
         sys.exit(restore_config_backup(config_path, args.restore_backup))
 
     data_dir = os.getenv("SSHGO_DATA_DIR")
+
+    if args.doctor:
+        sys.exit(run_doctor_for_path(config_path, data_dir=data_dir))
+
     host_manager = HostManager(
         config_path,
         data_dir=data_dir,
@@ -410,12 +494,8 @@ def main():
             print(i18n.get("validate_ok"))
         return
 
-    if args.doctor:
-        sys.exit(run_doctor(host_manager, config_path))
-
     if args.edit:
-        tui = Tui(host_manager, mode="edit")
-        tui.run()
+        run_edit_tui(host_manager)
         return
 
     if args.history:

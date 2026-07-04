@@ -27,23 +27,29 @@ class Tui:
         self.host_manager = host_manager
         self.mode = mode
         self.exit_reason = None
-        self.screen = curses.initscr()
-        curses.noecho()
-        curses.cbreak()
-        curses.curs_set(0)
-        self.screen.keypad(1)
-        self.screen.border(0)
-        self.top_line_number = 0
-        self.highlight_line_number = 0
-        self.detail_win = None
-        self.screen_size = None
-        self._recent_group = None
-        self._recent_group_ts = 0
+        self._screen_restored = False
+        self.screen = None
+        try:
+            self.screen = curses.initscr()
+            curses.noecho()
+            curses.cbreak()
+            curses.curs_set(0)
+            self.screen.keypad(1)
+            self.screen.border(0)
+            self.top_line_number = 0
+            self.highlight_line_number = 0
+            self.detail_win = None
+            self.screen_size = None
+            self._recent_group = None
+            self._recent_group_ts = 0
 
-        self._init_theme()
+            self._init_theme()
 
-        self.search_query = ""
-        self.input_mode = "navigate"  # Modes: navigate, search
+            self.search_query = ""
+            self.input_mode = "navigate"  # Modes: navigate, search
+        except BaseException:
+            self.restore_screen()
+            raise
 
     def _init_theme(self):
         self.COLOR_MAP = {
@@ -1579,7 +1585,9 @@ class Tui:
         if node.get("type") == "host":
             self.connect_to_node(node)
         elif node.get("type") == "group":
-            if not node.get("expanded", True):
+            if node.get("children"):
+                self._set_expansion(not node.get("expanded", True))
+            elif not node.get("expanded", True):
                 self._set_expansion(True)
             elif not self.host_manager.contains_hosts(node):
                 title = i18n.get("empty_group_title", name=node.get("name"))
@@ -1786,9 +1794,29 @@ class Tui:
                 pass
 
     def restore_screen(self):
-        if hasattr(self, "screen") and self.screen:
+        if getattr(self, "_screen_restored", False):
+            return
+        self._screen_restored = True
+
+        screen = getattr(self, "screen", None)
+        if screen:
+            for action in (
+                lambda: screen.keypad(0),
+                lambda: screen.clear(),
+                lambda: screen.refresh(),
+            ):
+                try:
+                    action()
+                except (curses.error, AttributeError):
+                    pass
+
+        for action in (
+            lambda: curses.curs_set(1),
+            curses.nocbreak,
+            curses.echo,
+            curses.endwin,
+        ):
             try:
-                curses.nocbreak()
-                curses.endwin()
-            except curses.error:
+                action()
+            except (curses.error, AttributeError):
                 pass

@@ -61,6 +61,7 @@ show_detail_pane
 audit_full
 use_ssh_agent
 strict_host_key_checking
+show_recent
 recent_expanded
 ```
 

@@ -216,6 +216,77 @@ class CliTests(unittest.TestCase):
             self.assertIn("[PASS] expect", output)
             self.assertIn("Runtime data dir", output)
 
+    def test_doctor_reports_malformed_config_without_host_manager_load(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "hosts.json")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("{bad json")
+
+            real_which = sshgo_module.shutil.which
+            real_host_manager = sshgo_module.HostManager
+            sshgo_module.shutil.which = lambda name: "/usr/bin/expect"
+            sshgo_module.HostManager = lambda *args, **kwargs: self.fail(
+                "malformed config should not construct HostManager"
+            )
+            try:
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = sshgo_module.run_doctor_for_path(
+                        path,
+                        data_dir=os.path.join(temp_dir, "data"),
+                    )
+            finally:
+                sshgo_module.shutil.which = real_which
+                sshgo_module.HostManager = real_host_manager
+
+            output = stdout.getvalue()
+            self.assertEqual(code, 1)
+            self.assertIn("[PASS] Config path", output)
+            self.assertIn("[FAIL] Config validation", output)
+            self.assertIn("[PASS] expect", output)
+            self.assertIn("Runtime data dir", output)
+
+    def test_run_tui_preserves_constructor_failure(self):
+        class FakeManager:
+            def get_hosts(self):
+                return [{"type": "host", "name": "demo"}]
+
+        real_tui = sshgo_module.Tui
+
+        def fake_tui(*args, **kwargs):
+            raise RuntimeError("curses init failed")
+
+        sshgo_module.Tui = fake_tui
+        try:
+            with self.assertRaisesRegex(RuntimeError, "curses init failed"):
+                sshgo_module.run_tui(FakeManager())
+        finally:
+            sshgo_module.Tui = real_tui
+
+    def test_run_edit_tui_restores_screen_on_failure(self):
+        events = []
+
+        class FakeTui:
+            def __init__(self, host_manager, mode="connect"):
+                events.append(("init", mode))
+
+            def run(self):
+                events.append(("run",))
+                raise RuntimeError("edit failed")
+
+            def restore_screen(self):
+                events.append(("restore",))
+
+        real_tui = sshgo_module.Tui
+        sshgo_module.Tui = FakeTui
+        try:
+            with self.assertRaisesRegex(RuntimeError, "edit failed"):
+                sshgo_module.run_edit_tui(object())
+        finally:
+            sshgo_module.Tui = real_tui
+
+        self.assertEqual(events, [("init", "edit"), ("run",), ("restore",)])
+
 
 if __name__ == "__main__":
     unittest.main()

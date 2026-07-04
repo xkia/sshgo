@@ -43,7 +43,8 @@ This file provides repository guidance for coding agents and maintainers working
 |------|---------------|
 | `sshgo.py` | Entry point: arg parsing, config path resolution, dispatches to TUI or shortcut commands |
 | `sshgo.sh` | Thin shell wrapper that `cd`s to script dir and invokes `python3 -B sshgo.py` |
-| `host_manager.py` | `HostManager` class — loads/parses `hosts.json` (JSONC), migrates stable node IDs, encrypt/decrypt credentials, CRUD for hosts/groups, validates and backs up config, builds SSH/file-transfer command args with independent target/jump auth, records start audit events, then hands off to Expect |
+| `host_manager.py` | `HostManager` class — owns host/group domain behavior: stable node ID migration, credential encryption/decryption, CRUD, validation, SSH/file-transfer command planning, audit start events, and Expect handoff |
+| `config_store.py` | `ConfigStore` plus JSONC parser — reads `hosts.json`, writes JSON atomically, rotates/list/restores backups, and preserves JSONC comments/trailing-comma read support |
 | `audit_logger.py` | `AuditLogger` class — manages runtime data dir (`~/.sshgo/` or `$SSHGO_DATA_DIR`), writes audit logs in JSONL format with node identity/endpoint fields and retention limits (history: 1000, audit-simple: 5000, audit-full: 2000) |
 | `tui.py` | `Tui` class — curses-based interactive interface (tree view, search, add/edit/delete forms, detail preview pane) |
 | `config_parser.py` | `SshConfigParser` — parses `~/.ssh/config` into sshgo host nodes |
@@ -63,7 +64,7 @@ This file provides repository guidance for coding agents and maintainers working
 
 ### Key Flows
 
-1. **Startup**: `sshgo.sh` → `sshgo.py:main()` → resolve config path (CLI arg > env var > `~/.config/sshgo/hosts.json` when present > default `hosts.json`) → `HostManager` loads JSONC config → optional `~/.ssh/config` import → dispatch to TUI or shortcut handler.
+1. **Startup**: `sshgo.sh` → `sshgo.py:main()` → resolve config path (CLI arg > env var > `~/.config/sshgo/hosts.json` when present > default `hosts.json`) → `HostManager` delegates JSONC config read to `ConfigStore` → optional `~/.ssh/config` import → dispatch to TUI or shortcut handler.
 
 2. **TUI**: `Tui.run()` enters curses main loop — render tree, handle keyboard input (j/k navigation, a/e/d CRUD, f search, h/l fold/unfold, q quit), forms for add/edit.
 
@@ -105,11 +106,11 @@ This file provides repository guidance for coding agents and maintainers working
 - **MFA generation**: Expect scripts generate TOTP codes when an MFA prompt arrives by invoking `auth.py` with the secret from the transient `SSHGO_*` environment copy. Secrets are not passed in argv.
 - **Process handoff**: Shortcut connections and transfers replace Python via `os.execve()`. The Python manager records start/exec failure events only; it does not supervise the live SSH/SFTP session.
 - **Audit logging**: JSONL files in `~/.sshgo/`. History and audit-simple are always written for SSH and SFTP starts; audit-full requires `--audit-full` flag. New records include `node_id`, `port`, and `endpoint`. Because of the execve handoff, final duration and exit code are not available in current audit records.
-- **Config saves**: HostManager writes JSON atomically and keeps best-effort backups at `hosts.json.bak`, `hosts.json.bak.1`, and `hosts.json.bak.2`.
+- **Config saves**: `ConfigStore` writes JSON atomically and keeps best-effort backups at `hosts.json.bak`, `hosts.json.bak.1`, and `hosts.json.bak.2`; `HostManager` delegates save/backup operations to it.
 - **Placeholders**: `config.placeholders` is resolved after JSONC parsing only for `host`, `user`, `id_file`, `proxy_command`, and `relay_temp_dir`; do not apply it to secrets or identity fields. `proxy_command` is executed locally by OpenSSH and must be treated as trusted user configuration.
 - **i18n**: All UI strings go through `i18n.get(key)`. New strings must be added to both `en` and `zh` dicts in `i18n.py`.
 - **Screen management**: TUI uses `curses` and must call `restore_screen()` on exit (handled via `finally` block in `sshgo.py`).
-- **JSONC support**: `hosts.json` supports `//` and `#` comments plus trailing commas via `HostManager._parse_jsonc()`.
+- **JSONC support**: `hosts.json` supports `//` and `#` comments plus trailing commas via `config_store.parse_jsonc()`.
 
 ## Verification Commands
 

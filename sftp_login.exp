@@ -81,6 +81,18 @@ proc fail {message code} {
     exit $code
 }
 
+proc wait_exit_status {} {
+    set wait_result [wait]
+    if {[llength $wait_result] >= 4} {
+        set exit_status [lindex $wait_result 3]
+        if {[string is integer -strict $exit_status]} {
+            return $exit_status
+        }
+    }
+    catch {puts stderr "Warning: unexpected process wait result: $wait_result"}
+    return 1
+}
+
 proc shell_quote {value} {
     set escaped [string map {"'" "'\\''"} $value]
     return "'$escaped'"
@@ -187,6 +199,13 @@ expect {
     "Connection timed out" {
         fail "\n\nConnection timed out.\n" 1
     }
+    eof {
+        set exit_status [wait_exit_status]
+        if {$exit_status == "0"} {
+            fail "\n\nSFTP exited before opening a session.\n" 1
+        }
+        fail "\n\nSFTP failed before opening a session with exit status $exit_status.\n" 1
+    }
     timeout {
         fail "\n\nConnection timed out.\n" 1
     }
@@ -198,18 +217,35 @@ expect {
             send "get \"$remote_path\" \"$local_path\"\r"
         }
         expect {
+            -re {(?i)(^|\r|\n)(Failure:|Couldn't |Could not |No such file|Permission denied|Connection closed|File ("[^"\r\n]+"|[^\r\n]+) not found\.|(remote|local|dest) [^\r\n:]+: [^\r\n]+)} {
+                fail "\nFile transfer failed.\n" 1
+            }
             "sftp>" {
                 # Transfer complete
             }
-            -re {No such file|Permission denied|Connection closed} {
-                fail "\nFile transfer failed.\n" 1
+            eof {
+                set exit_status [wait_exit_status]
+                if {$exit_status == "0"} {
+                    fail "\nFile transfer ended before completion.\n" 1
+                }
+                fail "\nFile transfer failed with exit status $exit_status.\n" 1
             }
             timeout {
                 fail "\nFile transfer timed out.\n" 1
             }
         }
         send "bye\r"
-        expect eof
+        expect {
+            eof {
+                set exit_status [wait_exit_status]
+                if {$exit_status != "0"} {
+                    fail "\nSFTP exited with status $exit_status.\n" 1
+                }
+            }
+            timeout {
+                fail "\nSFTP did not exit cleanly.\n" 1
+            }
+        }
     }
 }
 

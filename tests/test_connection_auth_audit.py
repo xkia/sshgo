@@ -441,6 +441,106 @@ class ConnectionAuthAuditTests(unittest.TestCase):
         self.assertIn("%%h %%p", rendered)
         self.assertIn("-W %h:%p", rendered)
 
+    def _run_sftp_with_fake_binary(
+        self,
+        mode,
+        local_path="local.txt",
+        remote_path="/tmp/remote.txt",
+    ):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fake_sftp = os.path.join(temp_dir, "sftp")
+            with open(fake_sftp, "w", encoding="utf-8") as f:
+                f.write(
+                    """#!/bin/sh
+mode="${SSHGO_FAKE_SFTP_MODE:-success}"
+if [ "$mode" = "connect_fail" ]; then
+    echo "ssh: Could not resolve hostname target.internal"
+    exit 255
+fi
+printf 'sftp> '
+IFS= read -r command
+if [ "$mode" = "transfer_fail" ]; then
+    echo "Failure: disk quota exceeded"
+    printf 'sftp> '
+    IFS= read -r command
+    exit 0
+fi
+if [ "$mode" = "remote_permission_fail" ]; then
+    echo "remote open(\"/root/remote.txt\"): Permission denied"
+    printf 'sftp> '
+    IFS= read -r command
+    exit 0
+fi
+if [ "$mode" = "local_missing_fail" ]; then
+    echo "File \"local.txt\" not found."
+    printf 'sftp> '
+    IFS= read -r command
+    exit 0
+fi
+printf 'sftp> '
+IFS= read -r command
+exit 0
+"""
+                )
+            os.chmod(fake_sftp, 0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = temp_dir + os.pathsep + env.get("PATH", "")
+            env["SSHGO_FAKE_SFTP_MODE"] = mode
+            return subprocess.run(
+                [
+                    "./sftp_login.exp",
+                    "-h",
+                    "target.internal",
+                    "-u",
+                    "targetuser",
+                    "-action",
+                    "upload",
+                    "-local",
+                    local_path,
+                    "-remote",
+                    remote_path,
+                ],
+                cwd=os.getcwd(),
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+            )
+
+    def test_sftp_exp_exits_nonzero_when_session_fails_before_prompt(self):
+        result = self._run_sftp_with_fake_binary("connect_fail")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "SFTP failed before opening a session",
+            result.stdout + result.stderr,
+        )
+
+    def test_sftp_exp_exits_nonzero_when_transfer_reports_failure(self):
+        result = self._run_sftp_with_fake_binary("transfer_fail")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("File transfer failed", result.stdout + result.stderr)
+
+    def test_sftp_exp_exits_nonzero_for_context_prefixed_failures(self):
+        for mode in ("remote_permission_fail", "local_missing_fail"):
+            with self.subTest(mode=mode):
+                result = self._run_sftp_with_fake_binary(mode)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("File transfer failed", result.stdout + result.stderr)
+
+    def test_sftp_exp_does_not_treat_error_words_in_paths_as_failure(self):
+        result = self._run_sftp_with_fake_binary(
+            "success",
+            local_path="local-error.txt",
+            remote_path="/tmp/remote-failed.txt",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_nested_sftp_tunnel_does_not_pass_jump_identity_file_arg(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)

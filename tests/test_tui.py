@@ -254,6 +254,118 @@ class TuiTests(unittest.TestCase):
 
         self.assertEqual(result["name"], "abXc")
 
+    def test_restore_screen_clears_and_restores_terminal_once(self):
+        class FakeScreen:
+            def __init__(self):
+                self.calls = []
+
+            def keypad(self, value):
+                self.calls.append(("keypad", value))
+
+            def clear(self):
+                self.calls.append(("clear",))
+
+            def refresh(self):
+                self.calls.append(("refresh",))
+
+        calls = []
+        old_curs_set = tui_module.curses.curs_set
+        old_nocbreak = tui_module.curses.nocbreak
+        old_echo = tui_module.curses.echo
+        old_endwin = tui_module.curses.endwin
+        tui_module.curses.curs_set = lambda value: calls.append(("curs_set", value))
+        tui_module.curses.nocbreak = lambda: calls.append(("nocbreak",))
+        tui_module.curses.echo = lambda: calls.append(("echo",))
+        tui_module.curses.endwin = lambda: calls.append(("endwin",))
+        try:
+            tui = object.__new__(Tui)
+            tui.screen = FakeScreen()
+            tui._screen_restored = False
+
+            Tui.restore_screen(tui)
+            Tui.restore_screen(tui)
+        finally:
+            tui_module.curses.curs_set = old_curs_set
+            tui_module.curses.nocbreak = old_nocbreak
+            tui_module.curses.echo = old_echo
+            tui_module.curses.endwin = old_endwin
+
+        self.assertEqual(
+            tui.screen.calls,
+            [("keypad", 0), ("clear",), ("refresh",)],
+        )
+        self.assertEqual(
+            calls,
+            [("curs_set", 1), ("nocbreak",), ("echo",), ("endwin",)],
+        )
+
+    def test_init_failure_after_initscr_restores_terminal(self):
+        class FakeScreen:
+            def __init__(self):
+                self.calls = []
+
+            def keypad(self, value):
+                self.calls.append(("keypad", value))
+                if value == 1:
+                    raise RuntimeError("keypad failed")
+
+            def clear(self):
+                self.calls.append(("clear",))
+
+            def refresh(self):
+                self.calls.append(("refresh",))
+
+            def border(self, *args):
+                self.calls.append(("border", args))
+
+        class FakeManager:
+            config = {}
+
+        screen = FakeScreen()
+        calls = []
+        old_initscr = tui_module.curses.initscr
+        old_noecho = tui_module.curses.noecho
+        old_cbreak = tui_module.curses.cbreak
+        old_curs_set = tui_module.curses.curs_set
+        old_nocbreak = tui_module.curses.nocbreak
+        old_echo = tui_module.curses.echo
+        old_endwin = tui_module.curses.endwin
+        tui_module.curses.initscr = lambda: screen
+        tui_module.curses.noecho = lambda: calls.append(("noecho",))
+        tui_module.curses.cbreak = lambda: calls.append(("cbreak",))
+        tui_module.curses.curs_set = lambda value: calls.append(("curs_set", value))
+        tui_module.curses.nocbreak = lambda: calls.append(("nocbreak",))
+        tui_module.curses.echo = lambda: calls.append(("echo",))
+        tui_module.curses.endwin = lambda: calls.append(("endwin",))
+        try:
+            with self.assertRaisesRegex(RuntimeError, "keypad failed"):
+                Tui(FakeManager())
+        finally:
+            tui_module.curses.initscr = old_initscr
+            tui_module.curses.noecho = old_noecho
+            tui_module.curses.cbreak = old_cbreak
+            tui_module.curses.curs_set = old_curs_set
+            tui_module.curses.nocbreak = old_nocbreak
+            tui_module.curses.echo = old_echo
+            tui_module.curses.endwin = old_endwin
+
+        self.assertEqual(
+            screen.calls,
+            [("keypad", 1), ("keypad", 0), ("clear",), ("refresh",)],
+        )
+        self.assertEqual(
+            calls,
+            [
+                ("noecho",),
+                ("cbreak",),
+                ("curs_set", 0),
+                ("curs_set", 1),
+                ("nocbreak",),
+                ("echo",),
+                ("endwin",),
+            ],
+        )
+
     def test_main_split_layout_reserves_detail_pane_width(self):
         class FakeManager:
             config = {"show_detail_pane": True}
@@ -372,6 +484,119 @@ class TuiTests(unittest.TestCase):
                 [node["name"] for node in Tui.get_lines_with_level(tui)],
                 ["group", "child"],
             )
+
+    def test_enter_toggles_group_expansion(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = {
+                "config": {"import_ssh_config": False},
+                "hosts": [
+                    {
+                        "type": "group",
+                        "name": "group",
+                        "expanded": True,
+                        "children": [
+                            {
+                                "type": "host",
+                                "name": "child",
+                                "host": "child.example.com",
+                                "user": "deploy",
+                                "password": "pw",
+                            }
+                        ],
+                    }
+                ],
+            }
+            path = os.path.join(temp_dir, "hosts.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(config, f)
+            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+
+            tui = object.__new__(Tui)
+            tui.host_manager = manager
+            tui.mode = "connect"
+            tui.search_query = ""
+            tui.input_mode = "navigate"
+            tui.highlight_line_number = 0
+            tui.top_line_number = 0
+            tui._recent_group = None
+            tui._recent_group_ts = 0
+
+            Tui.handle_enter(tui)
+            self.assertFalse(manager.hosts[0]["expanded"])
+            self.assertEqual(
+                [node["name"] for node in Tui.get_lines_with_level(tui)],
+                ["group"],
+            )
+
+            Tui.handle_enter(tui)
+            self.assertTrue(manager.hosts[0]["expanded"])
+            self.assertEqual(
+                [node["name"] for node in Tui.get_lines_with_level(tui)],
+                ["group", "child"],
+            )
+
+    def test_enter_on_host_still_connects(self):
+        node = {"type": "host", "name": "host"}
+        tui = object.__new__(Tui)
+        tui.mode = "connect"
+        tui.get_current_node = lambda: node
+        connected = []
+        tui.connect_to_node = lambda selected: connected.append(selected)
+
+        Tui.handle_enter(tui)
+
+        self.assertEqual(connected, [node])
+
+    def test_enter_in_select_modes_returns_group_without_toggling(self):
+        for mode in ("select", "select_parent"):
+            with self.subTest(mode=mode):
+                node = {
+                    "type": "group",
+                    "name": "group",
+                    "expanded": True,
+                    "children": [{"type": "host", "name": "child"}],
+                }
+                tui = object.__new__(Tui)
+                tui.mode = mode
+                tui.get_current_node = lambda: node
+                tui._set_expansion = lambda expand: self.fail(
+                    f"{mode} mode must not toggle"
+                )
+
+                result = Tui.handle_enter(tui)
+
+                self.assertIs(result, node)
+                self.assertTrue(node["expanded"])
+
+    def test_enter_on_empty_group_keeps_add_prompt(self):
+        node = {"type": "group", "name": "empty", "expanded": True, "children": []}
+
+        class FakeManager:
+            def contains_hosts(self, selected):
+                self.selected = selected
+                return False
+
+        manager = FakeManager()
+        tui = object.__new__(Tui)
+        tui.mode = "connect"
+        tui.host_manager = manager
+        tui.get_current_node = lambda: node
+        prompts = []
+
+        def fake_form_loop(fields, title):
+            prompts.append((fields, title))
+            return {"confirm": False}
+
+        tui._run_form_loop = fake_form_loop
+        tui.run_add_flow = lambda preselected_parent=None: self.fail(
+            "cancelled prompt must not add"
+        )
+
+        Tui.handle_enter(tui)
+
+        self.assertIs(manager.selected, node)
+        self.assertEqual(len(prompts), 1)
+        self.assertIn("empty", prompts[0][1])
 
     def test_run_maps_direction_keys_to_expansion(self):
         class FakeScreen:

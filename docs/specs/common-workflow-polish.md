@@ -29,6 +29,7 @@ The project should avoid broad, low-frequency feature expansion unless repeated 
 - Keep validation messages user-facing and concise.
 - Make the detail pane show resolved connection state instead of mostly raw fields.
 - Reject clearly unsafe SFTP paths before Expect handoff.
+- Ensure direct/tunnel SFTP reports connection and transfer failures with non-zero exit status.
 - Preserve current stdlib-only and Expect handoff constraints.
 
 ## Non-goals
@@ -47,8 +48,9 @@ The project should avoid broad, low-frequency feature expansion unless repeated 
 4. The detail pane shows resolved target, auth method, SSH jump mode, transfer mode, host key mode, parent jump host, and proxy command where relevant.
 5. Detail rendering must not expose saved passwords or MFA secrets.
 6. Direct/tunnel SFTP paths containing newline, carriage return, double quote, or backslash fail before Expect handoff with a clear error.
-7. Relay transfers keep their existing path handling.
-8. README, docs index, roadmap, and gap analysis are updated.
+7. Direct/tunnel SFTP exits non-zero when the SFTP subprocess exits before a prompt or prints a transfer failure such as `Failure: ...`.
+8. Relay transfers keep their existing path handling.
+9. README, docs index, roadmap, and gap analysis are updated.
 
 ## Technical Design
 
@@ -79,6 +81,10 @@ SFTP command mode sends `put/get` commands to the interactive `sftp>` prompt. Th
 ```
 
 Relay mode is not changed because it already uses shell-quoting in `relay_transfer.exp`.
+
+### SFTP Failure Handling
+
+`sftp_login.exp` should treat early EOF, non-zero SFTP process exit, and common transfer failure output as failed transfers. It should not fall through to cleanup with exit code 0 when the SFTP subprocess reports a connection failure or a `put/get` failure.
 
 ## Review Status
 
