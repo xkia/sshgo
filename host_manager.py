@@ -57,6 +57,7 @@ SECRET_ENV_KEYS = {
     "jumper_mfa_secret": "SSHGO_JUMPER_MFA_SECRET",
 }
 SECRET_ENV_VAR_NAMES = frozenset(SECRET_ENV_KEYS.values())
+UTF8_LOCALE_FALLBACK = "en_US.UTF-8" if sys.platform == "darwin" else "C.UTF-8"
 
 
 @dataclass(frozen=True)
@@ -1066,11 +1067,43 @@ class HostManager:
         env = os.environ.copy()
         for env_key in SECRET_ENV_VAR_NAMES:
             env.pop(env_key, None)
+        self._ensure_utf8_locale(env)
         env.update(secret_env)
         return env
 
     def _env_for_plan(self, plan):
         return self._env_for_secret_values(plan.secret_env)
+
+    def _ensure_utf8_locale(self, env):
+        candidates = [
+            env.get("LC_ALL", ""),
+            env.get("LC_CTYPE", ""),
+            env.get("LANG", ""),
+        ]
+        utf8_locale = next(
+            (
+                value
+                for value in candidates
+                if isinstance(value, str)
+                and ("UTF-8" in value.upper() or "UTF8" in value.upper())
+            ),
+            UTF8_LOCALE_FALLBACK,
+        )
+        if not env.get("LANG") or not (
+            "UTF-8" in env.get("LANG", "").upper()
+            or "UTF8" in env.get("LANG", "").upper()
+        ):
+            env["LANG"] = utf8_locale
+        if not env.get("LC_CTYPE") or not (
+            "UTF-8" in env.get("LC_CTYPE", "").upper()
+            or "UTF8" in env.get("LC_CTYPE", "").upper()
+        ):
+            env["LC_CTYPE"] = utf8_locale
+        if env.get("LC_ALL") and not (
+            "UTF-8" in env.get("LC_ALL", "").upper()
+            or "UTF8" in env.get("LC_ALL", "").upper()
+        ):
+            env["LC_ALL"] = utf8_locale
 
     def _ensure_executable(self, script_path):
         try:

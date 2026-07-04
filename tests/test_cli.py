@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -301,6 +302,66 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("sftp_ssh_wrapper.py", rendered)
             self.assertNotIn("target-pass", rendered)
             self.assertNotIn("jump-pass", rendered)
+
+    def test_shell_wrapper_preserves_invocation_cwd_for_sftp_transfer(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "hosts.json")
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "config": {"import_ssh_config": False},
+                        "hosts": [
+                            {
+                                "type": "host",
+                                "name": "target",
+                                "host": "target.example.com",
+                                "user": "deploy",
+                            }
+                        ],
+                    },
+                    f,
+                )
+
+            fake_sftp = os.path.join(temp_dir, "sftp")
+            cwd_path = os.path.join(temp_dir, "sftp.cwd")
+            with open(fake_sftp, "w", encoding="utf-8") as f:
+                f.write(
+                    """#!/bin/sh
+pwd > "$SSHGO_FAKE_SFTP_CWD"
+exit 0
+"""
+                )
+            os.chmod(fake_sftp, 0o755)
+
+            repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            env = os.environ.copy()
+            env["PATH"] = temp_dir + os.pathsep + env.get("PATH", "")
+            env["SSHGO_DATA_DIR"] = os.path.join(temp_dir, "data")
+            env["SSHGO_FAKE_SFTP_CWD"] = cwd_path
+            result = subprocess.run(
+                [
+                    os.path.join(repo_dir, "sshgo.sh"),
+                    "-e",
+                    config_path,
+                    "target",
+                    "upload",
+                    "./local.txt",
+                    "/tmp/remote.txt",
+                ],
+                cwd=temp_dir,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            with open(cwd_path, "r", encoding="utf-8") as f:
+                self.assertEqual(
+                    os.path.realpath(f.read().strip()),
+                    os.path.realpath(temp_dir),
+                )
 
     def test_interactive_sftp_rejects_extra_positional_arguments(self):
         with tempfile.TemporaryDirectory() as temp_dir:
