@@ -386,7 +386,7 @@ class ValidationTests(unittest.TestCase):
 
             self.assertNotIn("leak", second.config["placeholders"])
 
-    def test_validate_style_load_does_not_persist_node_id_migration(self):
+    def test_default_load_does_not_persist_node_id_migration(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config = {
                 "config": {"import_ssh_config": False},
@@ -407,13 +407,39 @@ class ValidationTests(unittest.TestCase):
             manager = HostManager(
                 path,
                 data_dir=os.path.join(temp_dir, "data"),
-                auto_migrate=False,
             )
             self.assertTrue(manager.find_host_by_alias("legacy").get("id"))
             with open(path, "r", encoding="utf-8") as f:
                 saved = json.load(f)
             self.assertNotIn("id", saved["hosts"][0])
             self.assertFalse(os.path.exists(path + ".bak"))
+
+    def test_explicit_node_id_migration_persists_ids(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = {
+                "config": {"import_ssh_config": False},
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "legacy",
+                        "host": "legacy.example.com",
+                        "user": "deploy",
+                        "password": "pw",
+                    }
+                ],
+            }
+            path = os.path.join(temp_dir, "hosts.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(config, f)
+
+            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            self.assertTrue(manager.persist_node_id_migration_if_needed())
+
+            with open(path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertIn("id", saved["hosts"][0])
+            self.assertTrue(os.path.exists(path + ".bak"))
+            self.assertFalse(manager.persist_node_id_migration_if_needed())
 
     def test_validate_add_candidate_rejects_invalid_nodes_without_mutating_tree(self):
         with tempfile.TemporaryDirectory() as temp_dir:

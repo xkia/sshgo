@@ -135,6 +135,46 @@ class CommandPlanTests(unittest.TestCase):
             self.assertTrue(launch_args[0].endswith("relay_transfer.exp"))
             self.assertIn("-temp", launch_args)
 
+    def test_file_transfer_args_api_uses_transfer_mode_dispatch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            target = manager.find_host_by_alias("target")
+            target["transfer_jump_mode"] = "relay"
+
+            args = manager.build_file_transfer_command_args(
+                target,
+                "upload",
+                "local.txt",
+                "/tmp/remote.txt",
+            )
+
+            self.assertIn("-temp", args)
+            self.assertIn("-J-host", args)
+            self.assertNotIn("-tunnel-proxy-command", args)
+
+    def test_legacy_sftp_args_api_stays_sftp_only_for_relay_nodes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            target = manager.find_host_by_alias("target")
+            target["transfer_jump_mode"] = "relay"
+
+            file_args = manager.build_file_transfer_command_args(
+                target,
+                "upload",
+                "local.txt",
+                "/tmp/remote.txt",
+            )
+            sftp_args = manager.build_sftp_command_args(
+                target,
+                "upload",
+                "local.txt",
+                "/tmp/remote.txt",
+            )
+
+            self.assertIn("-temp", file_args)
+            self.assertNotIn("-temp", sftp_args)
+            self.assertIn("-tunnel-proxy-command", sftp_args)
+
 
 if __name__ == "__main__":
     unittest.main()

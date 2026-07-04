@@ -6,25 +6,49 @@ import sys
 import getpass
 import base64
 import uuid
-import re
 import shlex
 import copy
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from config_store import BACKUP_COUNT, ConfigStore, parse_jsonc
+from config_store import (
+    BACKUP_COUNT,
+    ConfigStore,
+    ConfigWriteConflictError,
+    parse_jsonc,
+)
+# Keep validation constants importable from host_manager for compatibility.
+from config_validation import (
+    ALLOWED_SAVE_KEYS,
+    CONFIG_BOOL_FIELDS,
+    CONFIG_OPTIONAL_STRING_FIELDS,
+    CONFIG_STRING_FIELDS,
+    DEFAULT_CONFIG as _DEFAULT_CONFIG,
+    DEFAULT_PORT,
+    DEFAULT_RELAY_TEMP_DIR,
+    DEFAULT_SSH_JUMP_MODE,
+    DEFAULT_TRANSFER_JUMP_MODE,
+    LANGUAGES,
+    PLACEHOLDER_BRACE_RE,
+    PLACEHOLDER_NAME_RE,
+    PLACEHOLDER_NODE_FIELDS,
+    PLACEHOLDER_RE,
+    PLACEHOLDER_TOKEN_RE,
+    SSH_JUMP_MODES,
+    THEME_COLORS,
+    THEME_FIELDS,
+    TRANSFER_JUMP_MODES,
+    default_config as _default_config,
+    merge_config as _merge_config,
+    validate_hosts_config,
+)
 from crypto import encrypt, decrypt, derive_key
 from config_parser import SshConfigParser
 from i18n import i18n
 from audit_logger import AuditLogger
+import host_tree
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
-DEFAULT_PORT = "22"
-SSH_JUMP_MODES = frozenset({"shell", "tunnel"})
-TRANSFER_JUMP_MODES = frozenset({"tunnel", "relay"})
-DEFAULT_SSH_JUMP_MODE = "shell"
-DEFAULT_TRANSFER_JUMP_MODE = "tunnel"
-DEFAULT_RELAY_TEMP_DIR = "/tmp"
 SFTP_UNSAFE_PATH_CHARS = frozenset({"\n", "\r", "\"", "\\"})
 SECRET_ENV_KEYS = {
     "target_pass": "SSHGO_TARGET_PASS",
@@ -33,64 +57,6 @@ SECRET_ENV_KEYS = {
     "jumper_mfa_secret": "SSHGO_JUMPER_MFA_SECRET",
 }
 SECRET_ENV_VAR_NAMES = frozenset(SECRET_ENV_KEYS.values())
-PLACEHOLDER_RE = re.compile(r"{{([A-Za-z_][A-Za-z0-9_]*)}}")
-PLACEHOLDER_TOKEN_RE = re.compile(r"{{([^{}]*)}}")
-PLACEHOLDER_BRACE_RE = re.compile(r"{{|}}")
-PLACEHOLDER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-PLACEHOLDER_NODE_FIELDS = frozenset({"host", "user", "id_file", "proxy_command"})
-LANGUAGES = frozenset({"en", "zh"})
-CONFIG_BOOL_FIELDS = frozenset({
-    "encryption_enabled",
-    "import_ssh_config",
-    "show_detail_pane",
-    "audit_full",
-    "use_ssh_agent",
-    "strict_host_key_checking",
-    "show_recent",
-    "recent_expanded",
-})
-CONFIG_STRING_FIELDS = frozenset({
-    "language",
-    "default_ssh_jump_mode",
-    "default_transfer_jump_mode",
-    "relay_temp_dir",
-})
-CONFIG_OPTIONAL_STRING_FIELDS = frozenset({"data_dir", "encryption_salt"})
-THEME_FIELDS = frozenset({"highlight_fg", "highlight_bg", "prefix_color"})
-THEME_COLORS = frozenset({
-    "black",
-    "red",
-    "green",
-    "yellow",
-    "blue",
-    "magenta",
-    "cyan",
-    "white",
-    "default",
-})
-ALLOWED_SAVE_KEYS = frozenset({
-    "id", "type", "name", "expanded", "children",
-    "host", "user", "password", "id_file", "mfa_secret", "use_ssh_agent",
-    "ssh_jump_mode", "transfer_jump_mode", "proxy_command",
-})
-
-_DEFAULT_CONFIG = {
-    "encryption_enabled": False,
-    "encryption_salt": None,
-    "import_ssh_config": True,
-    "language": "en",
-    "show_detail_pane": True,
-    "audit_full": False,
-    "use_ssh_agent": False,
-    "data_dir": None,
-    "strict_host_key_checking": True,
-    "show_recent": True,
-    "recent_expanded": False,
-    "default_ssh_jump_mode": DEFAULT_SSH_JUMP_MODE,
-    "default_transfer_jump_mode": DEFAULT_TRANSFER_JUMP_MODE,
-    "relay_temp_dir": DEFAULT_RELAY_TEMP_DIR,
-    "placeholders": {},
-}
 
 
 @dataclass(frozen=True)
@@ -117,365 +83,8 @@ class ConfigRuntimeError(ValueError):
     pass
 
 
-def _default_config():
-    config = dict(_DEFAULT_CONFIG)
-    config["placeholders"] = dict(_DEFAULT_CONFIG["placeholders"])
-    return config
-
-
-def _merge_config(raw_config):
-    config = _default_config()
-    config.update(raw_config)
-    if isinstance(config.get("placeholders"), dict):
-        config["placeholders"] = dict(config["placeholders"])
-    return config
-
-
-def validate_hosts_config(data: dict) -> list[str]:
-    """Validate parsed config data. Returns list of warning/error strings."""
-    errors = []
-
-    if not isinstance(data, dict):
-        errors.append(i18n.get("validate_root_object"))
-        return errors
-
-    if "config" not in data:
-        errors.append(i18n.get("validate_missing_config"))
-    elif not isinstance(data["config"], dict):
-        errors.append(i18n.get("validate_config_not_object"))
-
-    raw_config = (
-        data.get("config", {})
-        if isinstance(data.get("config", {}), dict)
-        else {}
-    )
-    config = _merge_config(raw_config)
-    _validate_config_schema(raw_config, errors)
-    placeholders = _validate_placeholders(
-        raw_config.get("placeholders"),
-        errors,
-    )
-
-    default_ssh_jump_mode = config.get("default_ssh_jump_mode")
-    if default_ssh_jump_mode not in SSH_JUMP_MODES:
-        errors.append(
-            i18n.get(
-                "validate_invalid_ssh_jump_mode",
-                mode=default_ssh_jump_mode,
-            )
-        )
-
-    default_transfer_jump_mode = config.get("default_transfer_jump_mode")
-    if default_transfer_jump_mode not in TRANSFER_JUMP_MODES:
-        errors.append(
-            i18n.get(
-                "validate_invalid_transfer_jump_mode",
-                mode=default_transfer_jump_mode,
-            )
-        )
-
-    relay_temp_dir = _resolve_placeholders_for_validation(
-        config.get("relay_temp_dir"),
-        placeholders,
-        errors,
-    )
-    if not relay_temp_dir or not os.path.isabs(os.path.expanduser(str(relay_temp_dir))):
-        errors.append(i18n.get("validate_invalid_relay_temp_dir"))
-
-    if "hosts" not in data:
-        errors.append(i18n.get("validate_missing_hosts"))
-    elif not isinstance(data["hosts"], list):
-        errors.append(i18n.get("validate_hosts_not_array"))
-    else:
-        _validate_hosts_nodes(
-            data["hosts"],
-            errors,
-            config=config,
-            placeholders=placeholders,
-            seen_names=set(),
-            seen_ids=set(),
-        )
-
-    return errors
-
-
-def _validate_config_schema(config, errors):
-    for field in sorted(CONFIG_BOOL_FIELDS):
-        if field in config and type(config[field]) is not bool:
-            errors.append(
-                i18n.get(
-                    "validate_invalid_config_type",
-                    field=field,
-                    expected=i18n.get("validate_type_bool"),
-                )
-            )
-
-    for field in sorted(CONFIG_STRING_FIELDS):
-        if field in config and not isinstance(config[field], str):
-            errors.append(
-                i18n.get(
-                    "validate_invalid_config_type",
-                    field=field,
-                    expected=i18n.get("validate_type_string"),
-                )
-            )
-
-    for field in sorted(CONFIG_OPTIONAL_STRING_FIELDS):
-        value = config.get(field)
-        if field in config and value is not None and not isinstance(value, str):
-            errors.append(
-                i18n.get(
-                    "validate_invalid_config_type",
-                    field=field,
-                    expected=i18n.get("validate_type_optional_string"),
-                )
-            )
-
-    language = config.get("language")
-    if isinstance(language, str) and language not in LANGUAGES:
-        errors.append(i18n.get("validate_invalid_language", lang=language))
-
-    theme = config.get("theme")
-    if theme is None:
-        return
-    if not isinstance(theme, dict):
-        errors.append(i18n.get("validate_theme_not_object"))
-        return
-
-    for field, color in theme.items():
-        if field not in THEME_FIELDS:
-            errors.append(i18n.get("validate_unknown_theme_field", field=field))
-            continue
-        if not isinstance(color, str) or color not in THEME_COLORS:
-            errors.append(
-                i18n.get(
-                    "validate_invalid_theme_color",
-                    field=field,
-                    color=color,
-                )
-            )
-
-
-def _validate_port(port):
-    if not str(port).isdigit():
-        return False
-    value = int(port)
-    return 1 <= value <= 65535
-
-
-def _validate_placeholders(raw_placeholders, errors):
-    if raw_placeholders is None:
-        return {}
-    if not isinstance(raw_placeholders, dict):
-        errors.append(i18n.get("validate_placeholders_not_object"))
-        return {}
-
-    placeholders = {}
-    for name, value in raw_placeholders.items():
-        if not isinstance(name, str) or not PLACEHOLDER_NAME_RE.match(name):
-            errors.append(i18n.get("validate_invalid_placeholder_name", name=name))
-            continue
-        if not isinstance(value, str) or not value.strip():
-            errors.append(
-                i18n.get("validate_invalid_placeholder_value", name=name)
-            )
-            continue
-        placeholders[name] = value
-    return placeholders
-
-
-def _resolve_placeholders_for_validation(value, placeholders, errors):
-    if not isinstance(value, str):
-        return value
-
-    matched_spans = []
-    seen_errors = set()
-    for match in PLACEHOLDER_TOKEN_RE.finditer(value):
-        matched_spans.append(match.span())
-        name = match.group(1)
-        if not PLACEHOLDER_NAME_RE.match(name) and name not in seen_errors:
-            errors.append(i18n.get("validate_invalid_placeholder_name", name=name))
-            seen_errors.add(name)
-
-    for match in PLACEHOLDER_BRACE_RE.finditer(value):
-        if not any(start <= match.start() < end for start, end in matched_spans):
-            token = match.group(0)
-            errors.append(i18n.get("validate_invalid_placeholder_name", name=token))
-
-    seen_missing = set()
-
-    def replace(match):
-        name = match.group(1)
-        if name not in placeholders:
-            if name not in seen_missing:
-                errors.append(i18n.get("validate_unknown_placeholder", name=name))
-                seen_missing.add(name)
-            return match.group(0)
-        return placeholders[name]
-
-    return PLACEHOLDER_RE.sub(replace, value)
-
-
-def _validate_hosts_nodes(
-    nodes: list,
-    errors: list,
-    path: str = "hosts",
-    config=None,
-    placeholders=None,
-    seen_names=None,
-    seen_ids=None,
-    parent_is_host=False,
-    host_parent_depth=0,
-):
-    if config is None:
-        config = {}
-    if placeholders is None:
-        placeholders = {}
-    if seen_names is None:
-        seen_names = set()
-    if seen_ids is None:
-        seen_ids = set()
-    for i, node in enumerate(nodes):
-        node_path = f"{path}[{i}]"
-        if not isinstance(node, dict):
-            errors.append(i18n.get("validate_node_not_object"))
-            continue
-
-        unknown_fields = sorted(set(node) - ALLOWED_SAVE_KEYS)
-        for field in unknown_fields:
-            errors.append(
-                i18n.get("validate_unknown_field", path=node_path, field=field)
-            )
-
-        node_type = node.get("type")
-        if node_type not in ("host", "group"):
-            errors.append(
-                i18n.get("validate_invalid_type") + f": '{node_type}'"
-            )
-            continue
-
-        if node_type != "host":
-            for field in ("ssh_jump_mode", "transfer_jump_mode", "proxy_command"):
-                if field in node:
-                    errors.append(
-                        i18n.get("validate_mode_field_on_non_host", field=field)
-                    )
-
-        name = node.get("name")
-        if not name:
-            errors.append(i18n.get("validate_missing_name"))
-        elif name in seen_names:
-            errors.append(i18n.get("validate_duplicate_name", name=name))
-        else:
-            seen_names.add(name)
-
-        node_id = node.get("id")
-        if node_id is not None:
-            if not isinstance(node_id, str) or not node_id.strip():
-                errors.append(i18n.get("validate_invalid_id", path=node_path))
-            elif node_id in seen_ids:
-                errors.append(i18n.get("validate_duplicate_id", node_id=node_id))
-            else:
-                seen_ids.add(node_id)
-
-        if node_type == "host":
-            if host_parent_depth > 1 or (host_parent_depth == 1 and not parent_is_host):
-                errors.append(
-                    i18n.get(
-                        "validate_unsupported_nested_host_depth",
-                        path=node_path,
-                    )
-                )
-
-            for field in PLACEHOLDER_NODE_FIELDS - {"host"}:
-                if field in node:
-                    _resolve_placeholders_for_validation(
-                        node.get(field),
-                        placeholders,
-                        errors,
-                    )
-
-            proxy_command = node.get("proxy_command")
-            if proxy_command is not None:
-                if not isinstance(proxy_command, str) or not proxy_command.strip():
-                    errors.append(i18n.get("validate_invalid_proxy_command"))
-                if parent_is_host:
-                    errors.append(i18n.get("validate_proxy_command_nested"))
-
-            ssh_jump_mode = node.get("ssh_jump_mode")
-            if ssh_jump_mode is not None and ssh_jump_mode not in SSH_JUMP_MODES:
-                errors.append(
-                    i18n.get("validate_invalid_ssh_jump_mode", mode=ssh_jump_mode)
-                )
-
-            transfer_jump_mode = node.get("transfer_jump_mode")
-            if (
-                transfer_jump_mode is not None
-                and transfer_jump_mode not in TRANSFER_JUMP_MODES
-            ):
-                errors.append(
-                    i18n.get(
-                        "validate_invalid_transfer_jump_mode",
-                        mode=transfer_jump_mode,
-                    )
-                )
-            elif (
-                transfer_jump_mode == "relay"
-                and not parent_is_host
-                and not node.get("children")
-            ):
-                errors.append(i18n.get("validate_relay_requires_jump"))
-
-            host_val = _resolve_placeholders_for_validation(
-                node.get("host"),
-                placeholders,
-                errors,
-            )
-            if not host_val:
-                errors.append(i18n.get("validate_missing_host"))
-            if ":" in str(host_val):
-                parts = str(host_val).split(":", 1)
-                if not parts[0]:
-                    errors.append(i18n.get("validate_empty_hostname"))
-                if not parts[1] or not _validate_port(parts[1]):
-                    errors.append(i18n.get("validate_invalid_port", port=parts[1]))
-            else:
-                if not str(host_val):
-                    errors.append(i18n.get("validate_empty_hostname"))
-
-            uses_agent = (
-                bool(node.get("use_ssh_agent"))
-                if node.get("use_ssh_agent") is not None
-                else bool(config.get("use_ssh_agent", False))
-            )
-            if not node.get("password") and not node.get("id_file") and not uses_agent:
-                errors.append(i18n.get("validate_missing_auth"))
-
-        if node_type == "group" or node.get("children"):
-            children = node.get("children")
-            if children is not None:
-                if not isinstance(children, list):
-                    errors.append(i18n.get("validate_children_not_array"))
-                else:
-                    _validate_hosts_nodes(
-                        children,
-                        errors,
-                        f"{node_path}.children",
-                        config=config,
-                        placeholders=placeholders,
-                        seen_names=seen_names,
-                        seen_ids=seen_ids,
-                        parent_is_host=node_type == "host",
-                        host_parent_depth=(
-                            host_parent_depth + 1
-                            if node_type == "host"
-                            else host_parent_depth
-                        ),
-                    )
-
-
 class HostManager:
-    def __init__(self, config_path, data_dir=None, auto_migrate=True):
+    def __init__(self, config_path, data_dir=None, auto_migrate=False):
         self.json_path = config_path
         self.store = ConfigStore(config_path)
         self.master_password = None
@@ -483,6 +92,8 @@ class HostManager:
         self.hosts = []
         self._audit_full = False
         self._nodes_migrated = False
+        self._config_fingerprint = None
+        self.last_save_error = None
         self._load_and_decrypt_hosts()
         self._load_from_ssh_config()
         self._rebuild_nest_parents(self.hosts)
@@ -494,18 +105,20 @@ class HostManager:
         if self.config.get("audit_full"):
             self._audit_full = True
 
-        if self._nodes_migrated and auto_migrate:
-            self._save_hosts()
+        if auto_migrate:
+            self.persist_node_id_migration_if_needed()
 
     def _parse_jsonc(self, json_string: str) -> dict:
         return parse_jsonc(json_string)
 
     def _read_config_file(self) -> dict:
-        return self.store.read()
+        data, fingerprint = self.store.read_with_fingerprint()
+        self._config_fingerprint = fingerprint
+        return data
 
     def validate_config(self) -> list[str]:
         try:
-            data = self._read_config_file()
+            data = self.store.read()
         except FileNotFoundError:
             return [i18n.get("validate_config_not_found", path=self.json_path)]
         except Exception:
@@ -808,34 +421,13 @@ class HostManager:
         return node.get("password") or node.get("mfa_secret")
 
     def _traverse_all(self, nodes):
-        for node in nodes:
-            yield node
-            if node.get("children"):
-                yield from self._traverse_all(node["children"])
+        return host_tree.traverse_all(nodes)
 
     def _new_node_id(self):
         return uuid.uuid4().hex
 
     def _ensure_node_ids(self, nodes, seen_ids=None):
-        if seen_ids is None:
-            seen_ids = set()
-
-        changed = False
-        for node in nodes:
-            if "ssh_config" in node.get("source", ""):
-                continue
-
-            node_id = node.get("id")
-            if not isinstance(node_id, str) or not node_id.strip() or node_id in seen_ids:
-                node_id = self._new_node_id()
-                node["id"] = node_id
-                changed = True
-            seen_ids.add(node_id)
-
-            if node.get("children"):
-                changed = self._ensure_node_ids(node["children"], seen_ids) or changed
-
-        return changed
+        return host_tree.ensure_node_ids(nodes, self._new_node_id, seen_ids)
 
     def _apply_crypto(self, nodes, key, fn):
         for node in nodes:
@@ -869,36 +461,16 @@ class HostManager:
 
     @staticmethod
     def _find_node_in_tree(nodes, name=None, node_id=None):
-        for node in nodes:
-            if node_id and node.get("id") == node_id:
-                return node
-            if name and node.get("name") == name:
-                return node
-            found = HostManager._find_node_in_tree(
-                node.get("children", []),
-                name=name,
-                node_id=node_id,
-            )
-            if found:
-                return found
-        return None
+        return host_tree.find_node(nodes, name=name, node_id=node_id)
 
     @staticmethod
     def _replace_node_in_tree(nodes, replacement, name=None, node_id=None):
-        for index, node in enumerate(nodes):
-            if (node_id and node.get("id") == node_id) or (
-                name and node.get("name") == name
-            ):
-                nodes[index] = replacement
-                return True
-            if HostManager._replace_node_in_tree(
-                node.get("children", []),
-                replacement,
-                name=name,
-                node_id=node_id,
-            ):
-                return True
-        return False
+        return host_tree.replace_node(
+            nodes,
+            replacement,
+            name=name,
+            node_id=node_id,
+        )
 
     def _candidate_config_data(self, hosts):
         return {
@@ -911,6 +483,19 @@ class HostManager:
         candidate = copy.deepcopy(node_data)
         if parent_name:
             parent = self._find_node_in_tree(hosts, name=parent_name)
+            if parent:
+                parent.setdefault("children", []).append(candidate)
+            else:
+                hosts.append(candidate)
+        else:
+            hosts.append(candidate)
+        return validate_hosts_config(self._candidate_config_data(hosts))
+
+    def validate_add_candidate_by_parent_id(self, node_data, parent_id=None):
+        hosts = self._clean_hosts_for_validation()
+        candidate = copy.deepcopy(node_data)
+        if parent_id:
+            parent = self._find_node_in_tree(hosts, node_id=parent_id)
             if parent:
                 parent.setdefault("children", []).append(candidate)
             else:
@@ -982,13 +567,38 @@ class HostManager:
         )
         return validate_hosts_config(self._candidate_config_data(hosts))
 
+    def validate_update_candidate_by_id(self, node_id, new_data):
+        current, _, _ = self.find_node_and_parent_by_id(node_id)
+        if not current:
+            return [i18n.get("validate_node_not_found", name=node_id)]
+
+        hosts = self._clean_hosts_for_validation()
+        clean_current = self._find_node_in_tree(hosts, node_id=node_id)
+        if not clean_current:
+            return [i18n.get("validate_node_not_found", name=current.get("name", ""))]
+
+        candidate = copy.deepcopy(clean_current)
+        self._apply_update_data_to_node(
+            candidate,
+            new_data,
+            is_nested_host=self._is_nested_host_node(current),
+        )
+        self._replace_node_in_tree(hosts, candidate, node_id=node_id)
+        return validate_hosts_config(self._candidate_config_data(hosts))
+
+
     def _save_hosts(self):
+        self.last_save_error = None
+        if self._config_changed_since_load():
+            return self._record_save_conflict()
+
         derived_key = b""
         if self.config.get("encryption_enabled"):
             password = self._get_master_password()
             if not password:
-                print("Master password cannot be empty. Save cancelled.")
-                return
+                self.last_save_error = "Master password cannot be empty. Save cancelled."
+                print(self.last_save_error)
+                return False
 
             salt_b64 = self.config.get("encryption_salt")
             if salt_b64 and isinstance(salt_b64, str):
@@ -1008,10 +618,33 @@ class HostManager:
 
         final_data = {"config": self.config, "hosts": cleaned_hosts}
 
-        self._atomic_write_json(final_data)
+        try:
+            self._atomic_write_json(final_data)
+        except ConfigWriteConflictError:
+            return self._record_save_conflict()
+        self._nodes_migrated = False
+        self._config_fingerprint = self.store.fingerprint()
+        return True
+
+    def persist_node_id_migration_if_needed(self):
+        if not self._nodes_migrated:
+            return False
+        return self._save_hosts()
+
+    def _config_changed_since_load(self):
+        return self.store.fingerprint() != self._config_fingerprint
+
+    def _record_save_conflict(self):
+        self.last_save_error = i18n.get("config_save_conflict")
+        print(self.last_save_error, file=sys.stderr)
+        return False
 
     def _atomic_write_json(self, data):
-        self.store.write_json(data)
+        self.store.write_json(
+            data,
+            expected_fingerprint=self._config_fingerprint,
+            check_conflict=True,
+        )
 
     def _backup_path(self, index):
         return self.store.backup_path(index)
@@ -1119,30 +752,7 @@ class HostManager:
         return None
 
     def _rebuild_nest_parents(self, nodes, host_ancestors=None, direct_parent=None):
-        if host_ancestors is None:
-            host_ancestors = []
-
-        for node in nodes:
-            node_type = node.get("type")
-            if node_type == "host":
-                node["_host_ancestor_count"] = len(host_ancestors)
-                node["_direct_parent_is_host"] = bool(
-                    direct_parent and direct_parent.get("type") == "host"
-                )
-                if node["_direct_parent_is_host"]:
-                    node["nest_parent"] = direct_parent
-                else:
-                    node.pop("nest_parent", None)
-                next_host_ancestors = host_ancestors + [node]
-            else:
-                next_host_ancestors = host_ancestors
-
-            if node.get("children"):
-                self._rebuild_nest_parents(
-                    node["children"],
-                    next_host_ancestors,
-                    node,
-                )
+        host_tree.rebuild_nest_parents(nodes, host_ancestors, direct_parent)
 
     def get_hosts(self):
         return self.hosts
@@ -1150,57 +760,62 @@ class HostManager:
     def find_node_and_parent(self, name, nodes=None, parent_list=None):
         if nodes is None:
             nodes = self.hosts
-        if parent_list is None:
-            parent_list = self.hosts
-        for i, node in enumerate(nodes):
-            if node.get("name") == name:
-                return node, parent_list, i
-            if node.get("children"):
-                found, p_list, index = self.find_node_and_parent(
-                    name, node["children"], node["children"]
-                )
-                if found:
-                    return found, p_list, index
-        return None, None, -1
+        return host_tree.find_node_and_parent(
+            nodes,
+            name=name,
+            parent_list=parent_list,
+        )
+
+    def find_node_and_parent_by_id(self, node_id, nodes=None, parent_list=None):
+        if nodes is None:
+            nodes = self.hosts
+        return host_tree.find_node_and_parent(
+            nodes,
+            node_id=node_id,
+            parent_list=parent_list,
+        )
 
     def contains_hosts(self, group_node):
-        if group_node.get("type") == "host":
-            return True
-        if group_node.get("children"):
-            for child in group_node["children"]:
-                if self.contains_hosts(child):
-                    return True
-        return False
+        return host_tree.contains_hosts(group_node)
 
     def _get_potential_parents(self):
         # Any group or host can be a potential parent.
-        return [
-            node
-            for node in self._traverse_all(self.hosts)
-            if node.get("type") in ("group", "host")
-        ]
+        return host_tree.potential_parents(self.hosts)
 
     def delete_host(self, name):
         node, parent_list, index = self.find_node_and_parent(name)
+        return self._delete_node_from_parent(node, parent_list, index, name)
+
+    def delete_node_by_id(self, node_id):
+        node, parent_list, index = self.find_node_and_parent_by_id(node_id)
+        label = node.get("name", node_id) if node else node_id
+        return self._delete_node_from_parent(node, parent_list, index, label)
+
+    def _delete_node_from_parent(self, node, parent_list, index, label):
         if not node:
             # This case should be handled by the caller, but we can be safe.
             print(
-                f"Error: Host or group '{name}' not found for deletion.",
+                f"Error: Host or group '{label}' not found for deletion.",
                 file=sys.stderr,
             )
-            return
+            return False
+        if self._config_changed_since_load():
+            return self._record_save_conflict()
 
         if parent_list is not None and index != -1:
             del parent_list[index]
             self._rebuild_nest_parents(self.hosts)
-            self._save_hosts()
+            return self._save_hosts()
         else:
             print(
-                f"Error: Could not delete '{name}' due to invalid parent list or index.",
+                f"Error: Could not delete '{label}' due to invalid parent list or index.",
                 file=sys.stderr,
             )
+            return False
 
     def add_node(self, node_data, parent_name):
+        if self._config_changed_since_load():
+            return self._record_save_conflict()
         existing_ids = {
             node.get("id")
             for node in self._traverse_all(self.hosts)
@@ -1225,7 +840,36 @@ class HostManager:
             self.hosts.append(node_data)
 
         self._rebuild_nest_parents(self.hosts)
-        self._save_hosts()
+        return self._save_hosts()
+
+    def add_node_to_parent_id(self, node_data, parent_id=None):
+        if self._config_changed_since_load():
+            return self._record_save_conflict()
+        existing_ids = {
+            node.get("id")
+            for node in self._traverse_all(self.hosts)
+            if isinstance(node.get("id"), str)
+        }
+        self._ensure_node_ids([node_data], existing_ids)
+        if parent_id:
+            parent_node, _, _ = self.find_node_and_parent_by_id(parent_id)
+            if parent_node:
+                if self._is_nested_host_node(node_data, parent_node):
+                    node_data.pop("proxy_command", None)
+                parent_node.setdefault("children", []).append(node_data)
+                if self._is_nested_host_node(node_data, parent_node):
+                    node_data["nest_parent"] = parent_node
+            else:
+                print(
+                    f"Warning: Parent id '{parent_id}' not found. Adding to top level.",
+                    file=sys.stderr,
+                )
+                self.hosts.append(node_data)
+        else:
+            self.hosts.append(node_data)
+
+        self._rebuild_nest_parents(self.hosts)
+        return self._save_hosts()
 
     @staticmethod
     def _is_nested_host_node(node, parent_node=None):
@@ -1237,9 +881,19 @@ class HostManager:
 
     def update_node(self, node_name, new_data):
         node, _, _ = self.find_node_and_parent(node_name)
+        return self._update_existing_node(node, new_data, node_name)
+
+    def update_node_by_id(self, node_id, new_data):
+        node, _, _ = self.find_node_and_parent_by_id(node_id)
+        label = node.get("name", node_id) if node else node_id
+        return self._update_existing_node(node, new_data, label)
+
+    def _update_existing_node(self, node, new_data, label):
         if not node:
-            print(f"Error: Node '{node_name}' not found for update.", file=sys.stderr)
-            return
+            print(f"Error: Node '{label}' not found for update.", file=sys.stderr)
+            return False
+        if self._config_changed_since_load():
+            return self._record_save_conflict()
 
         self._apply_update_data_to_node(
             node,
@@ -1248,7 +902,7 @@ class HostManager:
         )
 
         self._rebuild_nest_parents(self.hosts)
-        self._save_hosts()
+        return self._save_hosts()
 
     def describe_host(self, node):
         details = []
@@ -1317,7 +971,8 @@ class HostManager:
             # Clear any old salt to ensure a new one is generated
             self.config["encryption_salt"] = None
 
-        self._save_hosts()
+        if not self._save_hosts():
+            return
         status = "ON" if self.config["encryption_enabled"] else "OFF"
         print(f"Success: Encryption is now {status}.")
 
@@ -1325,7 +980,8 @@ class HostManager:
         current = self.config.get("import_ssh_config", True)
         new = not current
         self.config["import_ssh_config"] = new
-        self._save_hosts()
+        if not self._save_hosts():
+            return
         status = "ON" if new else "OFF"
         print(f"Success: Import from ~/.ssh/config is now {status}.")
 
@@ -1339,14 +995,16 @@ class HostManager:
         except Exception:
             # If i18n isn't available for some reason, ignore but continue to save
             pass
-        self._save_hosts()
+        if not self._save_hosts():
+            return
         print(f"Success: Language set to {new}.")
 
     def toggle_detail_pane(self):
         current = self.config.get("show_detail_pane", True)
         new = not current
         self.config["show_detail_pane"] = new
-        self._save_hosts()
+        if not self._save_hosts():
+            return
         status = "ON" if new else "OFF"
         print(f"Success: Host detail pane is now {status}.")
 
@@ -1354,7 +1012,8 @@ class HostManager:
         current = self.config.get("use_ssh_agent", False)
         new = not current
         self.config["use_ssh_agent"] = new
-        self._save_hosts()
+        if not self._save_hosts():
+            return
         status = "ON" if new else "OFF"
         print(f"Success: SSH agent is now {status}.")
 
@@ -1475,11 +1134,18 @@ class HostManager:
         return args
 
     def build_file_transfer_command_args(self, node, action, path1, path2):
-        args, _ = self._build_sftp_command_parts(node, action, path1, path2)
-        return args
+        return list(
+            self.build_file_transfer_command_plan(
+                node,
+                action,
+                path1,
+                path2,
+            ).args
+        )
 
     def build_sftp_command_args(self, node, action, path1, path2):
-        return self.build_file_transfer_command_args(node, action, path1, path2)
+        args, _ = self._build_sftp_command_parts(node, action, path1, path2)
+        return args
 
     def _command_plan(
         self,

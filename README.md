@@ -37,9 +37,10 @@ Supports password, key-based, and MFA/TOTP authentication, nested jump hosts, cu
 
 **1. Dependencies**
 
-This tool has one external dependency:
+This tool relies on local system SSH tools:
 
 -   **`expect`**: Required to handle interactive login sessions (e.g., password prompts). You must have it installed on your system.
+-   **OpenSSH client tools**: `ssh`, `sftp`, and `scp` must be available in `PATH` for connections and file transfer. These are normally preinstalled on macOS and most Linux distributions.
 
 There are **no external Python libraries** to install. All necessary components are bundled.
 
@@ -144,7 +145,7 @@ sshgo
     Validate the configuration file for errors.
 
 -   `sshgo --doctor`
-    Run local diagnostics for config validity, `expect`, bundled Expect scripts and transfer helpers, runtime data directory writability, SSH agent state, and host key mode.
+    Run local diagnostics for config validity, `expect`, OpenSSH client tools, bundled Expect scripts and transfer helpers, runtime data directory writability, SSH agent state, and host key mode.
 
 -   `sshgo --list-backups`
     List rotated backups for the resolved `hosts.json` path.

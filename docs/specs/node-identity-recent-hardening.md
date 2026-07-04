@@ -54,7 +54,7 @@ The existing `name/host/user` identity model is too weak:
 
 ### Node IDs
 
-Use `uuid.uuid4().hex` from the Python standard library. IDs are assigned in memory during load and persisted through the existing save path during normal startup/edit flows. `--validate` must remain read-only and therefore does not persist migration changes. Imported `~/.ssh/config` entries remain generated runtime data and are not saved.
+Use `uuid.uuid4().hex` from the Python standard library. IDs are assigned in memory during load. `HostManager` construction is side-effect-light by default and does not persist migration changes unless callers pass `auto_migrate=True` or call `persist_node_id_migration_if_needed()`. The CLI persists pending node ID migration only for non-read-only paths such as normal startup, edit, and shortcut execution. `--validate`, `--doctor`, `--history`, and `--print-command` remain read-only and therefore do not persist migration changes. Imported `~/.ssh/config` entries remain generated runtime data and are not saved.
 
 ### Audit Identity
 

@@ -215,6 +215,16 @@ def restore_config_backup(config_path, index):
     return 0
 
 
+def _should_persist_node_id_migration(args):
+    if args.validate or args.doctor or args.history or args.print_command:
+        return False
+    if args.toggle_encryption or args.toggle_ssh_config or args.toggle_language:
+        return False
+    if args.toggle_details or args.toggle_ssh_agent:
+        return False
+    return True
+
+
 def _doctor_line(status, label, detail):
     print(f"[{status}] {label}: {detail}")
 
@@ -295,12 +305,13 @@ def run_doctor(host_manager, config_path, config_errors=None,
     else:
         _doctor_line("PASS", "Config validation", "ok")
 
-    expect_path = shutil.which("expect")
-    if expect_path:
-        _doctor_line("PASS", "expect", expect_path)
-    else:
-        _doctor_line("FAIL", "expect", "not found in PATH")
-        failed = True
+    for tool in ("expect", "ssh", "sftp", "scp"):
+        tool_path = shutil.which(tool)
+        if tool_path:
+            _doctor_line("PASS", tool, tool_path)
+        else:
+            _doctor_line("FAIL", tool, "not found in PATH")
+            failed = True
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
     for script in (
@@ -484,7 +495,7 @@ def main():
     host_manager = HostManager(
         config_path,
         data_dir=data_dir,
-        auto_migrate=not (args.validate or args.doctor),
+        auto_migrate=False,
     )
 
     lang = host_manager.config.get("language", "en")
@@ -492,6 +503,9 @@ def main():
 
     if args.audit_full:
         host_manager._audit_full = True
+
+    if _should_persist_node_id_migration(args):
+        host_manager.persist_node_id_migration_if_needed()
 
     if args.validate:
         errors = host_manager.validate_config()

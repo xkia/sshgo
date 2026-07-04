@@ -37,9 +37,10 @@
 
 **1. 依赖项**
 
-本工具依赖以下一项:
+本工具依赖以下本机 SSH 工具:
 
 -   **`expect`**: 用于处理交互式登录会话 (例如, 提示输入密码), 必须在您的操作系统上安装.
+-   **OpenSSH 客户端工具**: `ssh`、`sftp` 和 `scp` 必须存在于 `PATH` 中, 用于连接和文件传输. macOS 和大多数 Linux 发行版通常已内置.
 
 本项目**无需安装任何外部 Python 库**, 所有必要的组件都已内置.
 
@@ -144,7 +145,7 @@ sshgo
     验证配置文件是否有错误.
 
 -   `sshgo --doctor`
-    运行本地诊断, 检查配置有效性、`expect`、内置 Expect 脚本和传输辅助脚本、运行时数据目录可写性、SSH agent 状态和 host key 模式。
+    运行本地诊断, 检查配置有效性、`expect`、OpenSSH 客户端工具、内置 Expect 脚本和传输辅助脚本、运行时数据目录可写性、SSH agent 状态和 host key 模式。
 
 -   `sshgo --list-backups`
     列出当前解析到的 `hosts.json` 路径对应的轮转备份。

@@ -1158,6 +1158,9 @@ class Tui:
         original_mode = self.mode
         try:
             if preselected_parent:
+                if not self._is_editable_parent(preselected_parent):
+                    self._show_readonly_error()
+                    return
                 parent_node = preselected_parent
             else:
                 self.mode = "select_parent"
@@ -1167,6 +1170,9 @@ class Tui:
 
             parent_name = (
                 None if parent_node.get("type") == "system" else parent_node["name"]
+            )
+            parent_id = (
+                None if parent_node.get("type") == "system" else parent_node.get("id")
             )
 
             node_type_fields = [
@@ -1221,10 +1227,16 @@ class Tui:
                     if node_type == "host"
                     else self._group_node_from_form(form_data)
                 )
-                errors = self.host_manager.validate_add_candidate(
-                    candidate,
-                    parent_name,
-                )
+                if parent_id:
+                    errors = self.host_manager.validate_add_candidate_by_parent_id(
+                        candidate,
+                        parent_id,
+                    )
+                else:
+                    errors = self.host_manager.validate_add_candidate(
+                        candidate,
+                        parent_name,
+                    )
                 return (errors, self._infer_validation_focus(errors))
 
             final_data = self._run_form_loop(
@@ -1253,9 +1265,17 @@ class Tui:
                     new_node = self._host_node_from_form(final_data)
                 else:
                     new_node = self._group_node_from_form(final_data)
-                validation_errors = self.host_manager.validate_add_candidate(
-                    new_node, parent_name
-                )
+                if parent_id:
+                    validation_errors = (
+                        self.host_manager.validate_add_candidate_by_parent_id(
+                            new_node,
+                            parent_id,
+                        )
+                    )
+                else:
+                    validation_errors = self.host_manager.validate_add_candidate(
+                        new_node, parent_name
+                    )
                 if validation_errors:
                     self._show_error(
                         i18n.get("validate_failed")
@@ -1264,7 +1284,16 @@ class Tui:
                     )
                     return
 
-                self.host_manager.add_node(new_node, parent_name)
+                if parent_id:
+                    saved = self.host_manager.add_node_to_parent_id(
+                        new_node,
+                        parent_id,
+                    )
+                else:
+                    saved = self.host_manager.add_node(new_node, parent_name)
+                if not saved:
+                    self._show_save_error()
+                    return
                 self._show_success(
                     i18n.get("success_added", name=new_node["name"])
                 )
@@ -1289,6 +1318,12 @@ class Tui:
             ),
         )
 
+    def _show_save_error(self):
+        self._show_error(
+            getattr(self.host_manager, "last_save_error", None)
+            or i18n.get("config_save_conflict")
+        )
+
     def _show_error(self, message):
         self._show_message(i18n.get("error_title"), message)
 
@@ -1305,6 +1340,7 @@ class Tui:
             return
 
         original_name = selected_node["name"]
+        selected_id = selected_node.get("id")
         node_type = selected_node["type"]
 
         if node_type == "host":
@@ -1357,16 +1393,24 @@ class Tui:
                 existing_node, _, _ = self.host_manager.find_node_and_parent(
                     clean_data["name"]
                 )
-                if existing_node:
+                if existing_node and (
+                    not selected_id or existing_node.get("id") != selected_id
+                ):
                     return (
                         [i18n.get("error_name_exists", name=clean_data["name"])],
                         "name",
                     )
 
-            errors = self.host_manager.validate_update_candidate(
-                original_name,
-                clean_data,
-            )
+            if selected_id:
+                errors = self.host_manager.validate_update_candidate_by_id(
+                    selected_id,
+                    clean_data,
+                )
+            else:
+                errors = self.host_manager.validate_update_candidate(
+                    original_name,
+                    clean_data,
+                )
             return (errors, self._infer_validation_focus(errors))
 
         final_data = self._run_form_loop(
@@ -1385,15 +1429,23 @@ class Tui:
                 existing_node, _, _ = self.host_manager.find_node_and_parent(
                     final_data["name"]
                 )
-                if existing_node:
+                if existing_node and (
+                    not selected_id or existing_node.get("id") != selected_id
+                ):
                     self._show_error(
                         i18n.get("error_name_exists", name=final_data["name"])
                     )
                     return
 
-            validation_errors = self.host_manager.validate_update_candidate(
-                original_name, final_data
-            )
+            if selected_id:
+                validation_errors = self.host_manager.validate_update_candidate_by_id(
+                    selected_id,
+                    final_data,
+                )
+            else:
+                validation_errors = self.host_manager.validate_update_candidate(
+                    original_name, final_data
+                )
             if validation_errors:
                 self._show_error(
                     i18n.get("validate_failed")
@@ -1402,7 +1454,13 @@ class Tui:
                 )
                 return
 
-            self.host_manager.update_node(original_name, final_data)
+            if selected_id:
+                saved = self.host_manager.update_node_by_id(selected_id, final_data)
+            else:
+                saved = self.host_manager.update_node(original_name, final_data)
+            if not saved:
+                self._show_save_error()
+                return
             self._recent_group = None
             self._recent_group_ts = 0
             self._show_success(
@@ -1447,7 +1505,13 @@ class Tui:
         )
 
         if result and result.get("confirm"):
-            self.host_manager.delete_host(selected_node["name"])
+            if selected_node.get("id"):
+                saved = self.host_manager.delete_node_by_id(selected_node["id"])
+            else:
+                saved = self.host_manager.delete_host(selected_node["name"])
+            if not saved:
+                self._show_save_error()
+                return
             self.highlight_line_number = max(0, self.highlight_line_number - 1)
 
     def updown(self, increment):
@@ -1548,18 +1612,49 @@ class Tui:
         traverse(initial_nodes, 0)
         return lines
 
+    def _is_editable_parent(self, node):
+        if not node:
+            return False
+        if node.get("type") == "system":
+            return True
+        if node.get("type") not in ("host", "group"):
+            return False
+        source = node.get("source")
+        return source not in _AUTO_GENERATED_SOURCES and source not in _READONLY_SOURCES
+
+    def _get_parent_select_lines(self):
+        lines = [
+            {
+                "name": "[Top Level]",
+                "_level": 0,
+                "type": "system",
+                "expanded": True,
+            }
+        ]
+
+        def traverse(nodes, level):
+            for node in nodes:
+                if not self._is_editable_parent(node):
+                    continue
+                node["_level"] = level
+                lines.append(node)
+                if node.get("children") and node.get("expanded", True):
+                    traverse(node.get("children", []), level + 1)
+
+        traverse(self.host_manager.get_hosts(), 0)
+        return lines
+
     def get_lines_with_level(self):
-        lines = self._get_all_nodes_with_level()
         if self.mode == "select_parent":
-            lines.insert(
-                0,
-                {
-                    "name": "[Top Level]",
-                    "_level": 0,
-                    "type": "system",
-                    "expanded": True,
-                },
-            )
+            lines = self._get_parent_select_lines()
+            if self.search_query:
+                query = self.search_query.lower()
+                return [
+                    line for line in lines if query in line.get("name", "").lower()
+                ]
+            return lines
+
+        lines = self._get_all_nodes_with_level()
 
         if self.search_query:
             query = self.search_query.lower()

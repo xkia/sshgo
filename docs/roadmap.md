@@ -26,7 +26,10 @@
 | Config and audit durability | done | Known top-level config fields are validated; audit JSONL trim uses lock coordination and atomic replacement | [config-and-audit-durability](specs/config-and-audit-durability.md) |
 | Config backup recovery | done | Users can list and explicitly restore rotated config backups, even when the active config is malformed | [config-backup-recovery](specs/config-backup-recovery.md) |
 | Config store extraction | done | Config parsing, atomic writes, and backup storage helpers are isolated outside HostManager without behavior change | [config-store-extraction](specs/config-store-extraction.md) |
+| Config validation extraction | done | Parsed-config validation helpers are isolated outside HostManager while keeping validator imports and behavior compatible | [config-validation-extraction](specs/config-validation-extraction.md) |
+| Final risk hardening | done | Stale config writers fail instead of overwriting newer saves; TUI add-parent selection only offers saved editable nodes | [final-risk-hardening](specs/final-risk-hardening.md) |
 | Command planning extraction | done | SSH, SFTP, and relay launch data are built through pure command-plan objects with focused tests and no behavior change | [command-planning-extraction](specs/command-planning-extraction.md) |
+| Host tree extraction | done | Pure host-tree traversal, lookup, parent-link rebuilding, and node ID assignment helpers are isolated outside HostManager without behavior change | [host-tree-extraction](specs/host-tree-extraction.md) |
 | TUI style system | done | Main list, forms, messages, and details use one shared TUI template without adding dependencies | [tui-style-system](specs/tui-style-system.md) |
 | TUI form interaction polish | done | Add/Edit forms use Basic/Auth/Advanced sections; validation stays in-form; delete defaults to Cancel with impact summary | [tui-form-interaction-polish](specs/tui-form-interaction-polish.md) |
 | TUI input editing polish | done | Text/password fields support cursor movement, Home/End, Delete, Ctrl+U clear, and paste-friendly insertion | [tui-input-editing-polish](specs/tui-input-editing-polish.md) |
