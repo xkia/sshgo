@@ -31,6 +31,7 @@
 | Command planning extraction | done | SSH, SFTP, and relay launch data are built through pure command-plan objects with focused tests and no behavior change | [command-planning-extraction](specs/command-planning-extraction.md) |
 | Host manager decomposition | done | Connection errors, command plans, connection planning, and runtime handoff are split from HostManager while preserving CLI/TUI compatibility | [host-manager-decomposition](specs/host-manager-decomposition.md) |
 | Host tree extraction | done | Pure host-tree traversal, lookup, parent-link rebuilding, and node ID assignment helpers are isolated outside HostManager without behavior change | [host-tree-extraction](specs/host-tree-extraction.md) |
+| Project cohesion refactor | done | CLI diagnostics/config helpers, pure TUI text/form helpers, and SFTP/relay transfer tests are split into focused modules without changing behavior | [project-cohesion-refactor](specs/project-cohesion-refactor.md) |
 | TUI style system | done | Main list, forms, messages, and details use one shared TUI template without adding dependencies | [tui-style-system](specs/tui-style-system.md) |
 | Terminal screen policy | done | TUI output is isolated by default, optional private mode can clear scrollback, and doctor reports terminal alternate-screen support | [terminal-screen-policy](specs/terminal-screen-policy.md) |
 | Terminal title | done | Optional terminal tab/window titles are emitted before SSH, SFTP, transfer, and relay handoff without changing Expect supervision | [terminal-title](specs/terminal-title.md) |

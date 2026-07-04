@@ -46,6 +46,7 @@
 | [command-planning-extraction.md](specs/command-planning-extraction.md) | Pure SSH/SFTP/relay command plan objects for safer launch testing |
 | [host-manager-decomposition.md](specs/host-manager-decomposition.md) | HostManager facade split into connection plan, planner, runtime, and shared error modules |
 | [host-tree-extraction.md](specs/host-tree-extraction.md) | Pure host tree helpers for traversal, lookup, parent links, and node ID assignment |
+| [project-cohesion-refactor.md](specs/project-cohesion-refactor.md) | Behavior-preserving CLI, TUI helper, form schema, and focused SFTP/relay test organization cleanup |
 | [test-suite-organization.md](specs/test-suite-organization.md) | Focused test modules for isolated implementation areas |
 
 ## Documentation Rules

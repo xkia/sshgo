@@ -42,8 +42,10 @@ This file provides repository guidance for coding agents and maintainers working
 
 | File | Responsibility |
 |------|---------------|
-| `sshgo.py` | Entry point: arg parsing, config path resolution, dispatches to TUI or shortcut commands |
+| `sshgo.py` | Entry point: arg parsing, high-level dispatch, shortcut execution, and compatibility wrappers for CLI helper imports |
 | `sshgo.sh` | Thin shell wrapper that resolves `sshgo.py` by script path while preserving the caller's current working directory |
+| `cli_config.py` | CLI config helpers — config path probing, backup listing/restoring, and saved-node ID migration gating |
+| `cli_diagnostics.py` | `--doctor` helpers — dependency checks, terminal screen diagnostics, runtime data dir checks, and config snapshot validation |
 | `host_manager.py` | `HostManager` class — public facade for config lifecycle, stable node ID assignment, credential encryption/decryption, CRUD, validation delegation, alias lookup, and compatibility wrappers for connection preview/execution |
 | `connection_errors.py` | Shared connection/config runtime exceptions kept import-compatible through `host_manager.py` |
 | `connection_plan.py` | `CommandPlan` plus secret environment mapping and UTF-8 locale normalization for Expect handoff |
@@ -53,7 +55,9 @@ This file provides repository guidance for coding agents and maintainers working
 | `config_store.py` | `ConfigStore` plus JSONC parser — reads `hosts.json`, fingerprints loaded files, writes JSON atomically with optional stale-write detection, rotates/list/restores backups, and preserves JSONC comments/trailing-comma read support |
 | `config_validation.py` | Pure parsed-config validation helpers — validates top-level config, placeholders, host/group nodes, jump modes, relay temp paths, and keeps a compatibility export through `host_manager.py` |
 | `audit_logger.py` | `AuditLogger` class — manages runtime data dir (`~/.sshgo/` or `$SSHGO_DATA_DIR`), writes audit logs in JSONL format with node identity/endpoint fields and retention limits (history: 1000, audit-simple: 5000, audit-full: 2000) |
-| `tui.py` | `Tui` class — curses-based interactive interface (tree view, search, add/edit/delete forms, detail preview pane) |
+| `tui.py` | `Tui` class — curses-based interactive interface (tree view, search, form loops, add/edit/delete flows, detail preview pane) |
+| `tui_text.py` | Pure TUI text helpers — ellipsizing, key matching, printable text extraction, and cursor-aware field editing |
+| `tui_forms.py` | Pure TUI form helpers — add/edit field schemas, auth/proxy field visibility, form cleanup, and form-to-node conversion |
 | `config_parser.py` | `SshConfigParser` — parses `~/.ssh/config` into sshgo host nodes |
 | `terminal_title.py` | Optional terminal tab/window title formatting, terminal compatibility detection, and OSC escape emission before SSH/SFTP/transfer handoff |
 | `crypto.py` | PBKDF2-HMAC-SHA256 key derivation plus HMAC-authenticated stdlib stream encryption for optional credential encryption; legacy XOR+Base64 ciphertext remains readable |
@@ -129,7 +133,7 @@ Use the smallest set that matches the change. For broad code or documentation sy
 
 ```bash
 python3 -m unittest discover -s tests -p 'test*.py'
-python3 -m py_compile sshgo.py host_manager.py host_tree.py config_store.py config_validation.py tui.py audit_logger.py auth.py crypto.py config_parser.py i18n.py terminal_title.py connection_errors.py connection_plan.py connection_planner.py connection_runtime.py sftp_ssh_wrapper.py tests/test_connection_auth_audit.py tests/test_command_plan.py tests/test_terminal_title.py tests/test_tui.py tests/test_audit.py tests/test_config_backup.py tests/test_config_store.py tests/test_config_validation.py tests/test_validation.py tests/test_cli.py tests/test_host_manager.py tests/test_host_tree.py
+python3 -m py_compile sshgo.py cli_config.py cli_diagnostics.py host_manager.py host_tree.py config_store.py config_validation.py tui.py tui_text.py tui_forms.py audit_logger.py auth.py crypto.py config_parser.py i18n.py terminal_title.py connection_errors.py connection_plan.py connection_planner.py connection_runtime.py sftp_ssh_wrapper.py tests/test_connection_auth_audit.py tests/test_command_plan.py tests/test_terminal_title.py tests/test_tui.py tests/test_tui_text.py tests/test_tui_forms.py tests/test_expect_sftp.py tests/test_relay_transfer.py tests/test_audit.py tests/test_config_backup.py tests/test_config_store.py tests/test_config_validation.py tests/test_validation.py tests/test_cli.py tests/test_host_manager.py tests/test_host_tree.py
 python3 sshgo.py --validate
 git diff --check
 ```

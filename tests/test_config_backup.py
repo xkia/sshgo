@@ -103,6 +103,44 @@ class ConfigBackupTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn("Backup not found", stderr.getvalue())
 
+    def test_cli_backup_helpers_use_sshgo_host_manager_binding(self):
+        class FakeHostManager:
+            @staticmethod
+            def list_config_backups(config_path):
+                return [
+                    {
+                        "index": 0,
+                        "path": config_path + ".fake",
+                        "size": 12,
+                        "mtime": "now",
+                    }
+                ]
+
+            @staticmethod
+            def restore_config_backup(config_path, index):
+                return {
+                    "index": index,
+                    "source": config_path + ".fake",
+                    "target": config_path,
+                }
+
+        real_host_manager = sshgo_module.HostManager
+        sshgo_module.HostManager = FakeHostManager
+        try:
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = sshgo_module.show_config_backups("/tmp/hosts.json")
+            self.assertEqual(code, 0)
+            self.assertIn("/tmp/hosts.json.fake", stdout.getvalue())
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = sshgo_module.restore_config_backup("/tmp/hosts.json", 0)
+            self.assertEqual(code, 0)
+            self.assertIn("/tmp/hosts.json.fake", stdout.getvalue())
+        finally:
+            sshgo_module.HostManager = real_host_manager
+
 
 if __name__ == "__main__":
     unittest.main()

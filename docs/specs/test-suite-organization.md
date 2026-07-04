@@ -23,6 +23,8 @@
 - Validation schema, validate-style load, and candidate-validation tests live in a focused module because they use pure config fixtures or in-memory HostManager candidates.
 - CLI shortcut, print-command, default config path, and doctor tests live in a focused module because they exercise `sshgo.py` entry behavior.
 - HostManager persistence and CRUD cleanup tests live in a focused module because they validate config writes and node mutation rules without Expect handoff.
+- SFTP Expect script tests live in a focused module because they exercise batch, wrapper, prompt, cleanup, and interactive `sftp>` behavior without sharing the broader connection/audit fixture.
+- Relay transfer script tests live in a focused module because they exercise relay-specific Expect behavior and quoting without sharing the broader connection/audit fixture.
 - Keep unittest discovery and existing verification commands unchanged.
 
 ## Non-goals
@@ -40,8 +42,10 @@
 4. Validation schema, validate-style load, and candidate-validation tests live in a focused test module.
 5. CLI shortcut, print-command, default config path, and doctor tests live in a focused test module.
 6. HostManager persistence and CRUD cleanup tests live in a focused test module.
-7. Existing unittest discovery still finds all tests.
-8. The total behavior coverage is preserved.
+7. SFTP Expect script tests live in a focused test module.
+8. Relay transfer script tests live in a focused test module.
+9. Existing unittest discovery still finds all tests.
+10. The total behavior coverage is preserved.
 
 ## Technical Design
 
@@ -53,6 +57,8 @@ Create focused modules with local fixture helpers:
 - `tests/test_validation.py`
 - `tests/test_cli.py`
 - `tests/test_host_manager.py`
+- `tests/test_expect_sftp.py`
+- `tests/test_relay_transfer.py`
 
 Leave shared fixture extraction for a later cleanup only if more test modules need it.
 
