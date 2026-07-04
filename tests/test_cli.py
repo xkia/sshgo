@@ -214,6 +214,7 @@ class CliTests(unittest.TestCase):
             output = stdout.getvalue()
             self.assertIn("[PASS] Config validation", output)
             self.assertIn("[PASS] expect", output)
+            self.assertIn("sftp_ssh_wrapper.py", output)
             self.assertIn("Runtime data dir", output)
 
     def test_doctor_reports_malformed_config_without_host_manager_load(self):

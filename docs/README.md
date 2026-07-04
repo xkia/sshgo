@@ -29,12 +29,13 @@
 | [tui-input-editing-polish.md](specs/tui-input-editing-polish.md) | Cursor-aware text/password editing for TUI forms |
 | [command-planning-extraction.md](specs/command-planning-extraction.md) | Pure SSH/SFTP/relay command plan objects for safer launch testing |
 | [test-suite-organization.md](specs/test-suite-organization.md) | Focused test modules for isolated implementation areas |
+| [sftp-batch-mode-hardening.md](specs/sftp-batch-mode-hardening.md) | In-progress batch-mode SFTP transfer hardening to reduce output-text failure detection risk |
 
 ## Documentation Rules
 
 - `README.md` and `README.zh.md` are user-facing usage docs.
 - `AGENTS.md` is the maintainer/agent implementation guide.
 - `docs/gap-analysis.md` tracks active risks, closed gaps, optimization outcomes, and future candidate boundaries; items there are not accepted behavior until captured by a spec or roadmap milestone.
-- `docs/specs/*.md` describe accepted behavior and implementation boundaries.
+- `docs/specs/*.md` normally describe accepted behavior and implementation boundaries; files marked `status: proposed` or `status: in_progress` are not completed behavior until the roadmap/review status says so.
 - Verification commands live in `AGENTS.md`; do not keep separate per-spec test-plan status files.
 - Superseded proposals should be removed once their final decision is captured by an active spec.

@@ -34,7 +34,11 @@
 
 ## Future Candidates
 
-No active future candidates are currently scheduled. New work should first pass the personal-tool scope filters in [gap-analysis.md](gap-analysis.md), then get a focused spec under `docs/specs/`.
+| Candidate | Status | Exit Criteria | Related Spec/Doc |
+|---|---|---|---|
+| SFTP batch mode hardening | in progress | Direct/tunnel SFTP transfer success is determined by OpenSSH `sftp` batch-mode exit status rather than localized output text, while password/key/MFA prompt handling remains compatible | [sftp-batch-mode-hardening](specs/sftp-batch-mode-hardening.md) |
+
+New work should first pass the personal-tool scope filters in [gap-analysis.md](gap-analysis.md), then get a focused spec under `docs/specs/`.
 
 Explicitly out of the current plan unless repeated real usage justifies reopening:
 

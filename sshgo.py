@@ -113,7 +113,12 @@ def run_tui(host_manager):
             print("\nOperation cancelled.")
         sys.exit(0)
 
-    for script in ["login.exp", "sftp_login.exp", "relay_transfer.exp"]:
+    for script in [
+        "login.exp",
+        "sftp_login.exp",
+        "relay_transfer.exp",
+        "sftp_ssh_wrapper.py",
+    ]:
         script_path = os.path.join(script_dir, script)
         try:
             os.chmod(script_path, 0o755)
@@ -298,7 +303,12 @@ def run_doctor(host_manager, config_path, config_errors=None,
         failed = True
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    for script in ("login.exp", "sftp_login.exp", "relay_transfer.exp"):
+    for script in (
+        "login.exp",
+        "sftp_login.exp",
+        "relay_transfer.exp",
+        "sftp_ssh_wrapper.py",
+    ):
         script_path = os.path.join(script_dir, script)
         if not os.path.exists(script_path):
             _doctor_line("FAIL", script, "missing")

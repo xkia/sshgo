@@ -53,6 +53,7 @@ This file provides repository guidance for coding agents and maintainers working
 | `i18n.py` | Simple English/Chinese string localization (`I18N` class, global `i18n` instance) |
 | `login.exp` | Expect script that handles interactive SSH login (password, passphrase, prompt-time MFA generation, jump host chaining) |
 | `sftp_login.exp` | Expect script for SFTP file transfer (upload/download) with same authentication logic as login.exp |
+| `sftp_ssh_wrapper.py` | Small stdlib-only ssh wrapper used by `sftp_login.exp` batch mode to remove OpenSSH `sftp -b`'s implicit `BatchMode=yes` while preserving all other ssh args |
 | `relay_transfer.exp` | Expect script for non-SFTP relay file transfer through a jump host using temporary jump-host storage and `scp` |
 | `hosts.json` | Project fallback config file: `{"config": {...}, "hosts": [...]}` with `group` and `host` nodes |
 
@@ -102,7 +103,7 @@ This file provides repository guidance for coding agents and maintainers working
 
 - **Python**: Uses only stdlib modules (`curses`, `json`, `argparse`, `getpass`, `hmac`, `hashlib`, `base64`, `struct`, `shlex`, `curses.textpad`). Run with `~/.venv/bin/python` per project rules.
 - **External dependency**: `expect` is the only required non-Python package for interactive SSH/SFTP prompt handling.
-- **Expect scripts**: `login.exp`, `sftp_login.exp`, and `relay_transfer.exp` must be executable (`chmod +x`). HostManager ensures this before shortcut `execve`.
+- **Expect scripts**: `login.exp`, `sftp_login.exp`, and `relay_transfer.exp` must be executable (`chmod +x`). HostManager ensures this before shortcut `execve`. `sftp_ssh_wrapper.py` must also remain executable so OpenSSH `sftp -S` can launch it.
 - **MFA generation**: Expect scripts generate TOTP codes when an MFA prompt arrives by invoking `auth.py` with the secret from the transient `SSHGO_*` environment copy. Secrets are not passed in argv.
 - **Process handoff**: Shortcut connections and transfers replace Python via `os.execve()`. The Python manager records start/exec failure events only; it does not supervise the live SSH/SFTP session.
 - **Audit logging**: JSONL files in `~/.sshgo/`. History and audit-simple are always written for SSH and SFTP starts; audit-full requires `--audit-full` flag. New records include `node_id`, `port`, and `endpoint`. Because of the execve handoff, final duration and exit code are not available in current audit records.
