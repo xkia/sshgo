@@ -33,21 +33,13 @@
 
 | Spec | Purpose |
 |---|---|
-| [tui-style-system.md](specs/tui-style-system.md) | Shared TUI layout, form, message, and detail templates |
-| [tui-form-interaction-polish.md](specs/tui-form-interaction-polish.md) | Add/Edit/Delete form grouping, in-form validation, and safer delete confirmation |
-| [tui-input-editing-polish.md](specs/tui-input-editing-polish.md) | Cursor-aware text/password editing for TUI forms |
+| [tui-interaction-polish.md](specs/tui-interaction-polish.md) | Shared TUI style, add/edit/delete form polish, and cursor-aware text/password editing |
 
 ## Refactor And Test Specs
 
 | Spec | Purpose |
 |---|---|
-| [config-store-extraction.md](specs/config-store-extraction.md) | Isolated config file parsing, atomic writes, and backup storage helpers |
-| [config-validation-extraction.md](specs/config-validation-extraction.md) | Isolated parsed-config validation helpers with HostManager compatibility export |
-| [command-planning-extraction.md](specs/command-planning-extraction.md) | Pure SSH/SFTP/relay command plan objects for safer launch testing |
-| [host-manager-decomposition.md](specs/host-manager-decomposition.md) | HostManager facade split into connection plan, planner, runtime, and shared error modules |
-| [host-tree-extraction.md](specs/host-tree-extraction.md) | Pure host tree helpers for traversal, lookup, parent links, and node ID assignment |
-| [project-cohesion-refactor.md](specs/project-cohesion-refactor.md) | Behavior-preserving CLI, TUI helper, form schema, and focused SFTP/relay test organization cleanup |
-| [test-suite-organization.md](specs/test-suite-organization.md) | Focused test modules for isolated implementation areas |
+| [internal-refactors-and-tests.md](specs/internal-refactors-and-tests.md) | Current internal module boundaries, compatibility rules, and focused test organization |
 
 ## Documentation Rules
 

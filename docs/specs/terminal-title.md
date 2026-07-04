@@ -9,7 +9,7 @@
 - related_docs:
   - docs/gap-analysis.md
 - related_specs:
-  - docs/specs/command-planning-extraction.md
+  - docs/specs/internal-refactors-and-tests.md
   - docs/specs/terminal-screen-policy.md
   - docs/specs/interactive-sftp-session.md
 

@@ -11,7 +11,7 @@
 - related_specs:
   - docs/specs/common-workflow-polish.md
   - docs/specs/jump-host-connection-modes.md
-  - docs/specs/command-planning-extraction.md
+  - docs/specs/internal-refactors-and-tests.md
 
 ## Background
 
