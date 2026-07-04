@@ -71,7 +71,7 @@ The TUI should call these helpers after form data is normalized but before `add_
 
 ### SFTP Path Guard
 
-Direct/tunnel SFTP uses an OpenSSH `sftp` batch command for single-file `put/get`. The batch command still uses quoted local and remote paths, so direct/tunnel SFTP should reject paths containing:
+Direct/tunnel SFTP upload/download uses an OpenSSH `sftp` batch command for single-file `put/get`. The batch command still uses quoted local and remote paths, so direct/tunnel upload/download should reject paths containing:
 
 ```text
 \n
@@ -84,7 +84,7 @@ Relay mode is not changed because it already uses shell-quoting in `relay_transf
 
 ### SFTP Failure Handling
 
-This spec originally reduced direct/tunnel SFTP failure risk with early EOF and output-text checks. The current replacement behavior is captured in [sftp-batch-mode-hardening](sftp-batch-mode-hardening.md): `sftp_login.exp` uses OpenSSH `sftp -b` for direct/tunnel transfers and treats the `sftp` process exit status as the success/failure source of truth.
+This spec originally reduced direct/tunnel SFTP failure risk with early EOF and output-text checks. The current replacement behavior is captured in [sftp-batch-mode-hardening](sftp-batch-mode-hardening.md): `sftp_login.exp` uses OpenSSH `sftp -b` for direct/tunnel upload/download transfers and treats the `sftp` process exit status as the success/failure source of truth.
 
 ## Review Status
 

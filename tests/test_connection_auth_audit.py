@@ -454,6 +454,45 @@ class ConnectionAuthAuditTests(unittest.TestCase):
         self.assertNotIn("SSHGO_", rendered)
         self.assertNotIn("sshgo-sftp-", rendered)
 
+    def test_sftp_exp_print_command_for_interactive_mode_uses_no_batch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env = os.environ.copy()
+            env["TMPDIR"] = temp_dir
+            result = subprocess.run(
+                [
+                    "./sftp_login.exp",
+                    "-h",
+                    "target.internal",
+                    "-u",
+                    "targetuser",
+                    "-J",
+                    "jumpuser@jump.example.com:2200",
+                    "-action",
+                    "interactive",
+                    "-tunnel-proxy-command",
+                    "ssh -o ProxyCommand='nc -x 127.0.0.1:1080 %%h %%p' -W %h:%p jumpuser@jump.example.com:2200",
+                    "-print-command",
+                    "1",
+                ],
+                cwd=os.getcwd(),
+                check=True,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(os.listdir(temp_dir), [])
+
+        rendered = result.stdout.strip()
+        self.assertIn("'sftp'", rendered)
+        self.assertNotIn("'-b'", rendered)
+        self.assertNotIn("'-S'", rendered)
+        self.assertNotIn("sftp_ssh_wrapper.py", rendered)
+        self.assertNotIn("<sshgo-generated-batch-file>", rendered)
+        self.assertNotIn("# batch:", rendered)
+        self.assertIn("ProxyCommand=ssh -o ProxyCommand=", rendered)
+
     def test_sftp_ssh_wrapper_filters_batchmode_yes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             fake_ssh = os.path.join(temp_dir, "ssh")
@@ -571,16 +610,24 @@ exit 255
                     """#!/bin/sh
 mode="${SSHGO_FAKE_SFTP_MODE:-success}"
 batch=""
+has_batch=0
+has_wrapper=0
 while [ "$#" -gt 0 ]; do
-    if [ "$1" = "-b" ]; then
-        shift
-        batch="${1:-}"
-        break
-    fi
+    case "$1" in
+        "-b")
+            has_batch=1
+            shift
+            batch="${1:-}"
+            ;;
+        "-S")
+            has_wrapper=1
+            shift
+            ;;
+    esac
     shift
 done
 if [ -n "${SSHGO_FAKE_SFTP_META:-}" ]; then
-    python3 - "$batch" "$SSHGO_FAKE_SFTP_META" <<'PY'
+    python3 - "$batch" "$SSHGO_FAKE_SFTP_META" "$has_batch" "$has_wrapper" <<'PY'
 import json
 import os
 import stat
@@ -590,6 +637,8 @@ batch_path, meta_path = sys.argv[1], sys.argv[2]
 exists = bool(batch_path) and os.path.exists(batch_path)
 data = {
     "batch_path": batch_path,
+    "has_batch": sys.argv[3] == "1",
+    "has_wrapper": sys.argv[4] == "1",
     "batch_exists_during": exists,
     "batch_mode": (
         f"{stat.S_IMODE(os.stat(batch_path).st_mode):04o}" if exists else None
@@ -609,16 +658,25 @@ fi
 if [ "$mode" = "host_key_prompt" ]; then
     printf 'Are you sure you want to continue connecting (yes/no/[fingerprint])? '
     IFS= read -r answer
+    if [ "$has_batch" = "0" ]; then
+        printf 'sftp> '
+    fi
     exit 0
 fi
 if [ "$mode" = "password_prompt" ]; then
     printf 'password: '
     IFS= read -r answer
+    if [ "$has_batch" = "0" ]; then
+        printf 'sftp> '
+    fi
     exit 0
 fi
 if [ "$mode" = "mfa_prompt" ]; then
     printf 'Verification code: '
     IFS= read -r answer
+    if [ "$has_batch" = "0" ]; then
+        printf 'sftp> '
+    fi
     exit 0
 fi
 if [ "$mode" = "transfer_fail" ]; then
@@ -632,6 +690,12 @@ if [ "$mode" = "remote_permission_fail" ]; then
 fi
 if [ "$mode" = "local_missing_fail" ]; then
     exit 1
+fi
+if [ "$mode" = "success_without_prompt" ]; then
+    exit 0
+fi
+if [ "$has_batch" = "0" ]; then
+    printf 'sftp> '
 fi
 exit 0
 """
@@ -647,20 +711,19 @@ exit 0
                 env["SSHGO_TARGET_PASS"] = target_pass
             if mfa_secret:
                 env["SSHGO_MFA_SECRET"] = mfa_secret
+            command = [
+                "./sftp_login.exp",
+                "-h",
+                "target.internal",
+                "-u",
+                "targetuser",
+                "-action",
+                action,
+            ]
+            if action != "interactive":
+                command.extend(["-local", local_path, "-remote", remote_path])
             result = subprocess.run(
-                [
-                    "./sftp_login.exp",
-                    "-h",
-                    "target.internal",
-                    "-u",
-                    "targetuser",
-                    "-action",
-                    action,
-                    "-local",
-                    local_path,
-                    "-remote",
-                    remote_path,
-                ],
+                command,
                 cwd=os.getcwd(),
                 env=env,
                 text=True,
@@ -950,6 +1013,55 @@ exit 0
                 result = self._run_sftp_with_fake_binary(mode, **kwargs)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_sftp_exp_interactive_mode_omits_batch_and_wrapper(self):
+        result = self._run_sftp_with_fake_binary("success", action="interactive")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("interactive sftp", result.stdout + result.stderr)
+        self.assertFalse(result.sftp_meta["has_batch"])
+        self.assertFalse(result.sftp_meta["has_wrapper"])
+        self.assertEqual(result.sftp_meta["batch_path"], "")
+        self.assertFalse(result.sftp_meta["batch_exists_after"])
+
+    def test_sftp_exp_interactive_mode_handles_auth_prompts(self):
+        cases = [
+            ("host_key_prompt", {}),
+            ("password_prompt", {"target_pass": "target-pass"}),
+            ("mfa_prompt", {"mfa_secret": "JBSWY3DPEHPK3PXP"}),
+        ]
+        for mode, kwargs in cases:
+            with self.subTest(mode=mode):
+                result = self._run_sftp_with_fake_binary(
+                    mode,
+                    action="interactive",
+                    **kwargs,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(result.sftp_meta["has_batch"])
+                self.assertFalse(result.sftp_meta["has_wrapper"])
+
+    def test_sftp_exp_interactive_mode_fails_before_prompt(self):
+        result = self._run_sftp_with_fake_binary("connect_fail", action="interactive")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Interactive SFTP exited", result.stdout + result.stderr)
+        self.assertFalse(result.sftp_meta["has_batch"])
+        self.assertFalse(result.sftp_meta["has_wrapper"])
+
+    def test_sftp_exp_interactive_mode_fails_on_clean_eof_before_prompt(self):
+        result = self._run_sftp_with_fake_binary(
+            "success_without_prompt",
+            action="interactive",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "Interactive SFTP ended before prompt",
+            result.stdout + result.stderr,
+        )
+        self.assertFalse(result.sftp_meta["has_batch"])
+        self.assertFalse(result.sftp_meta["has_wrapper"])
+
     def test_nested_sftp_tunnel_does_not_pass_jump_identity_file_arg(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
@@ -1038,6 +1150,50 @@ exit 0
                 records = [json.loads(line) for line in f if line.strip()]
             self.assertTrue(any(r["result"] == "sftp_started" for r in records))
             self.assertTrue(any(r["result"] == "sftp_exp_not_found" for r in records))
+
+    def test_interactive_sftp_exec_failure_is_audited(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            target = manager.find_host_by_alias("target")
+
+            captured = {}
+            real_execve = host_manager_module.os.execve
+
+            def fake_execve(path, args, env):
+                captured["path"] = path
+                captured["args"] = args
+                captured["env"] = env
+                raise OSError(5, "fake")
+
+            host_manager_module.os.execve = fake_execve
+            try:
+                with redirect_stderr(StringIO()):
+                    with self.assertRaises(SystemExit):
+                        manager.execute_interactive_sftp_session(target)
+            finally:
+                host_manager_module.os.execve = real_execve
+
+            self.assertTrue(captured["path"].endswith("sftp_login.exp"))
+            self.assertEqual(
+                captured["args"][captured["args"].index("-action") + 1],
+                "interactive",
+            )
+            self.assertNotIn("-local", captured["args"])
+            self.assertNotIn("-remote", captured["args"])
+            self.assertEqual(captured["env"]["SSHGO_TARGET_PASS"], "target-pass")
+            self.assertEqual(captured["env"]["SSHGO_JUMPER_PASS"], "jump-pass")
+
+            with open(manager.audit.audit_simple_path, "r", encoding="utf-8") as f:
+                records = [json.loads(line) for line in f if line.strip()]
+            self.assertTrue(
+                any(r["result"] == "sftp_interactive_started" for r in records)
+            )
+            self.assertTrue(
+                any(
+                    r["result"] == "sftp_interactive_exec_failed:5"
+                    for r in records
+                )
+            )
 
     def test_sftp_download_maps_remote_and_local_paths(self):
         with tempfile.TemporaryDirectory() as temp_dir:

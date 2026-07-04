@@ -45,7 +45,7 @@ Common workflows should get the highest polish:
 - Validation and diagnostics should produce actionable messages rather than generic failures.
 - Preview output should reflect the real resolved command while redacting secrets.
 
-The 2026-07 safety and polish slice has closed the immediate focus items: alias safety, validation, command preview, doctor checks, TUI save-time feedback, backup recovery, command planning extraction, config storage extraction, config validation extraction, stale-write guarding, editable-only parent selection, focused test organization, and SFTP batch-mode failure handling. There is no active implementation work in this document; future behavior changes should start as a new spec.
+The 2026-07 safety and polish slice has closed the immediate focus items: alias safety, validation, command preview, doctor checks, TUI save-time feedback, backup recovery, command planning extraction, config storage extraction, config validation extraction, stale-write guarding, editable-only parent selection, focused test organization, SFTP batch-mode failure handling, and the CLI-only interactive SFTP escape hatch. There is no active implementation work in this document; future behavior changes should start as a new spec.
 
 ## Risk Register
 
@@ -69,6 +69,7 @@ The 2026-07 safety and polish slice has closed the immediate focus items: alias 
 | Safer alias UX | Exact aliases win and ambiguous prefixes fail before connecting. | [cli-safety-and-diagnostics](specs/cli-safety-and-diagnostics.md) |
 | Validation hardening | Runtime surprises move into `--validate` and TUI save-time feedback. | [config-and-audit-durability](specs/config-and-audit-durability.md), [common-workflow-polish](specs/common-workflow-polish.md) |
 | File-transfer robustness | Direct/tunnel single-file SFTP rejects fragile paths before handoff and relies on OpenSSH batch-mode exit status for transfer success. | [common-workflow-polish](specs/common-workflow-polish.md), [sftp-batch-mode-hardening](specs/sftp-batch-mode-hardening.md) |
+| Interactive SFTP escape hatch | `sshgo --sftp <alias>` opens a standard `sftp>` prompt for direct/tunnel hosts without expanding into a remote file manager or changing upload/download defaults. | [interactive-sftp-session](specs/interactive-sftp-session.md) |
 | Audit durability | JSONL trim uses lock coordination and atomic replacement without changing handoff semantics. | [config-and-audit-durability](specs/config-and-audit-durability.md) |
 | TUI daily-use polish | Shared templates, safer forms, delete confirmation, and cursor-aware editing improve common add/edit flows. | [tui-style-system](specs/tui-style-system.md), [tui-form-interaction-polish](specs/tui-form-interaction-polish.md), [tui-input-editing-polish](specs/tui-input-editing-polish.md) |
 | Config doctor and recovery tools | Users can diagnose local setup and restore rotated config backups. | [cli-safety-and-diagnostics](specs/cli-safety-and-diagnostics.md), [config-backup-recovery](specs/config-backup-recovery.md) |

@@ -25,6 +25,7 @@
 | [config-backup-recovery.md](specs/config-backup-recovery.md) | List and restore rotated config backups |
 | [final-risk-hardening.md](specs/final-risk-hardening.md) | Stale config write guard and editable-only TUI parent selection |
 | [sftp-batch-mode-hardening.md](specs/sftp-batch-mode-hardening.md) | Batch-mode SFTP transfer hardening to reduce output-text failure detection risk |
+| [interactive-sftp-session.md](specs/interactive-sftp-session.md) | CLI-only interactive `sftp>` session entry point for direct/tunnel hosts |
 | [terminal-screen-policy.md](specs/terminal-screen-policy.md) | TUI alternate-screen isolation and optional private scrollback cleanup |
 
 ## TUI Specs

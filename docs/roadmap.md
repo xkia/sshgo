@@ -36,6 +36,7 @@
 | TUI input editing polish | done | Text/password fields support cursor movement, Home/End, Delete, Ctrl+U clear, and paste-friendly insertion | [tui-input-editing-polish](specs/tui-input-editing-polish.md) |
 | Test suite organization | done | CommandPlan, TUI, audit, validation, CLI, and HostManager CRUD coverage move into focused test modules while keeping unittest discovery unchanged | [test-suite-organization](specs/test-suite-organization.md) |
 | SFTP batch mode hardening | done | Direct/tunnel SFTP transfer success is determined by OpenSSH `sftp` batch-mode exit status rather than localized output text, while password/key/MFA prompt handling remains compatible | [sftp-batch-mode-hardening](specs/sftp-batch-mode-hardening.md) |
+| Interactive SFTP session | done | `sshgo --sftp <alias>` opens a standard interactive `sftp>` prompt for direct/tunnel hosts, keeps `<alias> sftp` as a remote SSH command, and rejects relay before handoff | [interactive-sftp-session](specs/interactive-sftp-session.md) |
 
 ## Future Candidates
 

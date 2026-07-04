@@ -200,6 +200,34 @@ class CliTests(unittest.TestCase):
             self.assertIn("id", self._saved_host(path))
             self.assertTrue(os.path.exists(path + ".bak"))
 
+    def test_interactive_sftp_execution_persists_node_id_migration_before_handoff(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = self._write_legacy_config(temp_dir)
+            calls = []
+            real_execute = (
+                host_manager_module.HostManager.execute_interactive_sftp_session
+            )
+
+            def fake_execute(self, node):
+                calls.append(node.get("name"))
+
+            host_manager_module.HostManager.execute_interactive_sftp_session = (
+                fake_execute
+            )
+            try:
+                self._run_main_with_args(
+                    ["-e", path, "--sftp", "legacy"],
+                    os.path.join(temp_dir, "data"),
+                )
+            finally:
+                host_manager_module.HostManager.execute_interactive_sftp_session = (
+                    real_execute
+                )
+
+            self.assertEqual(calls, ["legacy"])
+            self.assertIn("id", self._saved_host(path))
+            self.assertTrue(os.path.exists(path + ".bak"))
+
     def test_alias_resolution_keeps_unique_prefix_convenience(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
@@ -245,6 +273,66 @@ class CliTests(unittest.TestCase):
             self.assertIn("'local file.txt'", rendered)
             self.assertNotIn("target-pass", rendered)
             self.assertNotIn("jump-pass", rendered)
+
+    def test_print_command_outputs_interactive_sftp_handoff_without_secrets(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                self._run_main_with_args(
+                    [
+                        "-e",
+                        manager.json_path,
+                        "--print-command",
+                        "--sftp",
+                        "target",
+                    ],
+                    os.path.join(temp_dir, "data"),
+                )
+
+            rendered = stdout.getvalue()
+            self.assertIn("sftp_login.exp", rendered)
+            self.assertIn("-action interactive", rendered)
+            self.assertIn("-tunnel-proxy-command", rendered)
+            self.assertNotIn("-local", rendered)
+            self.assertNotIn("-remote", rendered)
+            self.assertNotIn("<sshgo-generated-batch-file>", rendered)
+            self.assertNotIn("sftp_ssh_wrapper.py", rendered)
+            self.assertNotIn("target-pass", rendered)
+            self.assertNotIn("jump-pass", rendered)
+
+    def test_interactive_sftp_rejects_extra_positional_arguments(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+
+            stderr = StringIO()
+            with redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as cm:
+                    self._run_main_with_args(
+                        ["-e", manager.json_path, "--sftp", "target", "extra"],
+                        os.path.join(temp_dir, "data"),
+                    )
+
+            self.assertEqual(cm.exception.code, 2)
+            self.assertIn("--sftp does not accept extra arguments", stderr.getvalue())
+
+    def test_sftp_positional_shortcut_remains_remote_command(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                sshgo_module.handle_shortcut_commands(
+                    ["target", "sftp"],
+                    manager,
+                    print_command=True,
+                )
+
+            rendered = stdout.getvalue()
+            self.assertIn("login.exp", rendered)
+            self.assertIn("-c sftp", rendered)
+            self.assertNotIn("sftp_login.exp", rendered)
 
     def test_remote_command_shortcut_uses_shell_safe_joining(self):
         with tempfile.TemporaryDirectory() as temp_dir:

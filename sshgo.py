@@ -90,6 +90,20 @@ def handle_shortcut_commands(cmd_args, host_manager, print_command=False):
         sys.exit(1)
 
 
+def handle_interactive_sftp_command(host_alias, host_manager, print_command=False):
+    node = _resolve_shortcut_alias(host_alias, host_manager)
+    try:
+        if print_command:
+            print(
+                shlex.join(host_manager.build_interactive_sftp_launch_command_args(node))
+            )
+            return
+        host_manager.execute_interactive_sftp_session(node)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def run_tui(host_manager):
     script_dir = os.path.dirname(os.path.realpath(__file__))
     if not host_manager.get_hosts():
@@ -416,6 +430,7 @@ def main():
           alias command...   Execute a remote command on the host.
           alias upload ...   Upload a file. Usage: %(prog)s alias upload <local_path> <remote_path>
           alias download ..  Download a file. Usage: %(prog)s alias download <remote_path> <local_path>
+          --sftp alias       Open an interactive SFTP session for the host.
         """
         ),
         formatter_class=argparse.RawTextHelpFormatter,
@@ -475,6 +490,11 @@ def main():
         "--print-command",
         action="store_true",
         help="Print the resolved command for a shortcut without connecting",
+    )
+    parser.add_argument(
+        "--sftp",
+        metavar="ALIAS",
+        help="Open an interactive SFTP session for a host alias",
     )
     parser.add_argument(
         "--doctor",
@@ -566,6 +586,16 @@ def main():
         show_history(host_manager, limit=args.limit, filter_name=args.filter_name)
         return
 
+    if args.sftp:
+        if args.cmd_args:
+            parser.error("--sftp does not accept extra arguments")
+        handle_interactive_sftp_command(
+            args.sftp,
+            host_manager,
+            print_command=args.print_command,
+        )
+        return
+
     if args.cmd_args:
         handle_shortcut_commands(
             args.cmd_args,
@@ -575,7 +605,7 @@ def main():
         return
 
     if args.print_command:
-        parser.error("--print-command requires a shortcut command")
+        parser.error("--print-command requires a shortcut command or --sftp")
 
     elif args.toggle_encryption:
         host_manager.toggle_encryption()
