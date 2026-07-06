@@ -60,6 +60,7 @@ from connection_plan import (
 )
 from connection_runtime import ConnectionRuntime
 from connection_planner import ConnectionPlanner
+import host_crud
 import host_tree
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -491,77 +492,32 @@ class HostManager:
         )
 
     def _candidate_config_data(self, hosts):
-        return {
-            "config": copy.deepcopy(self.config),
-            "hosts": hosts,
-        }
+        return host_crud.candidate_config_data(self.config, hosts)
 
     def validate_add_candidate(self, node_data, parent_name=None):
         hosts = self._clean_hosts_for_validation()
-        candidate = copy.deepcopy(node_data)
-        if parent_name:
-            parent = self._find_node_in_tree(hosts, name=parent_name)
-            if parent:
-                parent.setdefault("children", []).append(candidate)
-            else:
-                hosts.append(candidate)
-        else:
-            hosts.append(candidate)
+        host_crud.build_add_candidate_hosts(
+            hosts,
+            node_data,
+            parent_name=parent_name,
+        )
         return validate_hosts_config(self._candidate_config_data(hosts))
 
     def validate_add_candidate_by_parent_id(self, node_data, parent_id=None):
         hosts = self._clean_hosts_for_validation()
-        candidate = copy.deepcopy(node_data)
-        if parent_id:
-            parent = self._find_node_in_tree(hosts, node_id=parent_id)
-            if parent:
-                parent.setdefault("children", []).append(candidate)
-            else:
-                hosts.append(candidate)
-        else:
-            hosts.append(candidate)
+        host_crud.build_add_candidate_hosts(
+            hosts,
+            node_data,
+            parent_id=parent_id,
+        )
         return validate_hosts_config(self._candidate_config_data(hosts))
 
     def _apply_update_data_to_node(self, node, new_data, is_nested_host=False):
-        if is_nested_host:
-            node.pop("proxy_command", None)
-
-        for key, value in new_data.items():
-            if key == "auth":
-                continue
-            if key == "port":
-                port = normalize_port(value)
-                if port == DEFAULT_PORT:
-                    node.pop("port", None)
-                else:
-                    node["port"] = port
-                continue
-            if key in ("ssh_jump_mode", "transfer_jump_mode"):
-                if value in (None, "", "default"):
-                    node.pop(key, None)
-                else:
-                    node[key] = value
-                continue
-            if key == "proxy_command":
-                if is_nested_host:
-                    continue
-                if value is None or not str(value).strip():
-                    node.pop(key, None)
-                else:
-                    node[key] = str(value).strip()
-                continue
-            node[key] = value
-
-        auth_method = new_data.get("auth")
-        if auth_method == "password":
-            node["password"] = new_data.get("password", "")
-            node["id_file"] = ""
-        elif auth_method == "key":
-            node["id_file"] = new_data.get("id_file", "")
-            node["password"] = ""
-        elif auth_method == "none":
-            node["password"] = ""
-            node["id_file"] = ""
+        host_crud.apply_update_data_to_node(
+            node,
+            new_data,
+            is_nested_host=is_nested_host,
+        )
 
     def validate_update_candidate(self, node_name, new_data):
         current, _, _ = self.find_node_and_parent(node_name)
@@ -570,26 +526,16 @@ class HostManager:
 
         hosts = self._clean_hosts_for_validation()
         current_id = current.get("id")
-        clean_current = self._find_node_in_tree(
+        candidate_hosts = host_crud.build_update_candidate_hosts(
             hosts,
-            name=node_name,
-            node_id=current_id,
-        )
-        if not clean_current:
-            return [i18n.get("validate_node_not_found", name=node_name)]
-
-        candidate = copy.deepcopy(clean_current)
-        self._apply_update_data_to_node(
-            candidate,
+            current,
             new_data,
             is_nested_host=self._is_nested_host_node(current),
-        )
-        self._replace_node_in_tree(
-            hosts,
-            candidate,
-            name=node_name,
+            node_name=node_name,
             node_id=current_id,
         )
+        if candidate_hosts is None:
+            return [i18n.get("validate_node_not_found", name=node_name)]
         return validate_hosts_config(self._candidate_config_data(hosts))
 
     def validate_update_candidate_by_id(self, node_id, new_data):
@@ -598,17 +544,15 @@ class HostManager:
             return [i18n.get("validate_node_not_found", name=node_id)]
 
         hosts = self._clean_hosts_for_validation()
-        clean_current = self._find_node_in_tree(hosts, node_id=node_id)
-        if not clean_current:
-            return [i18n.get("validate_node_not_found", name=current.get("name", ""))]
-
-        candidate = copy.deepcopy(clean_current)
-        self._apply_update_data_to_node(
-            candidate,
+        candidate_hosts = host_crud.build_update_candidate_hosts(
+            hosts,
+            current,
             new_data,
             is_nested_host=self._is_nested_host_node(current),
+            node_id=node_id,
         )
-        self._replace_node_in_tree(hosts, candidate, node_id=node_id)
+        if candidate_hosts is None:
+            return [i18n.get("validate_node_not_found", name=current.get("name", ""))]
         return validate_hosts_config(self._candidate_config_data(hosts))
 
 
@@ -853,8 +797,7 @@ class HostManager:
         if self._config_changed_since_load():
             return self._record_save_conflict()
 
-        if parent_list is not None and index != -1:
-            del parent_list[index]
+        if host_crud.delete_node_from_parent(parent_list, index):
             self._rebuild_nest_parents(self.hosts)
             return self._save_hosts()
         else:
@@ -867,28 +810,25 @@ class HostManager:
     def add_node(self, node_data, parent_name):
         if self._config_changed_since_load():
             return self._record_save_conflict()
-        existing_ids = {
-            node.get("id")
-            for node in self._traverse_all(self.hosts)
-            if isinstance(node.get("id"), str)
-        }
+        existing_ids = host_crud.existing_node_ids(self.hosts)
         self._ensure_node_ids([node_data], existing_ids)
         if parent_name:
             parent_node, _, _ = self.find_node_and_parent(parent_name)
             if parent_node:
-                if self._is_nested_host_node(node_data, parent_node):
-                    node_data.pop("proxy_command", None)
-                parent_node.setdefault("children", []).append(node_data)
-                if self._is_nested_host_node(node_data, parent_node):
-                    node_data["nest_parent"] = parent_node
+                host_crud.add_node_to_tree(
+                    self.hosts,
+                    node_data,
+                    parent_node=parent_node,
+                    is_nested_host=self._is_nested_host_node(node_data, parent_node),
+                )
             else:
                 print(
                     f"Warning: Parent '{parent_name}' not found. Adding to top level.",
                     file=sys.stderr,
                 )
-                self.hosts.append(node_data)
+                host_crud.add_node_to_tree(self.hosts, node_data)
         else:
-            self.hosts.append(node_data)
+            host_crud.add_node_to_tree(self.hosts, node_data)
 
         self._rebuild_nest_parents(self.hosts)
         return self._save_hosts()
@@ -896,28 +836,25 @@ class HostManager:
     def add_node_to_parent_id(self, node_data, parent_id=None):
         if self._config_changed_since_load():
             return self._record_save_conflict()
-        existing_ids = {
-            node.get("id")
-            for node in self._traverse_all(self.hosts)
-            if isinstance(node.get("id"), str)
-        }
+        existing_ids = host_crud.existing_node_ids(self.hosts)
         self._ensure_node_ids([node_data], existing_ids)
         if parent_id:
             parent_node, _, _ = self.find_node_and_parent_by_id(parent_id)
             if parent_node:
-                if self._is_nested_host_node(node_data, parent_node):
-                    node_data.pop("proxy_command", None)
-                parent_node.setdefault("children", []).append(node_data)
-                if self._is_nested_host_node(node_data, parent_node):
-                    node_data["nest_parent"] = parent_node
+                host_crud.add_node_to_tree(
+                    self.hosts,
+                    node_data,
+                    parent_node=parent_node,
+                    is_nested_host=self._is_nested_host_node(node_data, parent_node),
+                )
             else:
                 print(
                     f"Warning: Parent id '{parent_id}' not found. Adding to top level.",
                     file=sys.stderr,
                 )
-                self.hosts.append(node_data)
+                host_crud.add_node_to_tree(self.hosts, node_data)
         else:
-            self.hosts.append(node_data)
+            host_crud.add_node_to_tree(self.hosts, node_data)
 
         self._rebuild_nest_parents(self.hosts)
         return self._save_hosts()

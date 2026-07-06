@@ -230,6 +230,17 @@ Exit criteria:
 Extract internal CRUD implementation to `host_crud.py`, but keep public
 `HostManager` methods and compatibility exports stable.
 
+Initial implementation:
+
+- Added `host_crud.py`.
+- Moved validation candidate assembly, update-data application, node id set
+  collection, add-node tree insertion, and delete-node tree mutation out of
+  `host_manager.py`.
+- Kept all public `HostManager` CRUD and validation methods unchanged.
+- Kept save-conflict detection, encryption, persistence, and runtime parent
+  rebuild ownership in `HostManager`.
+- Added focused `tests/test_host_crud.py` coverage.
+
 Candidate responsibilities:
 
 - applying update data
