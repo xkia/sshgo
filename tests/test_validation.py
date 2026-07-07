@@ -519,6 +519,31 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("only allowed on host", joined)
         self.assertIn("requires a jump host", joined)
 
+        invalid_types = validate_hosts_config(
+            {
+                "config": {
+                    "default_ssh_jump_mode": [],
+                    "default_transfer_jump_mode": {},
+                },
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "typed-host",
+                        "host": "example.com",
+                        "user": "deploy",
+                        "password": "pw",
+                        "ssh_jump_mode": [],
+                        "transfer_jump_mode": {},
+                    },
+                ],
+            }
+        )
+        joined = "\n".join(invalid_types)
+        self.assertIn("config.default_ssh_jump_mode must be a string", joined)
+        self.assertIn("config.default_transfer_jump_mode must be a string", joined)
+        self.assertIn("Invalid ssh_jump_mode", joined)
+        self.assertIn("Invalid transfer_jump_mode", joined)
+
     def test_validate_proxy_command_and_placeholders(self):
         valid = validate_hosts_config(
             {

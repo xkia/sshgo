@@ -28,6 +28,38 @@ TUI_SCREEN_POLICIES = frozenset({"isolated", "private"})
 TERMINAL_TITLE_TARGETS = frozenset({"tab", "window", "both"})
 TERMINAL_TITLE_FORMATS = frozenset({"alias", "host", "alias_host"})
 TERMINAL_TITLE_SCOPES = frozenset({"auto", "always"})
+CONFIG_ENUM_FIELDS = (
+    ("default_ssh_jump_mode", SSH_JUMP_MODES, "validate_invalid_ssh_jump_mode", "mode"),
+    (
+        "default_transfer_jump_mode",
+        TRANSFER_JUMP_MODES,
+        "validate_invalid_transfer_jump_mode",
+        "mode",
+    ),
+    ("tui_screen_policy", TUI_SCREEN_POLICIES, "validate_invalid_tui_screen_policy", "policy"),
+    (
+        "terminal_title_target",
+        TERMINAL_TITLE_TARGETS,
+        "validate_invalid_terminal_title_target",
+        "target",
+    ),
+    (
+        "terminal_title_format",
+        TERMINAL_TITLE_FORMATS,
+        "validate_invalid_terminal_title_format",
+        "format",
+    ),
+    (
+        "terminal_title_scope",
+        TERMINAL_TITLE_SCOPES,
+        "validate_invalid_terminal_title_scope",
+        "scope",
+    ),
+)
+HOST_ENUM_FIELDS = (
+    ("ssh_jump_mode", SSH_JUMP_MODES, "validate_invalid_ssh_jump_mode", "mode"),
+    ("transfer_jump_mode", TRANSFER_JUMP_MODES, "validate_invalid_transfer_jump_mode", "mode"),
+)
 PLACEHOLDER_RE = re.compile(r"{{([A-Za-z_][A-Za-z0-9_]*)}}")
 PLACEHOLDER_TOKEN_RE = re.compile(r"{{([^{}]*)}}")
 PLACEHOLDER_BRACE_RE = re.compile(r"{{|}}")
@@ -138,70 +170,13 @@ def validate_hosts_config(data: dict) -> list[str]:
     )
     _validate_encryption_salt(raw_config, data.get("hosts", []), errors)
 
-    default_ssh_jump_mode = config.get("default_ssh_jump_mode")
-    if default_ssh_jump_mode not in SSH_JUMP_MODES:
-        errors.append(
-            i18n.get(
-                "validate_invalid_ssh_jump_mode",
-                mode=default_ssh_jump_mode,
-            )
-        )
-
-    default_transfer_jump_mode = config.get("default_transfer_jump_mode")
-    if default_transfer_jump_mode not in TRANSFER_JUMP_MODES:
-        errors.append(
-            i18n.get(
-                "validate_invalid_transfer_jump_mode",
-                mode=default_transfer_jump_mode,
-            )
-        )
-
-    tui_screen_policy = config.get("tui_screen_policy")
-    if (
-        not isinstance(tui_screen_policy, str)
-        or tui_screen_policy not in TUI_SCREEN_POLICIES
-    ):
-        errors.append(
-            i18n.get(
-                "validate_invalid_tui_screen_policy",
-                policy=tui_screen_policy,
-            )
-        )
-
-    terminal_title_target = config.get("terminal_title_target")
-    if (
-        not isinstance(terminal_title_target, str)
-        or terminal_title_target not in TERMINAL_TITLE_TARGETS
-    ):
-        errors.append(
-            i18n.get(
-                "validate_invalid_terminal_title_target",
-                target=terminal_title_target,
-            )
-        )
-
-    terminal_title_format = config.get("terminal_title_format")
-    if (
-        not isinstance(terminal_title_format, str)
-        or terminal_title_format not in TERMINAL_TITLE_FORMATS
-    ):
-        errors.append(
-            i18n.get(
-                "validate_invalid_terminal_title_format",
-                format=terminal_title_format,
-            )
-        )
-
-    terminal_title_scope = config.get("terminal_title_scope")
-    if (
-        not isinstance(terminal_title_scope, str)
-        or terminal_title_scope not in TERMINAL_TITLE_SCOPES
-    ):
-        errors.append(
-            i18n.get(
-                "validate_invalid_terminal_title_scope",
-                scope=terminal_title_scope,
-            )
+    for field, allowed_values, error_key, error_arg in CONFIG_ENUM_FIELDS:
+        _validate_enum_choice(
+            config.get(field),
+            allowed_values,
+            error_key,
+            error_arg,
+            errors,
         )
 
     relay_temp_dir = _resolve_placeholders_for_validation(
@@ -284,6 +259,19 @@ def _validate_config_schema(config, errors):
                     color=color,
                 )
             )
+
+
+def _validate_enum_choice(value, allowed_values, error_key, error_arg, errors):
+    if isinstance(value, str) and value in allowed_values:
+        return True
+    errors.append(i18n.get(error_key, **{error_arg: value}))
+    return False
+
+
+def _validate_optional_enum_choice(value, allowed_values, error_key, error_arg, errors):
+    if value is None:
+        return True
+    return _validate_enum_choice(value, allowed_values, error_key, error_arg, errors)
 
 
 def _validate_port(port):
@@ -494,24 +482,17 @@ def _validate_hosts_nodes(
                 if parent_is_host:
                     errors.append(i18n.get("validate_proxy_command_nested"))
 
-            ssh_jump_mode = node.get("ssh_jump_mode")
-            if ssh_jump_mode is not None and ssh_jump_mode not in SSH_JUMP_MODES:
-                errors.append(
-                    i18n.get("validate_invalid_ssh_jump_mode", mode=ssh_jump_mode)
+            for field, allowed_values, error_key, error_arg in HOST_ENUM_FIELDS:
+                _validate_optional_enum_choice(
+                    node.get(field),
+                    allowed_values,
+                    error_key,
+                    error_arg,
+                    errors,
                 )
 
             transfer_jump_mode = node.get("transfer_jump_mode")
             if (
-                transfer_jump_mode is not None
-                and transfer_jump_mode not in TRANSFER_JUMP_MODES
-            ):
-                errors.append(
-                    i18n.get(
-                        "validate_invalid_transfer_jump_mode",
-                        mode=transfer_jump_mode,
-                    )
-                )
-            elif (
                 transfer_jump_mode == "relay"
                 and not parent_is_host
                 and not node.get("children")
