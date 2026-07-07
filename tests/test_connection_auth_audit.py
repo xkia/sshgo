@@ -7,42 +7,16 @@ from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 
 import host_manager as host_manager_module
-from host_manager import HostManager
+
+try:
+    from fixtures import host, jump_with_target, manager_for_config
+except ModuleNotFoundError:
+    from tests.fixtures import host, jump_with_target, manager_for_config
 
 
 class ConnectionAuthAuditTests(unittest.TestCase):
     def _manager(self, temp_dir):
-        config = {
-            "config": {"import_ssh_config": False},
-            "hosts": [
-                {
-                    "type": "host",
-                    "name": "jump",
-                    "host": "jump.example.com",
-                    "port": "2200",
-                    "user": "jumpuser",
-                    "password": "jump-pass",
-                    "id_file": "/tmp/jump_key",
-                    "mfa_secret": "JBSWY3DPEHPK3PXP",
-                    "children": [
-                        {
-                            "type": "host",
-                            "name": "target",
-                            "host": "target.internal",
-                            "port": "2222",
-                            "user": "targetuser",
-                            "password": "target-pass",
-                            "id_file": "/tmp/target_key",
-                            "mfa_secret": "JBSWY3DPEHPK3PXP",
-                        }
-                    ],
-                }
-            ],
-        }
-        path = os.path.join(temp_dir, "hosts.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(config, f)
-        return HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+        return manager_for_config(temp_dir, hosts=[jump_with_target()])
 
     def _run_handoff_and_capture(self, manager, action, env=None, tty=True):
         env_keys = (
@@ -349,9 +323,9 @@ class ConnectionAuthAuditTests(unittest.TestCase):
 
     def test_proxy_command_and_placeholders_are_passed_to_login_exp(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {
-                    "import_ssh_config": False,
+            manager = manager_for_config(
+                temp_dir,
+                config={
                     "placeholders": {
                         "site_domain": "example.net",
                         "default_user": "root",
@@ -359,22 +333,17 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                         "local_socks": "127.0.0.1:1080",
                     },
                 },
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "demo-host",
-                        "host": "ssh.{{site_domain}}",
-                            "port": "2222",
-                        "user": "{{default_user}}",
-                        "id_file": "{{key_path}}",
-                        "proxy_command": "nc -X 5 -x {{local_socks}} %h %p",
-                    }
+                hosts=[
+                    host(
+                        "demo-host",
+                        "ssh.{{site_domain}}",
+                        user="{{default_user}}",
+                        port="2222",
+                        id_file="{{key_path}}",
+                        proxy_command="nc -X 5 -x {{local_socks}} %h %p",
+                    )
                 ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            )
             node = manager.find_host_by_alias("demo-host")
 
             preview_args = manager.build_ssh_command_args(node)
@@ -420,36 +389,20 @@ class ConnectionAuthAuditTests(unittest.TestCase):
 
     def test_parent_proxy_command_is_used_for_nested_login(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {
-                    "import_ssh_config": False,
-                    "placeholders": {"proxy": "127.0.0.1:1080"},
-                },
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "jump",
-                        "host": "jump.example.com",
-                    "port": "2200",
-                        "user": "jumpuser",
-                        "password": "jump-pass",
-                        "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
-                        "children": [
-                            {
-                                "type": "host",
-                                "name": "target",
-                                "host": "target.internal",
-                                "user": "targetuser",
-                                "password": "target-pass",
-                            }
-                        ],
-                    }
+            manager = manager_for_config(
+                temp_dir,
+                config={"placeholders": {"proxy": "127.0.0.1:1080"}},
+                hosts=[
+                    jump_with_target(
+                        jump_overrides={
+                            "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
+                        },
+                        target_port=None,
+                        target_id_file=None,
+                        target_mfa_secret=None,
+                    )
                 ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            )
             target = manager.find_host_by_alias("target")
 
             captured = {}
@@ -478,38 +431,20 @@ class ConnectionAuthAuditTests(unittest.TestCase):
 
     def test_parent_proxy_command_is_used_for_nested_tunnel_login_exec(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {
-                    "import_ssh_config": False,
-                    "placeholders": {"proxy": "127.0.0.1:1080"},
-                },
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "jump",
-                        "host": "jump.example.com",
-                    "port": "2200",
-                        "user": "jumpuser",
-                        "password": "jump-pass",
-                        "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
-                        "children": [
-                            {
-                                "type": "host",
-                                "name": "target",
-                                "host": "target.internal",
-                            "port": "2222",
-                                "user": "targetuser",
-                                "password": "target-pass",
-                                "ssh_jump_mode": "tunnel",
-                            }
-                        ],
-                    }
+            manager = manager_for_config(
+                temp_dir,
+                config={"placeholders": {"proxy": "127.0.0.1:1080"}},
+                hosts=[
+                    jump_with_target(
+                        jump_overrides={
+                            "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
+                        },
+                        target_overrides={"ssh_jump_mode": "tunnel"},
+                        target_id_file=None,
+                        target_mfa_secret=None,
+                    )
                 ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            )
             target = manager.find_host_by_alias("target")
 
             captured = {}
@@ -540,38 +475,20 @@ class ConnectionAuthAuditTests(unittest.TestCase):
 
     def test_parent_proxy_command_is_escaped_in_nested_tunnel_preview(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {
-                    "import_ssh_config": False,
-                    "placeholders": {"proxy": "127.0.0.1:1080"},
-                },
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "jump",
-                        "host": "jump.example.com",
-                    "port": "2200",
-                        "user": "jumpuser",
-                        "password": "jump-pass",
-                        "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
-                        "children": [
-                            {
-                                "type": "host",
-                                "name": "target",
-                                "host": "target.internal",
-                            "port": "2222",
-                                "user": "targetuser",
-                                "password": "target-pass",
-                                "ssh_jump_mode": "tunnel",
-                            }
-                        ],
-                    }
+            manager = manager_for_config(
+                temp_dir,
+                config={"placeholders": {"proxy": "127.0.0.1:1080"}},
+                hosts=[
+                    jump_with_target(
+                        jump_overrides={
+                            "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
+                        },
+                        target_overrides={"ssh_jump_mode": "tunnel"},
+                        target_id_file=None,
+                        target_mfa_secret=None,
+                    )
                 ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            )
             target = manager.find_host_by_alias("target")
 
             args = manager.build_ssh_command_args(target)
@@ -801,9 +718,9 @@ class ConnectionAuthAuditTests(unittest.TestCase):
 
     def test_proxy_command_and_placeholders_are_passed_to_sftp_exp(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {
-                    "import_ssh_config": False,
+            manager = manager_for_config(
+                temp_dir,
+                config={
                     "placeholders": {
                         "host_base": "files.example.com",
                         "user": "deploy",
@@ -811,22 +728,17 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                         "proxy": "127.0.0.1:1080",
                     },
                 },
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "files",
-                        "host": "{{host_base}}",
-                            "port": "2201",
-                        "user": "{{user}}",
-                        "id_file": "{{key}}",
-                        "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
-                    }
+                hosts=[
+                    host(
+                        "files",
+                        "{{host_base}}",
+                        user="{{user}}",
+                        port="2201",
+                        id_file="{{key}}",
+                        proxy_command="nc -X 5 -x {{proxy}} %h %p",
+                    )
                 ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            )
             node = manager.find_host_by_alias("files")
 
             args = manager.build_file_transfer_command_args(
@@ -844,37 +756,21 @@ class ConnectionAuthAuditTests(unittest.TestCase):
 
     def test_parent_proxy_command_is_used_for_nested_sftp_and_relay(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {
-                    "import_ssh_config": False,
-                    "placeholders": {"proxy": "127.0.0.1:1080"},
-                },
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "jump",
-                        "host": "jump.example.com",
-                    "port": "2200",
-                        "user": "jumpuser",
-                        "password": "jump-pass",
-                        "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
-                        "children": [
-                            {
-                                "type": "host",
-                                "name": "target",
-                                "host": "target.internal",
-                            "port": "2222",
-                                "user": "targetuser",
-                                "password": "target-pass",
-                            }
-                        ],
-                    }
+            manager = manager_for_config(
+                temp_dir,
+                config={"placeholders": {"proxy": "127.0.0.1:1080"}},
+                hosts=[
+                    jump_with_target(
+                        jump_overrides={
+                            "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
+                        },
+                        jump_id_file=None,
+                        jump_mfa_secret=None,
+                        target_id_file=None,
+                        target_mfa_secret=None,
+                    )
                 ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            )
             target = manager.find_host_by_alias("target")
 
             sftp_args = manager.build_file_transfer_command_args(
@@ -900,40 +796,33 @@ class ConnectionAuthAuditTests(unittest.TestCase):
 
     def test_runtime_rejects_unsupported_deep_host_nesting(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {"import_ssh_config": False},
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "jump-one",
-                        "host": "jump-one.example.com",
-                        "user": "jump",
-                        "password": "pw",
-                        "children": [
-                            {
-                                "type": "host",
-                                "name": "jump-two",
-                                "host": "jump-two.example.com",
-                                "user": "jump",
-                                "password": "pw",
-                                "children": [
-                                    {
-                                        "type": "host",
-                                        "name": "target",
-                                        "host": "target.example.com",
-                                        "user": "target",
-                                        "password": "pw",
-                                    }
+            manager = manager_for_config(
+                temp_dir,
+                hosts=[
+                    host(
+                        "jump-one",
+                        "jump-one.example.com",
+                        user="jump",
+                        password="pw",
+                        children=[
+                            host(
+                                "jump-two",
+                                "jump-two.example.com",
+                                user="jump",
+                                password="pw",
+                                children=[
+                                    host(
+                                        "target",
+                                        "target.example.com",
+                                        user="target",
+                                        password="pw",
+                                    )
                                 ],
-                            }
+                            )
                         ],
-                    }
+                    )
                 ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            )
             target = manager.find_host_by_alias("target")
 
             with self.assertRaisesRegex(ValueError, "Unsupported nested host topology"):
@@ -941,22 +830,18 @@ class ConnectionAuthAuditTests(unittest.TestCase):
 
     def test_runtime_placeholder_errors_are_user_facing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {"import_ssh_config": False, "placeholders": {}},
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "bad-runtime",
-                        "host": "bad.{{missing}}",
-                        "user": "deploy",
-                        "password": "pw",
-                    }
+            manager = manager_for_config(
+                temp_dir,
+                config={"placeholders": {}},
+                hosts=[
+                    host(
+                        "bad-runtime",
+                        "bad.{{missing}}",
+                        user="deploy",
+                        password="pw",
+                    )
                 ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            )
             node = manager.find_host_by_alias("bad-runtime")
 
             stderr = StringIO()
@@ -968,32 +853,23 @@ class ConnectionAuthAuditTests(unittest.TestCase):
 
     def test_runtime_rejects_nested_target_proxy_command(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {"import_ssh_config": False},
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "jump",
-                        "host": "jump.example.com",
-                        "user": "jumpuser",
-                        "password": "pw",
-                        "children": [
-                            {
-                                "type": "host",
-                                "name": "target",
-                                "host": "target.internal",
-                                "user": "targetuser",
-                                "password": "pw",
-                                "proxy_command": "nc -x 127.0.0.1:1080 %h %p",
-                            }
-                        ],
-                    }
+            manager = manager_for_config(
+                temp_dir,
+                hosts=[
+                    jump_with_target(
+                        jump_password="pw",
+                        jump_id_file=None,
+                        jump_mfa_secret=None,
+                        target_password="pw",
+                        target_port=None,
+                        target_id_file=None,
+                        target_mfa_secret=None,
+                        target_overrides={
+                            "proxy_command": "nc -x 127.0.0.1:1080 %h %p",
+                        },
+                    )
                 ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            )
             target = manager.find_host_by_alias("target")
 
             with self.assertRaisesRegex(ValueError, "nested jump host modes"):

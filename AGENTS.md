@@ -55,7 +55,10 @@ This file provides repository guidance for coding agents and maintainers working
 | `config_store.py` | `ConfigStore` plus JSONC parser — reads `hosts.json`, fingerprints loaded files, writes JSON atomically with optional stale-write detection, rotates/list/restores backups, and preserves JSONC comments/trailing-comma read support |
 | `config_validation.py` | Pure parsed-config validation helpers — validates top-level config, placeholders, host/group nodes, jump modes, relay temp paths, and keeps a compatibility export through `host_manager.py` |
 | `audit_logger.py` | `AuditLogger` class — manages runtime data dir (`~/.sshgo/` or `$SSHGO_DATA_DIR`), writes audit logs in JSONL format with node identity/endpoint fields and retention limits (history: 1000, audit-simple: 5000, audit-full: 2000) |
-| `tui.py` | `Tui` class — curses-based interactive interface (tree view, search, form loops, add/edit/delete flows, detail preview pane) |
+| `tui.py` | `Tui` class — curses-based interactive interface (tree view, search, form loops, add/edit/delete flows, Recent cache, detail preview pane) |
+| `tui_flows.py` | TUI CRUD flow helpers — add/edit/delete orchestration and flow-specific messages delegated from `Tui` |
+| `tui_recent.py` | Pure Recent group builder — resolves audit history to current host nodes or read-only history snapshots |
+| `tui_render.py` | TUI render helpers — safe screen writes, shell/header/footer drawing, split layout, and detail pane drawing |
 | `tui_text.py` | Pure TUI text helpers — ellipsizing, key matching, printable text extraction, and cursor-aware field editing |
 | `tui_forms.py` | Pure TUI form helpers — add/edit field schemas, auth/proxy field visibility, form cleanup, and form-to-node conversion |
 | `config_parser.py` | `SshConfigParser` — parses `~/.ssh/config` into sshgo host nodes |
@@ -133,7 +136,7 @@ Use the smallest set that matches the change. For broad code or documentation sy
 
 ```bash
 python3 -m unittest discover -s tests -p 'test*.py'
-python3 -m py_compile sshgo.py cli_config.py cli_diagnostics.py host_manager.py host_tree.py config_store.py config_validation.py tui.py tui_text.py tui_forms.py audit_logger.py auth.py crypto.py config_parser.py i18n.py terminal_title.py connection_errors.py connection_plan.py connection_planner.py connection_runtime.py sftp_ssh_wrapper.py tests/test_connection_auth_audit.py tests/test_command_plan.py tests/test_terminal_title.py tests/test_tui.py tests/test_tui_text.py tests/test_tui_forms.py tests/test_expect_sftp.py tests/test_relay_transfer.py tests/test_audit.py tests/test_config_backup.py tests/test_config_store.py tests/test_config_validation.py tests/test_validation.py tests/test_cli.py tests/test_host_manager.py tests/test_host_tree.py
+python3 -m py_compile sshgo.py cli_config.py cli_diagnostics.py host_manager.py host_tree.py config_store.py config_validation.py tui.py tui_flows.py tui_recent.py tui_render.py tui_text.py tui_forms.py audit_logger.py auth.py crypto.py config_parser.py i18n.py terminal_title.py connection_errors.py connection_plan.py connection_planner.py connection_runtime.py sftp_ssh_wrapper.py tests/fixtures.py tests/test_connection_auth_audit.py tests/test_command_plan.py tests/test_terminal_title.py tests/test_tui.py tests/test_tui_flows.py tests/test_tui_recent.py tests/test_tui_render.py tests/test_tui_text.py tests/test_tui_forms.py tests/test_expect_sftp.py tests/test_relay_transfer.py tests/test_audit.py tests/test_config_backup.py tests/test_config_store.py tests/test_config_validation.py tests/test_validation.py tests/test_cli.py tests/test_host_manager.py tests/test_host_tree.py
 python3 sshgo.py --validate
 git diff --check
 ```

@@ -8,21 +8,19 @@ import textwrap
 import curses.textpad as textpad
 
 from config_validation import DEFAULT_TUI_SCREEN_POLICY, TUI_SCREEN_POLICIES
-from endpoint import DEFAULT_PORT, format_endpoint
 from host_manager import HostManager
 from i18n import i18n
+import tui_flows
 import tui_forms
+import tui_recent
+import tui_render
 import tui_text
 
-_AUTO_GENERATED_SOURCES = frozenset({"ssh_config_group", "recent_group"})
-_READONLY_SOURCES = frozenset({"ssh_config", "history"})
+_AUTO_GENERATED_SOURCES = tui_flows.AUTO_GENERATED_SOURCES
+_READONLY_SOURCES = tui_flows.READONLY_SOURCES
 
-DEFAULT_SCREEN_SIZE = (24, 80)
 FORM_INPUT_MIN_WIDTH = 18
 FORM_INPUT_MAX_WIDTH = 52
-DETAIL_MIN_COLS = 96
-DETAIL_MIN_WIDTH = 34
-DETAIL_MAX_WIDTH = 56
 
 
 class Tui:
@@ -123,11 +121,7 @@ class Tui:
             pass
 
     def _window_size(self, window=None):
-        window = window or self.screen
-        try:
-            return window.getmaxyx()
-        except AttributeError:
-            return DEFAULT_SCREEN_SIZE
+        return tui_render.window_size(window or self.screen)
 
     def _color(self, pair_id):
         try:
@@ -142,23 +136,7 @@ class Tui:
         return self._color(pair_id)
 
     def _safe_addstr(self, window, y, x, text, attr=0, max_width=None):
-        height, width = self._window_size(window)
-        if y < 0 or y >= height or x < 0 or x >= width:
-            return
-
-        available = width - x - 1
-        if max_width is not None:
-            available = min(available, max_width)
-        if available <= 0:
-            return
-
-        value = str(text)
-        if tui_text.display_width(value) > available:
-            value = tui_text.truncate_cells(value, max(0, available - 1))
-        try:
-            window.addstr(y, x, value, attr)
-        except curses.error:
-            pass
+        tui_render.safe_addstr(window, y, x, text, attr, max_width=max_width)
 
     def _ellipsize(self, value, width, tail=False):
         return tui_text.ellipsize(value, width, tail=tail)
@@ -274,49 +252,17 @@ class Tui:
         return i18n.get("footer_main")
 
     def _draw_bar(self, window, y, text, attr=0):
-        _, width = self._window_size(window)
-        if width <= 1:
-            return
-        self._safe_addstr(window, y, 0, " " * (width - 1), attr)
-        self._safe_addstr(window, y, 1, text, attr, max_width=width - 2)
+        tui_render.draw_bar(window, y, text, attr)
 
     def _draw_shell(self, title="", footer="", search_text="", frame=True):
-        self.screen.clear()
-        height, width = self._window_size()
-        if frame:
-            try:
-                self.screen.border(0)
-            except (AttributeError, curses.error):
-                pass
-
-        if title:
-            header = f"{i18n.get('app_title')} - {title}"
-            self._safe_addstr(self.screen, 0, 2, f" {header} ", curses.A_BOLD)
-
-        footer_y = height - 1
-        search_y = None
-        content_bottom = footer_y
-        if search_text and height > 3:
-            search_y = height - 2
-            content_bottom = search_y
-            self._safe_addstr(self.screen, search_y, 2, search_text)
-
-        if footer and footer_y > 0:
-            self._draw_bar(
-                self.screen,
-                footer_y,
-                footer,
-                self._style_color("COLOR_STATUS"),
-            )
-
-        return {
-            "height": height,
-            "width": width,
-            "content_top": 1,
-            "content_bottom": max(1, content_bottom),
-            "footer_y": footer_y,
-            "search_y": search_y,
-        }
+        return tui_render.draw_shell(
+            self.screen,
+            title=title,
+            footer=footer,
+            search_text=search_text,
+            frame=frame,
+            status_attr=self._style_color("COLOR_STATUS"),
+        )
 
     def _show_message(self, title, message):
         footer = i18n.get("press_any_key")
@@ -336,41 +282,11 @@ class Tui:
         self.screen.getch()
 
     def _main_split_layout(self, screen_cols, node):
-        content_width = max(1, screen_cols - 2)
-        show_details = (
-            self.host_manager.config.get("show_detail_pane", True)
-            and screen_cols >= DETAIL_MIN_COLS
-            and node
-            and node.get("type") == "host"
+        return tui_render.main_split_layout(
+            screen_cols,
+            node,
+            show_detail_pane=self.host_manager.config.get("show_detail_pane", True),
         )
-        if not show_details:
-            return {
-                "list_x": 1,
-                "list_width": content_width,
-                "detail_x": None,
-                "detail_width": 0,
-                "separator_x": None,
-            }
-
-        detail_width = min(DETAIL_MAX_WIDTH, max(DETAIL_MIN_WIDTH, screen_cols // 3))
-        list_width = max(24, content_width - detail_width - 1)
-        if list_width < 24:
-            return {
-                "list_x": 1,
-                "list_width": content_width,
-                "detail_x": None,
-                "detail_width": 0,
-                "separator_x": None,
-            }
-
-        separator_x = 1 + list_width
-        return {
-            "list_x": 1,
-            "list_width": list_width,
-            "detail_x": separator_x + 1,
-            "detail_width": detail_width,
-            "separator_x": separator_x,
-        }
 
     def _layout_form_fields(self, visible_fields, width, start_y=2):
         label_width = 0
@@ -528,21 +444,10 @@ class Tui:
         return None
 
     def _count_descendants(self, node):
-        total = 0
-        for child in node.get("children", []) or []:
-            total += 1
-            total += self._count_descendants(child)
-        return total
+        return tui_flows.count_descendants(node)
 
     def _delete_impact_text(self, node):
-        if node.get("type") == "group":
-            return i18n.get(
-                "delete_group_impact",
-                count=self._count_descendants(node),
-            )
-        host, port = self.host_manager.raw_host_port(node)
-        target = self.host_manager._target_display(node.get("user", ""), host, port)
-        return i18n.get("delete_host_impact", target=target)
+        return tui_flows.delete_impact_text(self, node)
 
     def _set_expansion(self, expand: bool):
         visible_nodes = self.get_lines_with_level()
@@ -961,352 +866,25 @@ class Tui:
                 return None
 
     def run_add_flow(self, preselected_parent=None):
-        original_mode = self.mode
-        try:
-            if preselected_parent:
-                if not self._is_editable_parent(preselected_parent):
-                    self._show_readonly_error()
-                    return
-                parent_node = preselected_parent
-            else:
-                self.mode = "select_parent"
-                parent_node = self.run()
-                if not parent_node:
-                    return
-
-            parent_name = (
-                None if parent_node.get("type") == "system" else parent_node["name"]
-            )
-            parent_id = (
-                None if parent_node.get("type") == "system" else parent_node.get("id")
-            )
-
-            node_type_fields = tui_forms.node_type_form_fields()
-            type_data = self._run_form_loop(
-                node_type_fields, i18n.get("select_node_type")
-            )
-            if not type_data:
-                return
-
-            node_type = type_data["type"]
-
-            if node_type == "host":
-                form_fields = self._host_form_fields(
-                    include_proxy=parent_node.get("type") != "host",
-                    advanced_open=False,
-                )
-                title = i18n.get("add_new_host")
-            else:
-                form_fields = self._group_form_fields()
-                title = i18n.get("add_new_group")
-
-            def validate_add_form(form_data):
-                clean_data = self._clean_form_data(form_data)
-                if (
-                    clean_data.get("name")
-                    and clean_data["name"] != parent_node.get("name")
-                    and clean_data["name"] != "Top Level"
-                ):
-                    existing_node, _, _ = self.host_manager.find_node_and_parent(
-                        clean_data["name"]
-                    )
-                    if existing_node:
-                        return (
-                            [i18n.get("error_name_exists", name=clean_data["name"])],
-                            "name",
-                        )
-
-                candidate = (
-                    self._host_node_from_form(form_data)
-                    if node_type == "host"
-                    else self._group_node_from_form(form_data)
-                )
-                if parent_id:
-                    errors = self.host_manager.validate_add_candidate_by_parent_id(
-                        candidate,
-                        parent_id,
-                    )
-                else:
-                    errors = self.host_manager.validate_add_candidate(
-                        candidate,
-                        parent_name,
-                    )
-                return (errors, self._infer_validation_focus(errors))
-
-            final_data = self._run_form_loop(
-                form_fields,
-                title,
-                validator=validate_add_form,
-            )
-
-            if final_data:
-                final_data = self._clean_form_data(final_data)
-                if (
-                    final_data.get("name")
-                    and final_data["name"] != parent_node.get("name")
-                    and final_data["name"] != "Top Level"
-                ):
-                    existing_node, _, _ = self.host_manager.find_node_and_parent(
-                        final_data["name"]
-                    )
-                    if existing_node:
-                        self._show_error(
-                            i18n.get("error_name_exists", name=final_data["name"])
-                        )
-                        return
-
-                if node_type == "host":
-                    new_node = self._host_node_from_form(final_data)
-                else:
-                    new_node = self._group_node_from_form(final_data)
-                if parent_id:
-                    validation_errors = (
-                        self.host_manager.validate_add_candidate_by_parent_id(
-                            new_node,
-                            parent_id,
-                        )
-                    )
-                else:
-                    validation_errors = self.host_manager.validate_add_candidate(
-                        new_node, parent_name
-                    )
-                if validation_errors:
-                    self._show_error(
-                        i18n.get("validate_failed")
-                        + ":\n"
-                        + "\n".join(validation_errors)
-                    )
-                    return
-
-                if parent_id:
-                    saved = self.host_manager.add_node_to_parent_id(
-                        new_node,
-                        parent_id,
-                    )
-                else:
-                    saved = self.host_manager.add_node(new_node, parent_name)
-                if not saved:
-                    self._show_save_error()
-                    return
-                self._show_success(
-                    i18n.get("success_added", name=new_node["name"])
-                )
-        except Exception as e:
-            self.restore_screen()
-            print(f"An error occurred in add flow: {e}")
-            import traceback
-
-            traceback.print_exc()
-            sys.exit(1)
-        finally:
-            self.mode = original_mode
+        return tui_flows.run_add_flow(self, preselected_parent=preselected_parent)
 
     def _show_readonly_error(self):
-        self._show_message(
-            i18n.get("readonly_title"),
-            "\n".join(
-                [
-                    i18n.get("edit_ssh_config_not_supported"),
-                    i18n.get("edit_ssh_config_advice"),
-                ]
-            ),
-        )
+        return tui_flows.show_readonly_error(self)
 
     def _show_save_error(self):
-        self._show_error(
-            getattr(self.host_manager, "last_save_error", None)
-            or i18n.get("config_save_conflict")
-        )
+        return tui_flows.show_save_error(self)
 
     def _show_error(self, message):
-        self._show_message(i18n.get("error_title"), message)
+        return tui_flows.show_error(self, message)
 
     def _show_success(self, message):
-        self._show_message(i18n.get("success_title"), message)
+        return tui_flows.show_success(self, message)
 
     def run_edit_flow(self):
-        selected_node = self.get_current_node()
-        if not selected_node or selected_node.get("source") in _AUTO_GENERATED_SOURCES:
-            return
-
-        if selected_node.get("source") in _READONLY_SOURCES:
-            self._show_readonly_error()
-            return
-
-        original_name = selected_node["name"]
-        selected_id = selected_node.get("id")
-        node_type = selected_node["type"]
-
-        if node_type == "host":
-            current_host, current_port = self.host_manager.raw_host_port(selected_node)
-            current_auth_val = "none"
-            if selected_node.get("password"):
-                current_auth_val = "password"
-            elif selected_node.get("id_file"):
-                current_auth_val = "key"
-
-            values = {
-                "name": selected_node.get("name", ""),
-                "host": current_host,
-                "port": current_port,
-                "user": selected_node.get("user", ""),
-                "auth": current_auth_val,
-                "password": selected_node.get("password", ""),
-                "id_file": selected_node.get("id_file", ""),
-                "mfa_secret": selected_node.get("mfa_secret", ""),
-                "proxy_command": selected_node.get("proxy_command", ""),
-                "ssh_jump_mode": selected_node.get("ssh_jump_mode", "default"),
-                "transfer_jump_mode": selected_node.get(
-                    "transfer_jump_mode",
-                    "default",
-                ),
-            }
-            advanced_open = bool(
-                selected_node.get("proxy_command")
-                or selected_node.get("ssh_jump_mode")
-                or selected_node.get("transfer_jump_mode")
-            )
-            form_fields = self._host_form_fields(
-                values,
-                include_proxy=not selected_node.get("nest_parent"),
-                advanced_open=advanced_open,
-                include_context=True,
-            )
-            title = i18n.get("edit_host", name=original_name)
-        else:  # group
-            form_fields = self._group_form_fields(selected_node.get("name", ""))
-            title = i18n.get("edit_group", name=original_name)
-
-        def validate_edit_form(form_data):
-            clean_data = (
-                self._update_data_from_form(form_data)
-                if node_type == "host"
-                else self._clean_form_data(form_data)
-            )
-            if clean_data.get("name") and clean_data["name"] != original_name:
-                existing_node, _, _ = self.host_manager.find_node_and_parent(
-                    clean_data["name"]
-                )
-                if existing_node and (
-                    not selected_id or existing_node.get("id") != selected_id
-                ):
-                    return (
-                        [i18n.get("error_name_exists", name=clean_data["name"])],
-                        "name",
-                    )
-
-            if selected_id:
-                errors = self.host_manager.validate_update_candidate_by_id(
-                    selected_id,
-                    clean_data,
-                )
-            else:
-                errors = self.host_manager.validate_update_candidate(
-                    original_name,
-                    clean_data,
-                )
-            return (errors, self._infer_validation_focus(errors))
-
-        final_data = self._run_form_loop(
-            form_fields,
-            title,
-            validator=validate_edit_form,
-        )
-
-        if final_data:
-            final_data = (
-                self._update_data_from_form(final_data)
-                if node_type == "host"
-                else self._clean_form_data(final_data)
-            )
-            if final_data.get("name") and final_data["name"] != original_name:
-                existing_node, _, _ = self.host_manager.find_node_and_parent(
-                    final_data["name"]
-                )
-                if existing_node and (
-                    not selected_id or existing_node.get("id") != selected_id
-                ):
-                    self._show_error(
-                        i18n.get("error_name_exists", name=final_data["name"])
-                    )
-                    return
-
-            if selected_id:
-                validation_errors = self.host_manager.validate_update_candidate_by_id(
-                    selected_id,
-                    final_data,
-                )
-            else:
-                validation_errors = self.host_manager.validate_update_candidate(
-                    original_name, final_data
-                )
-            if validation_errors:
-                self._show_error(
-                    i18n.get("validate_failed")
-                    + ":\n"
-                    + "\n".join(validation_errors)
-                )
-                return
-
-            if selected_id:
-                saved = self.host_manager.update_node_by_id(selected_id, final_data)
-            else:
-                saved = self.host_manager.update_node(original_name, final_data)
-            if not saved:
-                self._show_save_error()
-                return
-            self._recent_group = None
-            self._recent_group_ts = 0
-            self._show_success(
-                i18n.get("success_updated", name=final_data["name"])
-            )
+        return tui_flows.run_edit_flow(self)
 
     def run_delete_flow(self):
-        selected_node = self.get_current_node()
-        if not selected_node or selected_node.get("source") in _AUTO_GENERATED_SOURCES:
-            return
-
-        if selected_node.get("source") in _READONLY_SOURCES:
-            self._show_readonly_error()
-            return
-
-        title = i18n.get("confirm_deletion")
-        form_fields = [
-            {
-                "label": i18n.get("delete_confirm_msg", name=selected_node["name"]),
-                "type": "static_text",
-            },
-            {
-                "label": self._delete_impact_text(selected_node),
-                "type": "static_text",
-            },
-            {
-                "label": i18n.get("cancel"),
-                "type": "button",
-                "name": "cancel",
-            },
-            {
-                "label": i18n.get("delete"),
-                "type": "button",
-                "name": "confirm",
-            },
-        ]
-
-        result = self._run_form_loop(
-            form_fields,
-            title,
-            initial_focus_name="cancel",
-        )
-
-        if result and result.get("confirm"):
-            if selected_node.get("id"):
-                saved = self.host_manager.delete_node_by_id(selected_node["id"])
-            else:
-                saved = self.host_manager.delete_host(selected_node["name"])
-            if not saved:
-                self._show_save_error()
-                return
-            self.highlight_line_number = max(0, self.highlight_line_number - 1)
+        return tui_flows.run_delete_flow(self)
 
     def updown(self, increment):
         new_highlight_line_number = self.highlight_line_number + increment
@@ -1319,78 +897,16 @@ class Tui:
             self.highlight_line_number = 0
 
     def _build_recent_group(self):
+        now = time.monotonic()
         if not self.host_manager.config.get("show_recent", True):
             self._recent_group = None
-            self._recent_group_ts = time.monotonic()
+            self._recent_group_ts = now
             return None
 
-        now = time.monotonic()
         if self._recent_group is not None and now - self._recent_group_ts < 60:
             return self._recent_group
 
-        recent_records = self.host_manager.audit.get_history(limit=10)
-        if not recent_records:
-            self._recent_group = None
-            self._recent_group_ts = now
-            return None
-
-        children = []
-        seen_keys = set()
-        for record in reversed(recent_records):
-            name = record.get("name", "")
-            host = record.get("host", "")
-            user = record.get("user", "")
-            port = record.get("port")
-            node_id = record.get("node_id")
-            existing = self.host_manager.find_host_by_id(node_id)
-            if not existing:
-                existing = self.host_manager.find_host_by_alias(name)
-            if existing:
-                seen_key = ("current", existing.get("name", ""))
-                child = existing.copy()
-            else:
-                current = self.host_manager.find_host_by_endpoint(host, user, port)
-                if current:
-                    seen_key = ("current", current.get("name", ""))
-                    child = current.copy()
-                else:
-                    seen_key = ("history", name, host, user, port)
-                    history_host = record.get("endpoint") or host
-                    if host and port and not record.get("endpoint"):
-                        history_host = format_endpoint(
-                            host,
-                            port,
-                            default_port=DEFAULT_PORT,
-                            include_default=True,
-                        )
-                    child = {
-                        "type": "host",
-                        "name": name,
-                        "host": history_host,
-                        "user": user,
-                        "password": "",
-                        "id_file": "",
-                        "mfa_secret": "",
-                        "source": "history",
-                    }
-            if seen_key in seen_keys:
-                continue
-            seen_keys.add(seen_key)
-            children.append(child)
-
-        if not children:
-            self._recent_group = None
-            self._recent_group_ts = now
-            return None
-
-        recent_expanded = self.host_manager.config.get("recent_expanded", False)
-        self._recent_group = {
-            "type": "group",
-            "name": i18n.get("recent"),
-            "expanded": recent_expanded,
-            "children": children,
-            "source": "recent_group",
-        }
+        self._recent_group = tui_recent.build_recent_group(self.host_manager)
         self._recent_group_ts = now
         return self._recent_group
 
@@ -1515,50 +1031,10 @@ class Tui:
         self.exit_reason = "connected"
 
     def _draw_detail_pane(self, node, window):
-        window.clear()
-        height, width = window.getmaxyx()
-        try:
-            window.border()
-        except curses.error:
-            pass
-
-        if not node or node.get("type") != "host":
-            self._safe_addstr(window, 2, 2, i18n.get("select_host_details"))
-            return
-
-        details = self.host_manager.describe_host(node)
-
-        y = 1
-        try:
-            self._safe_addstr(
-                window,
-                y,
-                2,
-                i18n.get("host_details_title"),
-                curses.A_BOLD | curses.A_UNDERLINE,
-            )
-            y += 2
-
-            for key, value in details:
-                if y >= height - 2:
-                    break
-                label = f"{key}:"
-                self._safe_addstr(window, y, 2, label, curses.A_BOLD)
-                value_width = max(10, width - 4 - len(label) - 1)
-                value_lines = textwrap.wrap(str(value), value_width)
-                if not value_lines:
-                    y += 1
-                    continue
-
-                self._safe_addstr(window, y, 2 + len(label) + 1, value_lines[0])
-                y += 1
-                for line in value_lines[1:]:
-                    if y >= height - 2:
-                        break
-                    self._safe_addstr(window, y, 4, line)
-                    y += 1
-        except curses.error:
-            pass  # Ignore render errors if window is too small
+        details = []
+        if node and node.get("type") == "host":
+            details = self.host_manager.describe_host(node)
+        tui_render.draw_detail_pane(window, node, details)
 
     def render_screen(self):
         node = self.get_current_node()

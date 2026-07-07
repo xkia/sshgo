@@ -107,6 +107,12 @@ Create `tests/fixtures.py` with small stdlib-only helpers:
 Update large tests gradually, starting with `test_command_plan.py`,
 `test_connection_auth_audit.py`, `test_audit.py`, and `test_tui.py`.
 
+Initial implementation:
+
+- Added `tests/fixtures.py`.
+- Migrated common jump/target setup in `test_command_plan.py`,
+  `test_connection_auth_audit.py`, and `test_audit.py`.
+
 Expected benefit:
 
 - Future schema changes touch fixture helpers instead of dozens of JSON snippets.
@@ -126,9 +132,16 @@ Move Recent group construction from `tui.py` into `tui_recent.py`.
 
 Proposed boundary:
 
-- Input: `host_manager`, audit records, current timestamp.
+- Input: `host_manager`.
 - Output: Recent group node or `None`.
-- Keep TUI rendering and navigation in `Tui`.
+- Keep TUI rendering, navigation, and `_recent_group` caching in `Tui`.
+
+Initial implementation:
+
+- Added `tui_recent.py`.
+- Moved audit-history resolution, current-node lookup, de-duplication, and
+  history-only fallback construction out of `tui.py`.
+- Added focused `tests/test_tui_recent.py` coverage.
 
 Expected benefit:
 
@@ -155,6 +168,15 @@ Candidate functions:
 - detail pane formatting
 - tree row rendering helpers
 
+Initial implementation:
+
+- Added `tui_render.py`.
+- Moved safe screen writes, shell/header/footer rendering, main split layout,
+  and detail pane drawing out of `tui.py`.
+- Kept `Tui` as the owner of screen lifecycle, keyboard handling, form flow, and
+  detail data lookup.
+- Added focused `tests/test_tui_render.py` coverage.
+
 Expected benefit:
 
 - Visual changes become localized.
@@ -176,6 +198,16 @@ Exit criteria:
 
 Move add/edit/delete flow orchestration into `tui_flows.py` after render and
 Recent boundaries are stable.
+
+Initial implementation:
+
+- Added `tui_flows.py`.
+- Moved add/edit/delete orchestration and flow-specific messages out of
+  `tui.py`.
+- Kept `Tui.run()` and keyboard dispatch in `Tui`.
+- Kept `Tui` wrapper methods for compatibility with existing tests and call
+  sites.
+- Added focused `tests/test_tui_flows.py` coverage.
 
 Expected benefit:
 

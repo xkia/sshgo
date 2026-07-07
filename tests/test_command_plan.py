@@ -1,55 +1,32 @@
-import json
-import os
 import shlex
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 
-from host_manager import CommandPlan, ConfigRuntimeError, HostManager
+from host_manager import CommandPlan, ConfigRuntimeError
+
+try:
+    from fixtures import host, jump_with_target, manager_for_config
+except ModuleNotFoundError:
+    from tests.fixtures import host, jump_with_target, manager_for_config
 
 
 class CommandPlanTests(unittest.TestCase):
     def _manager(self, temp_dir):
-        config = {
-            "config": {"import_ssh_config": False},
-            "hosts": [
-                {
-                    "type": "host",
-                    "name": "jump",
-                    "host": "jump.example.com",
-                    "port": "2200",
-                    "user": "jumpuser",
-                    "password": "jump-pass",
-                    "id_file": "/tmp/jump_key",
-                    "mfa_secret": "JBSWY3DPEHPK3PXP",
-                    "children": [
-                        {
-                            "type": "host",
-                            "name": "target",
-                            "host": "target.internal",
-                            "port": "2222",
-                            "user": "targetuser",
-                            "password": "target-pass",
-                            "id_file": "/tmp/target_key",
-                            "mfa_secret": "JBSWY3DPEHPK3PXP",
-                        }
-                    ],
-                },
-                {
-                    "type": "host",
-                    "name": "direct",
-                    "host": "direct.example.com",
-                    "port": "2201",
-                    "user": "directuser",
-                    "password": "direct-pass",
-                },
+        return manager_for_config(
+            temp_dir,
+            hosts=[
+                jump_with_target(),
+                host(
+                    "direct",
+                    "direct.example.com",
+                    user="directuser",
+                    port="2201",
+                    password="direct-pass",
+                ),
             ],
-        }
-        path = os.path.join(temp_dir, "hosts.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(config, f)
-        return HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+        )
 
     def test_interactive_command_plan_contains_launch_env_and_audit(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -93,23 +70,18 @@ class CommandPlanTests(unittest.TestCase):
 
     def test_ipv6_interactive_command_plan_formats_endpoint_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {"import_ssh_config": False},
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "ipv6",
-                        "host": "2001:db8::10",
-                        "port": "2200",
-                        "user": "deploy",
-                        "password": "pw",
-                    }
+            manager = manager_for_config(
+                temp_dir,
+                hosts=[
+                    host(
+                        "ipv6",
+                        "2001:db8::10",
+                        user="deploy",
+                        port="2200",
+                        password="pw",
+                    )
                 ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            )
             target = manager.find_host_by_alias("ipv6")
 
             plan = manager.build_interactive_command_plan(target)
@@ -122,36 +94,23 @@ class CommandPlanTests(unittest.TestCase):
 
     def test_ipv6_jump_endpoint_is_bracketed_in_tunnel_arguments(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {
+            manager = manager_for_config(
+                temp_dir,
+                config={
                     "import_ssh_config": False,
                     "default_ssh_jump_mode": "tunnel",
                     "default_transfer_jump_mode": "tunnel",
                 },
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "jump6",
-                        "host": "2001:db8::1",
-                        "port": "2200",
-                        "user": "jumpuser",
-                        "password": "jump-pass",
-                        "children": [
-                            {
-                                "type": "host",
-                                "name": "target",
-                                "host": "target.internal",
-                                "user": "targetuser",
-                                "password": "target-pass",
-                            }
-                        ],
-                    }
+                hosts=[
+                    jump_with_target(
+                        jump_name="jump6",
+                        jump_host="2001:db8::1",
+                        target_port=None,
+                        target_id_file=None,
+                        target_mfa_secret=None,
+                    )
                 ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            )
             target = manager.find_host_by_alias("target")
 
             plan = manager.build_interactive_command_plan(target)
@@ -167,37 +126,23 @@ class CommandPlanTests(unittest.TestCase):
 
     def test_ipv6_tunnel_target_brackets_forward_spec(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {
+            manager = manager_for_config(
+                temp_dir,
+                config={
                     "import_ssh_config": False,
                     "default_ssh_jump_mode": "tunnel",
                     "default_transfer_jump_mode": "tunnel",
                 },
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "jump",
-                        "host": "jump.example.com",
-                    "port": "2200",
-                        "user": "jumpuser",
-                        "password": "jump-pass",
-                        "children": [
-                            {
-                                "type": "host",
-                                "name": "target6",
-                                "host": "2001:db8::10",
-                                "port": "2201",
-                                "user": "targetuser",
-                                "password": "target-pass",
-                            }
-                        ],
-                    }
+                hosts=[
+                    jump_with_target(
+                        target_name="target6",
+                        target_host="2001:db8::10",
+                        target_port="2201",
+                        target_id_file=None,
+                        target_mfa_secret=None,
+                    )
                 ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            )
             target = manager.find_host_by_alias("target6")
 
             plan = manager.build_interactive_command_plan(target)
@@ -210,36 +155,22 @@ class CommandPlanTests(unittest.TestCase):
 
     def test_ipv6_sftp_tunnel_target_uses_unbracketed_forward_spec(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            config = {
-                "config": {
+            manager = manager_for_config(
+                temp_dir,
+                config={
                     "import_ssh_config": False,
                     "default_transfer_jump_mode": "tunnel",
                 },
-                "hosts": [
-                    {
-                        "type": "host",
-                        "name": "jump",
-                        "host": "jump.example.com",
-                    "port": "2200",
-                        "user": "jumpuser",
-                        "password": "jump-pass",
-                        "children": [
-                            {
-                                "type": "host",
-                                "name": "target6",
-                                "host": "2001:db8::10",
-                                "port": "2201",
-                                "user": "targetuser",
-                                "password": "target-pass",
-                            }
-                        ],
-                    }
+                hosts=[
+                    jump_with_target(
+                        target_name="target6",
+                        target_host="2001:db8::10",
+                        target_port="2201",
+                        target_id_file=None,
+                        target_mfa_secret=None,
+                    )
                 ],
-            }
-            path = os.path.join(temp_dir, "hosts.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(config, f)
-            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            )
             target = manager.find_host_by_alias("target6")
 
             plan = manager.build_file_transfer_command_plan(
