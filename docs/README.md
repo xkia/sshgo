@@ -26,17 +26,12 @@
 | [tui-interaction-polish.md](specs/tui-interaction-polish.md) | Shared TUI style, add/edit/delete form polish, and cursor-aware text/password editing |
 | [internal-refactors-and-tests.md](specs/internal-refactors-and-tests.md) | Current internal module boundaries, compatibility rules, and focused test organization |
 
-## Accepted Cleanup Plans
-
-| Spec | Purpose |
-|---|---|
-| [final-2-0-optimization-audit.md](specs/final-2-0-optimization-audit.md) | Final sshgo 2.0 cleanup outcome, compression record, and remaining boundaries |
-
 ## Historical Implementation Records
 
-Older implementation specs remain under `docs/specs/` for audit trail and
-edge-case rationale, but they are intentionally not indexed one by one here.
-Use Current Behavior Specs for accepted product behavior and module boundaries.
+Older implementation specs may remain under `docs/specs/` only when they still
+explain current edge-case rationale. Completed process logs, audit snapshots, and
+superseded cleanup plans should be deleted or folded into `gap-analysis.md` and
+the current behavior specs.
 
 ## Documentation Rules
 

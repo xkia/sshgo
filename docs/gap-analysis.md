@@ -4,7 +4,7 @@
 
 - status: active
 - owner: Architect
-- last_reviewed: 2026-07-04
+- last_reviewed: 2026-07-07
 - scope: implementation risk, closed architecture gaps, optimization outcomes, and future feature candidates
 
 ## Positioning
@@ -47,6 +47,11 @@ Common workflows should get the highest polish:
 
 The 2026-07 safety and polish slice has closed the immediate focus items: alias safety, validation, command preview, doctor checks, TUI save-time feedback, backup recovery, stale-write guarding, editable-only parent selection, internal module/test refactoring, TUI interaction polish, SFTP batch-mode failure handling, and the CLI-only interactive SFTP escape hatch. There is no active implementation work in this document; future behavior changes should start as a new spec.
 
+The documentation set should stay current-state focused. Completed cleanup logs,
+line-count audits, and superseded process plans should not remain as standalone
+specs once their durable decisions have been folded into this document,
+`docs/roadmap.md`, or a current behavior spec.
+
 ## Risk Register
 
 | ID | Area | Severity | Status | Residual Risk | Direction |
@@ -78,6 +83,20 @@ The 2026-07 safety and polish slice has closed the immediate focus items: alias 
 ## Feature Candidates And Deferred Work
 
 No active feature candidates are scheduled. Any new feature should start with a focused spec and justify its maintenance cost for a personal tool.
+
+### Optimization Boundaries
+
+These boundaries are not feature candidates. They are maintenance guardrails for
+future code or documentation compression:
+
+| Area | Current stance |
+|---|---|
+| `HostManager` facade | Keep as the product-facing coordinator for config lifecycle, CRUD, validation, encryption, alias lookup, and execute/preview entry points. |
+| TUI/curses code | Extract pure helpers when obvious, but do not split stateful curses lifecycle code just to reduce line count. |
+| Expect scripts | Do not split for aesthetics; change only for concrete prompt, auth, transfer, or cleanup bugs. |
+| Tests | Reduce repeated setup with fixtures, but keep SSH/SFTP/auth/audit/TUI behavior coverage. |
+| Compatibility helpers | Keep `sftp_ssh_wrapper.py`, legacy encrypted-secret reads, relay compatibility fallback, and Recent history fallback unless a focused spec accepts the breakage. |
+| Documentation | Keep current behavior, constraints, risks, and verification entry points; delete completed process logs and one-off audit snapshots. |
 
 Deferred unless repeated real usage justifies reopening:
 
