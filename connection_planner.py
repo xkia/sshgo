@@ -153,6 +153,37 @@ class ConnectionPlanner:
             "extra": extra,
         }
 
+    def _append_identity_file(self, args, node, option_name):
+        id_file = self.context._node_id_file(node)
+        if id_file:
+            args.extend([option_name, id_file])
+
+    @staticmethod
+    def _add_secret(secrets, key, value):
+        if value:
+            secrets[key] = value
+
+    def _append_target_auth(self, args, secrets, node, mode):
+        if self.context._uses_target_agent_for_mode(node, mode):
+            return
+        self._add_secret(secrets, "target_pass", node.get("password", ""))
+        self._append_identity_file(args, node, "-i")
+        self._add_secret(secrets, "mfa_secret", node.get("mfa_secret", ""))
+
+    def _append_jump_auth(
+        self,
+        args,
+        secrets,
+        node,
+        include_identity_file=True,
+    ):
+        if self.context._uses_ssh_agent(node):
+            return
+        if include_identity_file:
+            self._append_identity_file(args, node, "-j-i")
+        self._add_secret(secrets, "jumper_pass", node.get("password", ""))
+        self._add_secret(secrets, "jumper_mfa_secret", node.get("mfa_secret", ""))
+
     def build_sftp_command_plan(self, node, action, path1, path2):
         script_path = os.path.join(self.script_dir, "sftp_login.exp")
         args, secrets = self._build_sftp_command_parts(node, action, path1, path2)
@@ -274,31 +305,8 @@ class ConnectionPlanner:
         args.extend(["-action", action, "-local", local_path, "-remote", remote_path])
         args.extend(["-temp", temp_path])
 
-        target_uses_agent = self.context._uses_target_agent_for_mode(node, "relay")
-        if not target_uses_agent:
-            target_pass = node.get("password", "")
-            if target_pass:
-                secrets["target_pass"] = target_pass
-
-            id_file = self.context._node_id_file(node)
-            if id_file:
-                args.extend(["-i", id_file])
-
-            mfa_secret = node.get("mfa_secret", "")
-            if mfa_secret:
-                secrets["mfa_secret"] = mfa_secret
-
-        jump_uses_agent = self.context._uses_ssh_agent(nest_parent)
-        if not jump_uses_agent:
-            j_id_file = self.context._node_id_file(nest_parent)
-            if j_id_file:
-                args.extend(["-j-i", j_id_file])
-            jumper_pass = nest_parent.get("password", "")
-            if jumper_pass:
-                secrets["jumper_pass"] = jumper_pass
-            j_mfa_secret = nest_parent.get("mfa_secret", "")
-            if j_mfa_secret:
-                secrets["jumper_mfa_secret"] = j_mfa_secret
+        self._append_target_auth(args, secrets, node, "relay")
+        self._append_jump_auth(args, secrets, nest_parent)
 
         return args, secrets
 
@@ -311,31 +319,20 @@ class ConnectionPlanner:
         host = audit_identity["host"]
         port = audit_identity["port"]
         nest_parent = node.get("nest_parent")
-        target_uses_agent = self.context._uses_target_agent_for_mode(
-            node,
-            "tunnel" if nest_parent else "direct",
-        )
 
         args.extend(["-h", host, "-u", self.context._node_user(node)])
         args.extend(["-host-key-checking", self.host_key_checking_mode()])
         if port != DEFAULT_PORT:
             args.extend(["-P", port])
 
-        if not target_uses_agent:
-            target_pass = node.get("password", "")
-            if target_pass:
-                secrets["target_pass"] = target_pass
-
-            id_file = self.context._node_id_file(node)
-            if id_file:
-                args.extend(["-i", id_file])
-
-            mfa_secret = node.get("mfa_secret", "")
-            if mfa_secret:
-                secrets["mfa_secret"] = mfa_secret
+        self._append_target_auth(
+            args,
+            secrets,
+            node,
+            "tunnel" if nest_parent else "direct",
+        )
 
         if nest_parent:
-            jump_uses_agent = self.context._uses_ssh_agent(nest_parent)
             _, _, jumper_str = self.jump_endpoint(nest_parent)
             args.extend(["-J", jumper_str])
             args.extend([
@@ -346,14 +343,12 @@ class ConnectionPlanner:
                     target_brackets_ipv6=True,
                 ),
             ])
-
-            if not jump_uses_agent:
-                jumper_pass = nest_parent.get("password", "")
-                if jumper_pass:
-                    secrets["jumper_pass"] = jumper_pass
-                j_mfa_secret = nest_parent.get("mfa_secret", "")
-                if j_mfa_secret:
-                    secrets["jumper_mfa_secret"] = j_mfa_secret
+            self._append_jump_auth(
+                args,
+                secrets,
+                nest_parent,
+                include_identity_file=False,
+            )
 
         if not nest_parent:
             proxy_command = self.context._proxy_command(node)
@@ -395,31 +390,15 @@ class ConnectionPlanner:
         ssh_jump_mode = (
             self.context._effective_ssh_jump_mode(node) if nest_parent else "direct"
         )
-        target_uses_agent = self.context._uses_target_agent_for_mode(
-            node,
-            ssh_jump_mode,
-        )
 
         args.extend(["-h", host, "-u", user])
         args.extend(["-host-key-checking", self.host_key_checking_mode()])
         if port != DEFAULT_PORT:
             args.extend(["-p", port])
 
-        if not target_uses_agent:
-            target_pass = node.get("password", "")
-            if target_pass:
-                secrets["target_pass"] = target_pass
-
-            id_file = self.context._node_id_file(node)
-            if id_file:
-                args.extend(["-i", id_file])
-
-            mfa_secret = node.get("mfa_secret", "")
-            if mfa_secret:
-                secrets["mfa_secret"] = mfa_secret
+        self._append_target_auth(args, secrets, node, ssh_jump_mode)
 
         if nest_parent:
-            jump_uses_agent = self.context._uses_ssh_agent(nest_parent)
             args.extend(self._build_jump_args(node))
             args.extend(["-jump-mode", ssh_jump_mode])
             if ssh_jump_mode == "tunnel":
@@ -431,17 +410,7 @@ class ConnectionPlanner:
                 jump_proxy_command = self.context._proxy_command(nest_parent)
                 if jump_proxy_command:
                     args.extend(["-j-proxy-command", jump_proxy_command])
-            if not jump_uses_agent:
-                j_id_file = self.context._node_id_file(nest_parent)
-                if j_id_file:
-                    args.extend(["-j-i", j_id_file])
-                jumper_pass = nest_parent.get("password", "")
-                if jumper_pass:
-                    secrets["jumper_pass"] = jumper_pass
-
-                j_mfa_secret = nest_parent.get("mfa_secret", "")
-                if j_mfa_secret:
-                    secrets["jumper_mfa_secret"] = j_mfa_secret
+            self._append_jump_auth(args, secrets, nest_parent)
         else:
             proxy_command = self.context._proxy_command(node)
             if proxy_command:
