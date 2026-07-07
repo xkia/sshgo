@@ -10,8 +10,9 @@ from config_validation import (
     DEFAULT_TUI_SCREEN_POLICY,
     TUI_SCREEN_POLICIES,
     merge_config,
+    validate_hosts_config,
 )
-from host_manager import HostManager, validate_hosts_config
+from host_manager import HostManager
 from i18n import i18n
 from tui import Tui
 

@@ -61,8 +61,6 @@ def restore_config_backup(config_path, index, host_manager_cls=HostManager):
 def _should_persist_node_id_migration(args):
     if args.validate or args.doctor or args.history or args.print_command:
         return False
-    if args.toggle_encryption or args.toggle_ssh_config or args.toggle_language:
-        return False
-    if args.toggle_details or args.toggle_ssh_agent:
+    if args.toggle_encryption:
         return False
     return True

@@ -19,8 +19,6 @@ This file provides repository guidance for coding agents and maintainers working
 | Preview command | `./sshgo.sh --print-command <alias>` |
 | Run diagnostics | `./sshgo.sh --doctor` |
 | Toggle encryption | `./sshgo.sh --toggle-encryption` |
-| Toggle language | `./sshgo.sh --toggle-language` |
-| Toggle detail pane | `./sshgo.sh --toggle-details` |
 | Use alternate config | `./sshgo.sh -e /path/to/hosts.json` |
 
 **Dependencies**: No Python pip packages needed. Runtime shell tools must include `expect` plus OpenSSH client commands (`ssh`, `sftp`, `scp`).
@@ -42,19 +40,19 @@ This file provides repository guidance for coding agents and maintainers working
 
 | File | Responsibility |
 |------|---------------|
-| `sshgo.py` | Entry point: arg parsing, high-level dispatch, shortcut execution, and compatibility wrappers for CLI helper imports |
+| `sshgo.py` | Entry point: arg parsing, high-level dispatch, shortcut execution, and TUI launch |
 | `sshgo.sh` | Thin shell wrapper that resolves `sshgo.py` by script path while preserving the caller's current working directory |
 | `cli_config.py` | CLI config helpers — config path probing, backup listing/restoring, and saved-node ID migration gating |
 | `cli_diagnostics.py` | `--doctor` helpers — dependency checks, terminal screen diagnostics, runtime data dir checks, and config snapshot validation |
-| `host_manager.py` | `HostManager` class — public facade for config lifecycle, stable node ID assignment, credential encryption/decryption, CRUD, validation delegation, alias lookup, and compatibility wrappers for connection preview/execution |
-| `connection_errors.py` | Shared connection/config runtime exceptions kept import-compatible through `host_manager.py` |
+| `host_manager.py` | `HostManager` class — public facade for config lifecycle, stable node ID assignment, credential encryption/decryption, CRUD, validation delegation, alias lookup, connection execution, and CLI preview launch args |
+| `connection_errors.py` | Shared connection/config runtime exceptions |
 | `connection_plan.py` | `CommandPlan` plus secret environment mapping and UTF-8 locale normalization for Expect handoff |
 | `connection_planner.py` | SSH, SFTP, interactive SFTP, and relay command-plan builders; consumes `HostManager` through a narrow structural adapter and must not import `host_manager.py` |
 | `connection_runtime.py` | Executes `CommandPlan` objects: executable checks, optional terminal title, audit start/failure records, environment construction, and `os.execve()` handoff |
 | `host_tree.py` | Pure host/group tree helpers — traversal, lookup, replacement, parent/index lookup, potential parent listing, node ID assignment, and runtime parent-link rebuilding |
 | `host_crud.py` | Internal host/group CRUD helpers — validation candidate assembly, update-data application, and tree mutations delegated by `HostManager` |
 | `config_store.py` | `ConfigStore` plus JSONC parser — reads `hosts.json`, fingerprints loaded files, writes JSON atomically with optional stale-write detection, rotates/list/restores backups, and preserves JSONC comments/trailing-comma read support |
-| `config_validation.py` | Pure parsed-config validation helpers — validates top-level config, placeholders, host/group nodes, jump modes, relay temp paths, and keeps a compatibility export through `host_manager.py` |
+| `config_validation.py` | Pure parsed-config validation helpers — validates top-level config, placeholders, host/group nodes, jump modes, and relay temp paths |
 | `audit_logger.py` | `AuditLogger` class — manages runtime data dir (`~/.sshgo/` or `$SSHGO_DATA_DIR`), writes audit logs in JSONL format with node identity/endpoint fields and retention limits (history: 1000, audit-simple: 5000, audit-full: 2000) |
 | `tui.py` | `Tui` class — curses-based interactive interface (tree view, search, form loops, add/edit/delete flows, Recent cache, detail preview pane) |
 | `tui_flows.py` | TUI CRUD flow helpers — add/edit/delete orchestration and flow-specific messages delegated from `Tui` |

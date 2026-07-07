@@ -3,42 +3,18 @@ import os
 import tempfile
 import unittest
 
-from host_manager import HostManager, validate_hosts_config
+from config_validation import validate_hosts_config
+from host_manager import HostManager
+
+try:
+    from fixtures import jump_with_target, manager_for_config
+except ImportError:
+    from tests.fixtures import jump_with_target, manager_for_config
 
 
 class ValidationTests(unittest.TestCase):
     def _manager(self, temp_dir):
-        config = {
-            "config": {"import_ssh_config": False},
-            "hosts": [
-                {
-                    "type": "host",
-                    "name": "jump",
-                    "host": "jump.example.com",
-                    "port": "2200",
-                    "user": "jumpuser",
-                    "password": "jump-pass",
-                    "id_file": "/tmp/jump_key",
-                    "mfa_secret": "JBSWY3DPEHPK3PXP",
-                    "children": [
-                        {
-                            "type": "host",
-                            "name": "target",
-                            "host": "target.internal",
-                            "port": "2222",
-                            "user": "targetuser",
-                            "password": "target-pass",
-                            "id_file": "/tmp/target_key",
-                            "mfa_secret": "JBSWY3DPEHPK3PXP",
-                        }
-                    ],
-                }
-            ],
-        }
-        path = os.path.join(temp_dir, "hosts.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(config, f)
-        return HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+        return manager_for_config(temp_dir, hosts=[jump_with_target()])
 
     def test_global_agent_satisfies_validation_auth(self):
         errors = validate_hosts_config(

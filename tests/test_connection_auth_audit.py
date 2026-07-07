@@ -7,6 +7,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 
 import host_manager as host_manager_module
+from connection_plan import env_for_secret_values
+from connection_planner import ConnectionPlanner
 
 try:
     from fixtures import host, jump_with_target, manager_for_config
@@ -15,6 +17,10 @@ except ModuleNotFoundError:
 
 
 class ConnectionAuthAuditTests(unittest.TestCase):
+    def _planner(self, manager):
+        script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return ConnectionPlanner(manager, script_dir)
+
     def _manager(self, temp_dir):
         return manager_for_config(temp_dir, hosts=[jump_with_target()])
 
@@ -100,7 +106,7 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             os.environ["LC_ALL"] = "C"
             os.environ["LC_CTYPE"] = "C"
             try:
-                env = manager._env_for_secret_values({})
+                env = env_for_secret_values({})
             finally:
                 for key, value in old_env.items():
                     if value is None:
@@ -346,15 +352,6 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             )
             node = manager.find_host_by_alias("demo-host")
 
-            preview_args = manager.build_ssh_command_args(node)
-            self.assertEqual(preview_args[preview_args.index("-p") + 1], "2222")
-            self.assertEqual(preview_args[preview_args.index("-i") + 1], "/tmp/demo key")
-            self.assertEqual(
-                preview_args[preview_args.index("-o") + 1],
-                "ProxyCommand=nc -X 5 -x 127.0.0.1:1080 %h %p",
-            )
-            self.assertEqual(preview_args[-1], "root@ssh.example.net")
-
             captured = {}
             real_execve = host_manager_module.os.execve
 
@@ -491,12 +488,15 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             )
             target = manager.find_host_by_alias("target")
 
-            args = manager.build_ssh_command_args(target)
+            plan = self._planner(manager).build_interactive_command_plan(target)
+            args = plan.args
 
-        proxy_option = args[args.index("-o") + 1]
-        self.assertIn("ProxyCommand=ssh", proxy_option)
-        self.assertIn("%%h %%p", proxy_option)
-        self.assertIn("-W %h:%p", proxy_option)
+        tunnel_proxy = args[args.index("-tunnel-proxy-command") + 1]
+        self.assertIn(
+            "ProxyCommand=nc -X 5 -x 127.0.0.1:1080 %%h %%p",
+            tunnel_proxy,
+        )
+        self.assertIn("-W %h:%p", tunnel_proxy)
 
     def test_login_exp_print_command_uses_tunnel_proxy_command(self):
         result = subprocess.run(
@@ -561,15 +561,16 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             manager = self._manager(temp_dir)
             target = manager.find_host_by_alias("target")
 
-            args, secrets = manager._build_sftp_command_parts(
+            plan = self._planner(manager).build_sftp_command_plan(
                 target, "upload", "local.txt", "/tmp/remote.txt"
             )
+            args = plan.args
 
         self.assertNotIn("-j-i", args)
         self.assertEqual(args[args.index("-i") + 1], "/tmp/target_key")
         tunnel_proxy = args[args.index("-tunnel-proxy-command") + 1]
         self.assertIn("-i /tmp/jump_key", tunnel_proxy)
-        self.assertEqual(secrets["jumper_pass"], "jump-pass")
+        self.assertEqual(plan.secret_env["SSHGO_JUMPER_PASS"], "jump-pass")
 
     def test_sftp_rejects_fragile_paths_before_expect_handoff(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -694,27 +695,14 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             manager = self._manager(temp_dir)
             target = manager.find_host_by_alias("target")
 
-            args = manager.build_file_transfer_command_args(
+            plan = self._planner(manager).build_file_transfer_command_plan(
                 target, "download", "/remote/file.txt", "local-file.txt"
             )
+            args = plan.args
 
         self.assertEqual(args[args.index("-action") + 1], "download")
         self.assertEqual(args[args.index("-local") + 1], "local-file.txt")
         self.assertEqual(args[args.index("-remote") + 1], "/remote/file.txt")
-
-    def test_legacy_sftp_transfer_api_delegates_to_file_transfer_api(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            manager = self._manager(temp_dir)
-            target = manager.find_host_by_alias("target")
-
-            file_args = manager.build_file_transfer_command_args(
-                target, "upload", "local-file.txt", "/remote/file.txt"
-            )
-            legacy_args = manager.build_sftp_command_args(
-                target, "upload", "local-file.txt", "/remote/file.txt"
-            )
-
-        self.assertEqual(file_args, legacy_args)
 
     def test_proxy_command_and_placeholders_are_passed_to_sftp_exp(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -741,9 +729,10 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             )
             node = manager.find_host_by_alias("files")
 
-            args = manager.build_file_transfer_command_args(
+            plan = self._planner(manager).build_file_transfer_command_plan(
                 node, "upload", "local.txt", "/tmp/remote.txt"
             )
+            args = plan.args
 
         self.assertEqual(args[args.index("-h") + 1], "files.example.com")
         self.assertEqual(args[args.index("-u") + 1], "deploy")
@@ -773,13 +762,15 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             )
             target = manager.find_host_by_alias("target")
 
-            sftp_args = manager.build_file_transfer_command_args(
+            sftp_plan = self._planner(manager).build_file_transfer_command_plan(
                 target, "upload", "local.txt", "/tmp/remote.txt"
             )
             target["transfer_jump_mode"] = "relay"
-            relay_args, _ = manager._build_relay_command_parts(
+            relay_plan = self._planner(manager).build_relay_command_plan(
                 target, "upload", "local.txt", "/tmp/remote.txt"
             )
+            sftp_args = sftp_plan.args
+            relay_args = relay_plan.args
 
         self.assertEqual(
             sftp_args[sftp_args.index("-tunnel-proxy-command") + 1],
@@ -871,16 +862,17 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                 ],
             )
             target = manager.find_host_by_alias("target")
+            planner = self._planner(manager)
 
             with self.assertRaisesRegex(ValueError, "nested jump host modes"):
-                manager.build_ssh_command_args(target)
+                planner.build_interactive_command_plan(target)
             with self.assertRaisesRegex(ValueError, "nested jump host modes"):
-                manager.build_file_transfer_command_args(
+                planner.build_file_transfer_command_plan(
                     target, "upload", "local.txt", "/tmp/remote.txt"
                 )
             target["transfer_jump_mode"] = "relay"
             with self.assertRaisesRegex(ValueError, "nested jump host modes"):
-                manager._build_relay_command_parts(
+                planner.build_relay_command_plan(
                     target, "upload", "local.txt", "/tmp/remote.txt"
                 )
 

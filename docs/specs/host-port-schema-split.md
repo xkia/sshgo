@@ -14,8 +14,8 @@
 
 ## Problem Background
 
-The current host node schema stores address and optional port in one `host`
-string. That keeps legacy `host:port` shortcuts compact, but it creates
+The previous host node schema stored address and optional port in one `host`
+string. That kept legacy `host:port` shortcuts compact, but created
 avoidable ambiguity for IPv6, validation, forms, imports, display formatting,
 and connection planning.
 

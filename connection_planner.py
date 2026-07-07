@@ -23,7 +23,7 @@ class ConnectionPlanner:
             opts.extend(["-i", id_file])
         return opts
 
-    def _host_key_checking_mode(self):
+    def host_key_checking_mode(self):
         return (
             "accept-new"
             if self.context.config.get("strict_host_key_checking", True)
@@ -34,11 +34,11 @@ class ConnectionPlanner:
         args = []
         nest_parent = node.get("nest_parent")
         if nest_parent:
-            _, _, jumper_str = self._jump_endpoint(nest_parent)
+            _, _, jumper_str = self.jump_endpoint(nest_parent)
             args.extend(["-J", jumper_str])
         return args
 
-    def _jump_endpoint(self, nest_parent):
+    def jump_endpoint(self, nest_parent):
         j_host, j_port = self.context._parse_host_port(nest_parent)
         jump_host = format_proxy_jump_endpoint(
             j_host,
@@ -82,7 +82,7 @@ class ConnectionPlanner:
     ):
         _, j_port, jumper_ssh_target = self._jump_ssh_target(nest_parent)
         parts = ["ssh", "-o", "ConnectTimeout=10"]
-        host_key_checking = self._host_key_checking_mode()
+        host_key_checking = self.host_key_checking_mode()
         if host_key_checking == "no":
             parts.extend([
                 "-o",
@@ -113,48 +113,6 @@ class ConnectionPlanner:
             jumper_ssh_target,
         ])
         return " ".join(shlex.quote(part) for part in parts)
-
-    def build_ssh_command_args(self, node, remote_command=None):
-        self.context._ensure_supported_jump_topology(node)
-        self.context._ensure_proxy_command_allowed(node)
-        args = ["ssh"]
-        nest_parent = node.get("nest_parent")
-        if nest_parent and self.context._effective_ssh_jump_mode(node) == "tunnel":
-            args.extend([
-                "-o",
-                f"ProxyCommand={self._build_tunnel_proxy_command(nest_parent, node)}",
-            ])
-        common_opts = self._build_common_ssh_options(node)
-
-        host, port = self.context._parse_host_port(node)
-        if port != DEFAULT_PORT:
-            args.extend(["-p", port])
-
-        args.extend(common_opts)
-        proxy_command = self.context._proxy_command(node)
-        if proxy_command and not nest_parent:
-            args.extend(["-o", f"ProxyCommand={proxy_command}"])
-
-        args.append(self.context._build_target_str(self.context._node_user(node), host))
-
-        if remote_command:
-            args.append(remote_command)
-
-        return args
-
-    def build_file_transfer_command_args(self, node, action, path1, path2):
-        return list(
-            self.build_file_transfer_command_plan(
-                node,
-                action,
-                path1,
-                path2,
-            ).args
-        )
-
-    def build_sftp_command_args(self, node, action, path1, path2):
-        args, _ = self._build_sftp_command_parts(node, action, path1, path2)
-        return args
 
     def _command_plan(
         self,
@@ -306,7 +264,7 @@ class ConnectionPlanner:
         temp_path = self.context._relay_temp_path(relay_temp_source)
 
         args.extend(["-h", host, "-u", self.context._node_user(node)])
-        args.extend(["-host-key-checking", self._host_key_checking_mode()])
+        args.extend(["-host-key-checking", self.host_key_checking_mode()])
         args.extend(["-P", port])
         args.extend(["-J-host", j_host, "-J-user", self.context._node_user(nest_parent)])
         args.extend(["-J-port", j_port])
@@ -359,7 +317,7 @@ class ConnectionPlanner:
         )
 
         args.extend(["-h", host, "-u", self.context._node_user(node)])
-        args.extend(["-host-key-checking", self._host_key_checking_mode()])
+        args.extend(["-host-key-checking", self.host_key_checking_mode()])
         if port != DEFAULT_PORT:
             args.extend(["-P", port])
 
@@ -378,7 +336,7 @@ class ConnectionPlanner:
 
         if nest_parent:
             jump_uses_agent = self.context._uses_ssh_agent(nest_parent)
-            _, _, jumper_str = self._jump_endpoint(nest_parent)
+            _, _, jumper_str = self.jump_endpoint(nest_parent)
             args.extend(["-J", jumper_str])
             args.extend([
                 "-tunnel-proxy-command",
@@ -443,7 +401,7 @@ class ConnectionPlanner:
         )
 
         args.extend(["-h", host, "-u", user])
-        args.extend(["-host-key-checking", self._host_key_checking_mode()])
+        args.extend(["-host-key-checking", self.host_key_checking_mode()])
         if port != DEFAULT_PORT:
             args.extend(["-p", port])
 

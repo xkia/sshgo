@@ -130,6 +130,51 @@ class TuiFormsTests(unittest.TestCase):
         )
         self.assertTrue(auth_hint["visible"])
 
+    def test_form_layout_assigns_dynamic_positions(self):
+        fields = [
+            {"label": "Name", "type": "text", "name": "name", "y": 99, "x": 99},
+            {
+                "label": "Auth Method",
+                "type": "radio",
+                "name": "auth",
+                "options": ["password", "key"],
+                "y": 99,
+                "x": 99,
+            },
+            {"label": "Save", "type": "button", "y": 99, "x": 99},
+            {"label": "Cancel", "type": "button", "y": 99, "x": 99},
+        ]
+
+        layout = tui_forms.layout_form_fields(fields, 100, start_y=2)
+
+        self.assertGreaterEqual(layout["input_width"], tui_forms.FORM_INPUT_MIN_WIDTH)
+        self.assertEqual(fields[0]["_screen_y"], 2)
+        self.assertNotEqual(fields[0]["_label_x"], 99)
+        self.assertGreater(fields[1]["_radio_height"], 1)
+        self.assertEqual(fields[2]["_screen_y"], fields[3]["_screen_y"])
+        self.assertLess(fields[2]["_label_x"], fields[3]["_label_x"])
+
+    def test_validation_focus_helpers_open_advanced_fields(self):
+        fields = tui_forms.host_form_fields(include_proxy=True, advanced_open=False)
+        form_data = {"_advanced_open": False}
+
+        errors, focus_name = tui_forms.normalize_validation_result(
+            ["proxy command is invalid"]
+        )
+        pending_focus = tui_forms.set_pending_focus(fields, form_data, focus_name)
+        interactive_fields = [
+            field
+            for field in fields
+            if field.get("type") not in ("static_text", "section")
+        ]
+
+        self.assertEqual(errors, ["proxy command is invalid"])
+        self.assertEqual(pending_focus, "proxy_command")
+        self.assertTrue(form_data["_advanced_open"])
+        self.assertIsNotNone(
+            tui_forms.interactive_index_by_name(interactive_fields, pending_focus)
+        )
+
     def test_group_and_node_type_fields(self):
         group = tui_forms.group_node_from_form({"name": "ops", "_x": 1})
         self.assertEqual(group["type"], "group")

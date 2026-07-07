@@ -5,7 +5,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 
-import sshgo as sshgo_module
+import cli_config
 from host_manager import HostManager
 
 
@@ -90,7 +90,7 @@ class ConfigBackupTests(unittest.TestCase):
 
             stdout = StringIO()
             with redirect_stdout(stdout):
-                code = sshgo_module.show_config_backups(path)
+                code = cli_config.show_config_backups(path)
             self.assertEqual(code, 0)
             rendered = stdout.getvalue()
             self.assertIn("Config backups", rendered)
@@ -99,7 +99,7 @@ class ConfigBackupTests(unittest.TestCase):
 
             stderr = StringIO()
             with redirect_stderr(stderr):
-                code = sshgo_module.restore_config_backup(path, 2)
+                code = cli_config.restore_config_backup(path, 2)
             self.assertEqual(code, 1)
             self.assertIn("Backup not found", stderr.getvalue())
 
@@ -124,22 +124,24 @@ class ConfigBackupTests(unittest.TestCase):
                     "target": config_path,
                 }
 
-        real_host_manager = sshgo_module.HostManager
-        sshgo_module.HostManager = FakeHostManager
-        try:
-            stdout = StringIO()
-            with redirect_stdout(stdout):
-                code = sshgo_module.show_config_backups("/tmp/hosts.json")
-            self.assertEqual(code, 0)
-            self.assertIn("/tmp/hosts.json.fake", stdout.getvalue())
+        stdout = StringIO()
+        with redirect_stdout(stdout):
+            code = cli_config.show_config_backups(
+                "/tmp/hosts.json",
+                host_manager_cls=FakeHostManager,
+            )
+        self.assertEqual(code, 0)
+        self.assertIn("/tmp/hosts.json.fake", stdout.getvalue())
 
-            stdout = StringIO()
-            with redirect_stdout(stdout):
-                code = sshgo_module.restore_config_backup("/tmp/hosts.json", 0)
-            self.assertEqual(code, 0)
-            self.assertIn("/tmp/hosts.json.fake", stdout.getvalue())
-        finally:
-            sshgo_module.HostManager = real_host_manager
+        stdout = StringIO()
+        with redirect_stdout(stdout):
+            code = cli_config.restore_config_backup(
+                "/tmp/hosts.json",
+                0,
+                host_manager_cls=FakeHostManager,
+            )
+        self.assertEqual(code, 0)
+        self.assertIn("/tmp/hosts.json.fake", stdout.getvalue())
 
 
 if __name__ == "__main__":

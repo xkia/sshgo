@@ -8,7 +8,7 @@ import textwrap
 import curses.textpad as textpad
 
 from config_validation import DEFAULT_TUI_SCREEN_POLICY, TUI_SCREEN_POLICIES
-from host_manager import HostManager
+import host_tree
 from i18n import i18n
 import tui_flows
 import tui_forms
@@ -18,9 +18,6 @@ import tui_text
 
 _AUTO_GENERATED_SOURCES = tui_flows.AUTO_GENERATED_SOURCES
 _READONLY_SOURCES = tui_flows.READONLY_SOURCES
-
-FORM_INPUT_MIN_WIDTH = 18
-FORM_INPUT_MAX_WIDTH = 52
 
 
 class Tui:
@@ -135,21 +132,6 @@ class Tui:
             return curses.A_NORMAL
         return self._color(pair_id)
 
-    def _safe_addstr(self, window, y, x, text, attr=0, max_width=None):
-        tui_render.safe_addstr(window, y, x, text, attr, max_width=max_width)
-
-    def _ellipsize(self, value, width, tail=False):
-        return tui_text.ellipsize(value, width, tail=tail)
-
-    def _matches_key(self, key, *candidates):
-        return tui_text.matches_key(key, *candidates)
-
-    def _insertable_text_for_key(self, key):
-        return tui_text.insertable_text_for_key(key)
-
-    def _apply_text_edit_key(self, value, cursor, key):
-        return tui_text.apply_text_edit_key(value, cursor, key)
-
     def _draw_edit_window(self, edit_win, value, cursor, input_width, password=False):
         input_width = max(1, int(input_width))
         display_value = "*" * len(value) if password else value
@@ -175,7 +157,10 @@ class Tui:
             return None
 
     def _edit_text_field(self, field, initial_value):
-        input_width = max(1, int(field.get("_input_width", FORM_INPUT_MIN_WIDTH)))
+        input_width = max(
+            1,
+            int(field.get("_input_width", tui_forms.FORM_INPUT_MIN_WIDTH)),
+        )
         try:
             edit_win = curses.newwin(
                 1,
@@ -213,7 +198,7 @@ class Tui:
             key = self._read_edit_key(edit_win)
             if key is None:
                 continue
-            value, cursor, action = self._apply_text_edit_key(value, cursor, key)
+            value, cursor, action = tui_text.apply_text_edit_key(value, cursor, key)
             if action == "commit":
                 break
             if action == "cancel":
@@ -251,22 +236,14 @@ class Tui:
             return i18n.get("footer_select_parent")
         return i18n.get("footer_main")
 
-    def _draw_bar(self, window, y, text, attr=0):
-        tui_render.draw_bar(window, y, text, attr)
-
-    def _draw_shell(self, title="", footer="", search_text="", frame=True):
-        return tui_render.draw_shell(
+    def _show_message(self, title, message):
+        footer = i18n.get("press_any_key")
+        layout = tui_render.draw_shell(
             self.screen,
             title=title,
             footer=footer,
-            search_text=search_text,
-            frame=frame,
             status_attr=self._style_color("COLOR_STATUS"),
         )
-
-    def _show_message(self, title, message):
-        footer = i18n.get("press_any_key")
-        layout = self._draw_shell(title=title, footer=footer)
         width = layout["width"]
         max_width = max(20, width - 6)
         lines = []
@@ -276,178 +253,10 @@ class Tui:
 
         y = layout["content_top"] + 1
         for line in lines[: max(1, layout["content_bottom"] - y)]:
-            self._safe_addstr(self.screen, y, 3, line, max_width=width - 6)
+            tui_render.safe_addstr(self.screen, y, 3, line, max_width=width - 6)
             y += 1
         self.screen.refresh()
         self.screen.getch()
-
-    def _main_split_layout(self, screen_cols, node):
-        return tui_render.main_split_layout(
-            screen_cols,
-            node,
-            show_detail_pane=self.host_manager.config.get("show_detail_pane", True),
-        )
-
-    def _layout_form_fields(self, visible_fields, width, start_y=2):
-        label_width = 0
-        labels = [
-            len(field.get("label", ""))
-            for field in visible_fields
-            if field.get("type") not in ("static_text", "section", "button", "toggle")
-        ]
-        if labels:
-            label_width = min(max(labels), max(10, width // 3))
-
-        left_x = 3
-        input_x = min(left_x + label_width + 2, max(left_x + 1, width - 8))
-        input_width = min(
-            FORM_INPUT_MAX_WIDTH,
-            max(FORM_INPUT_MIN_WIDTH, width - input_x - 4),
-        )
-
-        y = start_y
-        i = 0
-        while i < len(visible_fields):
-            field = visible_fields[i]
-            field_type = field.get("type")
-
-            if field_type == "button":
-                if y > start_y:
-                    y += 1
-                x = left_x
-                while (
-                    i < len(visible_fields)
-                    and visible_fields[i].get("type") == "button"
-                ):
-                    button = visible_fields[i]
-                    button["_screen_y"] = y
-                    button["_label_x"] = x
-                    button["_input_x"] = x
-                    button["_input_width"] = len(button.get("label", "")) + 4
-                    x += button["_input_width"] + 2
-                    i += 1
-                y += 1
-                continue
-
-            if field_type == "section":
-                if y > start_y:
-                    y += 1
-                field["_screen_y"] = y
-                field["_label_x"] = left_x
-                field["_input_x"] = left_x
-                field["_input_width"] = max(20, width - left_x - 4)
-                y += 1
-                i += 1
-                continue
-
-            field["_screen_y"] = y
-            field["_label_x"] = left_x
-            field["_input_x"] = input_x
-            field["_input_width"] = input_width
-
-            if field_type == "static_text":
-                text_width = max(20, width - left_x - 4)
-                field["_wrapped_lines"] = textwrap.wrap(
-                    field.get("label", ""),
-                    text_width,
-                ) or [field.get("label", "")]
-                y += len(field["_wrapped_lines"])
-            elif field_type == "toggle":
-                y += 1
-            elif field_type == "radio":
-                field["_radio_height"] = max(1, len(field.get("options", [])))
-                y += field["_radio_height"]
-            else:
-                y += 1
-            i += 1
-
-        return {
-            "label_width": label_width,
-            "input_x": input_x,
-            "input_width": input_width,
-            "required_height": max(1, y - start_y),
-        }
-
-    def _clean_form_data(self, form_data):
-        return tui_forms.clean_form_data(form_data)
-
-    def _host_form_fields(
-        self,
-        values=None,
-        include_proxy=True,
-        advanced_open=False,
-        include_context=False,
-    ):
-        return tui_forms.host_form_fields(
-            values=values,
-            include_proxy=include_proxy,
-            advanced_open=advanced_open,
-            include_context=include_context,
-        )
-
-    def _group_form_fields(self, name=""):
-        return tui_forms.group_form_fields(name)
-
-    def _host_node_from_form(self, final_data):
-        return tui_forms.host_node_from_form(final_data)
-
-    def _group_node_from_form(self, final_data):
-        return tui_forms.group_node_from_form(final_data)
-
-    def _update_data_from_form(self, final_data):
-        return tui_forms.update_data_from_form(final_data)
-
-    def _infer_validation_focus(self, errors):
-        joined = "\n".join(errors).lower()
-        if "duplicate node name" in joined or "name" in joined:
-            return "name"
-        if "port" in joined:
-            return "port"
-        if "proxy" in joined:
-            return "proxy_command"
-        if "ssh_jump" in joined:
-            return "ssh_jump_mode"
-        if "transfer" in joined or "relay" in joined:
-            return "transfer_jump_mode"
-        if "auth" in joined or "credential" in joined:
-            return "auth"
-        if "host" in joined or "placeholder" in joined:
-            return "host"
-        return None
-
-    def _normalize_validation_result(self, result):
-        if not result:
-            return [], None
-        if isinstance(result, tuple):
-            errors, focus_name = result
-        else:
-            errors, focus_name = result, None
-        if isinstance(errors, str):
-            errors = [errors]
-        return list(errors), focus_name or self._infer_validation_focus(errors)
-
-    def _set_pending_focus(self, fields, form_data, focus_name):
-        if not focus_name:
-            return None
-        for field in fields:
-            if field.get("name") == focus_name and field.get("advanced"):
-                form_data["_advanced_open"] = True
-                break
-        return focus_name
-
-    def _interactive_index_by_name(self, interactive_fields, name):
-        if not name:
-            return None
-        for index, field in enumerate(interactive_fields):
-            if field.get("name") == name:
-                return index
-        return None
-
-    def _count_descendants(self, node):
-        return tui_flows.count_descendants(node)
-
-    def _delete_impact_text(self, node):
-        return tui_flows.delete_impact_text(self, node)
 
     def _set_expansion(self, expand: bool):
         visible_nodes = self.get_lines_with_level()
@@ -545,11 +354,11 @@ class Tui:
                     elif c == ord("f"):
                         self.input_mode = "search"
                     elif c == ord("a"):
-                        self.run_add_flow()
+                        tui_flows.run_add_flow(self)
                     elif c == ord("e"):
-                        self.run_edit_flow()
+                        tui_flows.run_edit_flow(self)
                     elif c == ord("d"):
-                        self.run_delete_flow()
+                        tui_flows.run_delete_flow(self)
 
                 elif self.input_mode == "search":
                     if c == curses.KEY_BACKSPACE or c == 127:
@@ -573,19 +382,25 @@ class Tui:
             if 0 <= active_field_index < len(visible_fields)
             else None
         )
-        layout = self._draw_shell(
+        layout = tui_render.draw_shell(
+            self.screen,
             title=title,
             footer=self._footer_for_state(active_field),
+            status_attr=self._style_color("COLOR_STATUS"),
         )
         screen_height = layout["height"]
         screen_width = layout["width"]
         start_y = layout["content_top"] + 1
-        form_layout = self._layout_form_fields(visible_fields, screen_width, start_y)
+        form_layout = tui_forms.layout_form_fields(
+            visible_fields,
+            screen_width,
+            start_y,
+        )
 
         required_height = start_y + form_layout["required_height"] + 2
         required_width = (
             form_layout["input_x"]
-            + max(FORM_INPUT_MIN_WIDTH, form_layout["input_width"])
+            + max(tui_forms.FORM_INPUT_MIN_WIDTH, form_layout["input_width"])
             + 4
         )
         if screen_height < required_height or screen_width < required_width:
@@ -594,7 +409,7 @@ class Tui:
                 width=required_width,
                 height=required_height,
             )
-            self._safe_addstr(
+            tui_render.safe_addstr(
                 self.screen,
                 layout["content_top"] + 1,
                 2,
@@ -606,7 +421,7 @@ class Tui:
             return False
 
         if error_message:
-            self._safe_addstr(
+            tui_render.safe_addstr(
                 self.screen,
                 layout["content_bottom"] - 1,
                 3,
@@ -619,7 +434,7 @@ class Tui:
             y = field.get("_screen_y", start_y)
             x = field.get("_label_x", 3)
             input_x = field.get("_input_x", x + 2)
-            input_width = field.get("_input_width", FORM_INPUT_MIN_WIDTH)
+            input_width = field.get("_input_width", tui_forms.FORM_INPUT_MIN_WIDTH)
             label = field.get("label", "")
 
             is_active = i == active_field_index
@@ -631,7 +446,7 @@ class Tui:
 
             if field["type"] == "static_text":
                 for offset, line in enumerate(field.get("_wrapped_lines", [label])):
-                    self._safe_addstr(
+                    tui_render.safe_addstr(
                         self.screen,
                         y + offset,
                         x,
@@ -641,10 +456,12 @@ class Tui:
                 continue
 
             marker = ">" if is_active else " "
-            self._safe_addstr(self.screen, y, max(1, x - 2), marker, curses.A_BOLD)
+            tui_render.safe_addstr(
+                self.screen, y, max(1, x - 2), marker, curses.A_BOLD
+            )
 
             if field["type"] == "section":
-                self._safe_addstr(
+                tui_render.safe_addstr(
                     self.screen,
                     y,
                     x,
@@ -656,7 +473,7 @@ class Tui:
             elif field["type"] == "toggle":
                 value = bool(field.get("value"))
                 toggle_marker = "[-]" if value else "[+]"
-                self._safe_addstr(
+                tui_render.safe_addstr(
                     self.screen,
                     y,
                     x,
@@ -666,17 +483,17 @@ class Tui:
                 )
 
             elif field["type"] in ["text", "password"]:
-                self._safe_addstr(self.screen, y, x, label, curses.A_BOLD)
+                tui_render.safe_addstr(self.screen, y, x, label, curses.A_BOLD)
                 value = field.get("value") or ""
                 display_value = (
                     "*" * len(value) if field["type"] == "password" else value
                 )
-                display_value = self._ellipsize(
+                display_value = tui_text.ellipsize(
                     display_value,
                     input_width,
                     tail=field["type"] != "password",
                 )
-                self._safe_addstr(
+                tui_render.safe_addstr(
                     self.screen,
                     y,
                     input_x,
@@ -686,7 +503,7 @@ class Tui:
                 )
 
             elif field["type"] == "radio":
-                self._safe_addstr(self.screen, y, x, label, curses.A_BOLD)
+                tui_render.safe_addstr(self.screen, y, x, label, curses.A_BOLD)
                 value = field.get("value")
                 for j, option in enumerate(field["options"]):
                     display_option = i18n.get(option)
@@ -696,7 +513,7 @@ class Tui:
                     marker = "(x)" if value == option else "( )"
                     if value == option:
                         option_attr |= attr
-                    self._safe_addstr(
+                    tui_render.safe_addstr(
                         self.screen,
                         y + j,
                         input_x,
@@ -706,7 +523,7 @@ class Tui:
                     )
 
             elif field["type"] == "button":
-                self._safe_addstr(self.screen, y, x, f"[ {label} ]", attr)
+                tui_render.safe_addstr(self.screen, y, x, f"[ {label} ]", attr)
 
         self.screen.refresh()
         return True
@@ -761,7 +578,7 @@ class Tui:
             if active_field_index >= len(interactive_fields):
                 active_field_index = len(interactive_fields) - 1
             if pending_focus_name:
-                focus_index = self._interactive_index_by_name(
+                focus_index = tui_forms.interactive_index_by_name(
                     interactive_fields,
                     pending_focus_name,
                 )
@@ -839,12 +656,12 @@ class Tui:
                             if not is_valid:
                                 continue
                             if validator:
-                                errors, focus_name = self._normalize_validation_result(
+                                errors, focus_name = tui_forms.normalize_validation_result(
                                     validator(form_data)
                                 )
                                 if errors:
                                     error_message = errors[0]
-                                    pending_focus_name = self._set_pending_focus(
+                                    pending_focus_name = tui_forms.set_pending_focus(
                                         fields,
                                         form_data,
                                         focus_name,
@@ -864,27 +681,6 @@ class Tui:
                     form_data[name] = not bool(form_data.get(name))
             elif c in [ord("q"), 27]:
                 return None
-
-    def run_add_flow(self, preselected_parent=None):
-        return tui_flows.run_add_flow(self, preselected_parent=preselected_parent)
-
-    def _show_readonly_error(self):
-        return tui_flows.show_readonly_error(self)
-
-    def _show_save_error(self):
-        return tui_flows.show_save_error(self)
-
-    def _show_error(self, message):
-        return tui_flows.show_error(self, message)
-
-    def _show_success(self, message):
-        return tui_flows.show_success(self, message)
-
-    def run_edit_flow(self):
-        return tui_flows.run_edit_flow(self)
-
-    def run_delete_flow(self):
-        return tui_flows.run_delete_flow(self)
 
     def updown(self, increment):
         new_highlight_line_number = self.highlight_line_number + increment
@@ -997,7 +793,7 @@ class Tui:
                 self._set_expansion(not node.get("expanded", True))
             elif not node.get("expanded", True):
                 self._set_expansion(True)
-            elif not self.host_manager.contains_hosts(node):
+            elif not host_tree.contains_hosts(node):
                 title = i18n.get("empty_group_title", name=node.get("name"))
                 form_fields = [
                     {
@@ -1017,7 +813,7 @@ class Tui:
                 ]
                 result = self._run_form_loop(form_fields, title)
                 if result and result.get("confirm"):
-                    self.run_add_flow(preselected_parent=node)
+                    tui_flows.run_add_flow(self, preselected_parent=node)
 
     def get_current_node(self):
         visible_hosts = self.get_lines_with_level()
@@ -1030,12 +826,6 @@ class Tui:
         self.host_manager.execute_interactive_connection(node)
         self.exit_reason = "connected"
 
-    def _draw_detail_pane(self, node, window):
-        details = []
-        if node and node.get("type") == "host":
-            details = self.host_manager.describe_host(node)
-        tui_render.draw_detail_pane(window, node, details)
-
     def render_screen(self):
         node = self.get_current_node()
         search_text = ""
@@ -1046,11 +836,13 @@ class Tui:
             if len(search_text) + len(hint) + 3 < screen_cols:
                 search_text = f"{search_text}  {hint}"
 
-        layout = self._draw_shell(
+        layout = tui_render.draw_shell(
+            self.screen,
             title="",
             footer=self._footer_for_state(),
             search_text=search_text,
             frame=False,
+            status_attr=self._style_color("COLOR_STATUS"),
         )
         screen_cols = layout["width"]
         content_top = layout["content_top"]
@@ -1074,7 +866,11 @@ class Tui:
             except curses.error:
                 pass
 
-        split = self._main_split_layout(screen_cols, node)
+        split = tui_render.main_split_layout(
+            screen_cols,
+            node,
+            show_detail_pane=self.host_manager.config.get("show_detail_pane", True),
+        )
         lines_to_render = self.get_lines_with_level()
         if not lines_to_render:
             message = (
@@ -1082,7 +878,7 @@ class Tui:
                 if self.search_query
                 else i18n.get("no_hosts")
             )
-            self._safe_addstr(
+            tui_render.safe_addstr(
                 self.screen,
                 content_top,
                 split["list_x"] + 1,
@@ -1090,7 +886,7 @@ class Tui:
                 max_width=max(0, split["list_width"] - 2),
             )
             if not self.search_query:
-                self._safe_addstr(
+                tui_render.safe_addstr(
                     self.screen,
                     content_top + 1,
                     split["list_x"] + 1,
@@ -1110,7 +906,7 @@ class Tui:
 
         if split["separator_x"] is not None:
             for y in range(content_top, content_bottom):
-                self._safe_addstr(self.screen, y, split["separator_x"], "|")
+                tui_render.safe_addstr(self.screen, y, split["separator_x"], "|")
 
         for index, node in enumerate(
             lines_to_render[
@@ -1133,12 +929,14 @@ class Tui:
                 color = self._style_color("COLOR_HIGHLIGHT")
 
             max_name_width = max(1, split["list_width"] - len(prefix) - 2)
-            display_name = self._ellipsize(display_name, max_name_width)
+            display_name = tui_text.ellipsize(display_name, max_name_width)
 
             y = content_top + index
             x = split["list_x"]
-            self._safe_addstr(self.screen, y, x, prefix, self._style_color("COLOR_RED"))
-            self._safe_addstr(
+            tui_render.safe_addstr(
+                self.screen, y, x, prefix, self._style_color("COLOR_RED")
+            )
+            tui_render.safe_addstr(
                 self.screen,
                 y,
                 x + len(prefix),
@@ -1156,7 +954,11 @@ class Tui:
             win_x = split["detail_x"]
             try:
                 detail_win = curses.newwin(win_h, win_w, win_y, win_x)
-                self._draw_detail_pane(self.get_current_node(), detail_win)
+                detail_node = self.get_current_node()
+                details = []
+                if detail_node and detail_node.get("type") == "host":
+                    details = self.host_manager.describe_host(detail_node)
+                tui_render.draw_detail_pane(detail_win, detail_node, details)
                 detail_win.refresh()
             except curses.error:
                 pass

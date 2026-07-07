@@ -164,14 +164,8 @@ The emitter should:
   - command preview args remain title-free through existing plan assertions
   - enabling terminal titles does not write output when only building launch args
 
-Verification commands:
-
-```bash
-python3 -m unittest discover -s tests -p 'test*.py'
-python3 -m py_compile sshgo.py host_manager.py host_tree.py config_store.py config_validation.py tui.py audit_logger.py auth.py crypto.py config_parser.py i18n.py terminal_title.py sftp_ssh_wrapper.py
-python3 sshgo.py --validate
-git diff --check
-```
+Use the broad verification commands in `AGENTS.md`. The focused coverage above
+defines the terminal-title-specific assertions that must stay in the test suite.
 
 ## Review Status
 

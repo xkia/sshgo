@@ -16,47 +16,30 @@ from endpoint import (
     validate_host_address,
 )
 from config_store import (
-    BACKUP_COUNT,
     ConfigStore,
     ConfigWriteConflictError,
-    parse_jsonc,
 )
-# Keep validation constants importable from host_manager for compatibility.
 from config_validation import (
     ALLOWED_SAVE_KEYS,
-    CONFIG_BOOL_FIELDS,
-    CONFIG_OPTIONAL_STRING_FIELDS,
-    CONFIG_STRING_FIELDS,
-    DEFAULT_CONFIG as _DEFAULT_CONFIG,
     DEFAULT_PORT,
     DEFAULT_RELAY_TEMP_DIR,
     DEFAULT_SSH_JUMP_MODE,
     DEFAULT_TRANSFER_JUMP_MODE,
-    LANGUAGES,
     PLACEHOLDER_BRACE_RE,
     PLACEHOLDER_NAME_RE,
-    PLACEHOLDER_NODE_FIELDS,
     PLACEHOLDER_RE,
     PLACEHOLDER_TOKEN_RE,
-    SSH_JUMP_MODES,
-    THEME_COLORS,
-    THEME_FIELDS,
-    TRANSFER_JUMP_MODES,
     default_config as _default_config,
     merge_config as _merge_config,
-    validate_hosts_config,
+    validate_hosts_config as _validate_hosts_config,
 )
 from crypto import encrypt, decrypt, derive_key
 from config_parser import SshConfigParser
 from i18n import i18n
 from audit_logger import AuditLogger
-from connection_errors import ConfigRuntimeError, PlaceholderResolutionError
-from connection_plan import (
-    CommandPlan,
-    ensure_utf8_locale,
-    env_for_plan,
-    env_for_secret_values,
-    secret_env_values,
+from connection_errors import (
+    ConfigRuntimeError as _ConfigRuntimeError,
+    PlaceholderResolutionError as _PlaceholderResolutionError,
 )
 from connection_runtime import ConnectionRuntime
 from connection_planner import ConnectionPlanner
@@ -83,7 +66,7 @@ class HostManager:
         self.last_save_error = None
         self._load_and_decrypt_hosts()
         self._load_from_ssh_config()
-        self._rebuild_nest_parents(self.hosts)
+        host_tree.rebuild_nest_parents(self.hosts)
         self._sync_runtime_state_from_config()
 
         if auto_migrate:
@@ -100,9 +83,6 @@ class HostManager:
         self._audit_full_override = True
         self._audit_full = True
 
-    def _parse_jsonc(self, json_string: str) -> dict:
-        return parse_jsonc(json_string)
-
     def _read_config_file(self) -> dict:
         data, fingerprint = self.store.read_with_fingerprint()
         self._config_fingerprint = fingerprint
@@ -116,7 +96,7 @@ class HostManager:
         except Exception:
             return [i18n.get("validate_config_invalid")]
 
-        return validate_hosts_config(data)
+        return _validate_hosts_config(data)
 
     def _resolve_placeholders(self, value):
         if not isinstance(value, str):
@@ -131,13 +111,13 @@ class HostManager:
             matched_spans.append(match.span())
             name = match.group(1)
             if not PLACEHOLDER_NAME_RE.match(name):
-                raise PlaceholderResolutionError(
+                raise _PlaceholderResolutionError(
                     i18n.get("validate_invalid_placeholder_name", name=name)
                 )
 
         for match in PLACEHOLDER_BRACE_RE.finditer(value):
             if not any(start <= match.start() < end for start, end in matched_spans):
-                raise PlaceholderResolutionError(
+                raise _PlaceholderResolutionError(
                     i18n.get(
                         "validate_invalid_placeholder_name",
                         name=match.group(0),
@@ -147,7 +127,7 @@ class HostManager:
         def replace(match):
             name = match.group(1)
             if name not in placeholders:
-                raise PlaceholderResolutionError(
+                raise _PlaceholderResolutionError(
                     i18n.get("validate_unknown_placeholder", name=name)
                 )
             return str(placeholders[name])
@@ -180,7 +160,7 @@ class HostManager:
 
     def _ensure_proxy_command_allowed(self, node):
         if self._is_nested_host_node(node) and "proxy_command" in node:
-            raise ConfigRuntimeError(i18n.get("validate_proxy_command_nested"))
+            raise _ConfigRuntimeError(i18n.get("validate_proxy_command_nested"))
 
     def _ensure_supported_jump_topology(self, node):
         if not node or node.get("type") != "host":
@@ -196,7 +176,7 @@ class HostManager:
             or parent_has_parent
             or (host_ancestor_count == 1 and not direct_parent_is_host)
         ):
-            raise ConfigRuntimeError(
+            raise _ConfigRuntimeError(
                 i18n.get(
                     "validate_unsupported_nested_host_runtime",
                     name=node.get("name", ""),
@@ -213,7 +193,7 @@ class HostManager:
     def _validate_sftp_path(self, path, label):
         value = str(path)
         if any(ch in value for ch in SFTP_UNSAFE_PATH_CHARS):
-            raise ConfigRuntimeError(
+            raise _ConfigRuntimeError(
                 i18n.get("validate_invalid_sftp_path", label=label)
             )
 
@@ -222,7 +202,7 @@ class HostManager:
         try:
             return validate_host_address(host_value), normalize_port(node.get("port"))
         except EndpointParseError as e:
-            raise ConfigRuntimeError(
+            raise _ConfigRuntimeError(
                 i18n.get("validate_invalid_host_endpoint", host=host_value)
             ) from e
 
@@ -340,7 +320,7 @@ class HostManager:
         if ssh_config_hosts:
             # To prevent duplicates, get a set of names from hosts.json
             json_host_names = {
-                node.get("name") for node in self._traverse_all(self.hosts)
+                node.get("name") for node in host_tree.traverse_all(self.hosts)
             }
 
             unique_ssh_hosts = [
@@ -399,11 +379,18 @@ class HostManager:
         merged = _merge_config(cfg)
         self.config = merged
         self.hosts = data.get("hosts", [])
-        self._nodes_migrated = self._ensure_node_ids(self.hosts)
+        self._nodes_migrated = host_tree.ensure_node_ids(
+            self.hosts,
+            self._new_node_id,
+        )
 
         if self.config.get("encryption_enabled"):
             first_cred_node = next(
-                (n for n in self._traverse_all(self.hosts) if self._node_has_credentials(n)),
+                (
+                    n
+                    for n in host_tree.traverse_all(self.hosts)
+                    if self._node_has_credentials(n)
+                ),
                 None,
             )
             if first_cred_node is not None:
@@ -423,7 +410,7 @@ class HostManager:
 
                 encrypted_fields = [
                     (node, key, node.get(key))
-                    for node in self._traverse_all(self.hosts)
+                    for node in host_tree.traverse_all(self.hosts)
                     for key in ("password", "mfa_secret")
                     if node.get(key)
                 ]
@@ -439,14 +426,8 @@ class HostManager:
     def _node_has_credentials(self, node):
         return node.get("password") or node.get("mfa_secret")
 
-    def _traverse_all(self, nodes):
-        return host_tree.traverse_all(nodes)
-
     def _new_node_id(self):
         return uuid.uuid4().hex
-
-    def _ensure_node_ids(self, nodes, seen_ids=None):
-        return host_tree.ensure_node_ids(nodes, self._new_node_id, seen_ids)
 
     def _apply_crypto(self, nodes, key, fn):
         for node in nodes:
@@ -478,19 +459,6 @@ class HostManager:
     def _clean_hosts_for_validation(self):
         return self._clean_nodes_for_saving(copy.deepcopy(self.hosts))
 
-    @staticmethod
-    def _find_node_in_tree(nodes, name=None, node_id=None):
-        return host_tree.find_node(nodes, name=name, node_id=node_id)
-
-    @staticmethod
-    def _replace_node_in_tree(nodes, replacement, name=None, node_id=None):
-        return host_tree.replace_node(
-            nodes,
-            replacement,
-            name=name,
-            node_id=node_id,
-        )
-
     def _candidate_config_data(self, hosts):
         return host_crud.candidate_config_data(self.config, hosts)
 
@@ -501,7 +469,7 @@ class HostManager:
             node_data,
             parent_name=parent_name,
         )
-        return validate_hosts_config(self._candidate_config_data(hosts))
+        return _validate_hosts_config(self._candidate_config_data(hosts))
 
     def validate_add_candidate_by_parent_id(self, node_data, parent_id=None):
         hosts = self._clean_hosts_for_validation()
@@ -510,14 +478,7 @@ class HostManager:
             node_data,
             parent_id=parent_id,
         )
-        return validate_hosts_config(self._candidate_config_data(hosts))
-
-    def _apply_update_data_to_node(self, node, new_data, is_nested_host=False):
-        host_crud.apply_update_data_to_node(
-            node,
-            new_data,
-            is_nested_host=is_nested_host,
-        )
+        return _validate_hosts_config(self._candidate_config_data(hosts))
 
     def validate_update_candidate(self, node_name, new_data):
         current, _, _ = self.find_node_and_parent(node_name)
@@ -536,7 +497,7 @@ class HostManager:
         )
         if candidate_hosts is None:
             return [i18n.get("validate_node_not_found", name=node_name)]
-        return validate_hosts_config(self._candidate_config_data(hosts))
+        return _validate_hosts_config(self._candidate_config_data(hosts))
 
     def validate_update_candidate_by_id(self, node_id, new_data):
         current, _, _ = self.find_node_and_parent_by_id(node_id)
@@ -553,7 +514,7 @@ class HostManager:
         )
         if candidate_hosts is None:
             return [i18n.get("validate_node_not_found", name=current.get("name", ""))]
-        return validate_hosts_config(self._candidate_config_data(hosts))
+        return _validate_hosts_config(self._candidate_config_data(hosts))
 
 
     def _save_hosts(self):
@@ -626,7 +587,7 @@ class HostManager:
         try:
             self._load_and_decrypt_hosts()
             self._load_from_ssh_config()
-            self._rebuild_nest_parents(self.hosts)
+            host_tree.rebuild_nest_parents(self.hosts)
             self._sync_runtime_state_from_config()
         except SystemExit:
             return False
@@ -641,9 +602,6 @@ class HostManager:
             check_conflict=True,
         )
 
-    def _backup_path(self, index):
-        return self.store.backup_path(index)
-
     @staticmethod
     def backup_path_for(config_path, index):
         return ConfigStore.backup_path_for(config_path, index)
@@ -657,7 +615,7 @@ class HostManager:
         return ConfigStore.restore_backup_for(
             config_path,
             index,
-            validate_func=validate_hosts_config,
+            validate_func=_validate_hosts_config,
         )
 
     def _rotate_config_backups(self):
@@ -690,7 +648,7 @@ class HostManager:
         exact_matches = []
         prefix_matches = []
         prefix_seen = set()
-        for node in self._traverse_all(self.hosts):
+        for node in host_tree.traverse_all(self.hosts):
             if node.get("type") != "host":
                 continue
 
@@ -726,13 +684,13 @@ class HostManager:
     def find_host_by_id(self, node_id):
         if not node_id:
             return None
-        for node in self._traverse_all(self.hosts):
+        for node in host_tree.traverse_all(self.hosts):
             if node.get("type") == "host" and node.get("id") == node_id:
                 return node
         return None
 
     def find_host_by_endpoint(self, host, user="", port=None):
-        for node in self._traverse_all(self.hosts):
+        for node in host_tree.traverse_all(self.hosts):
             if node.get("type") != "host":
                 continue
 
@@ -745,9 +703,6 @@ class HostManager:
                 continue
             return node
         return None
-
-    def _rebuild_nest_parents(self, nodes, host_ancestors=None, direct_parent=None):
-        host_tree.rebuild_nest_parents(nodes, host_ancestors, direct_parent)
 
     def get_hosts(self):
         return self.hosts
@@ -770,13 +725,6 @@ class HostManager:
             parent_list=parent_list,
         )
 
-    def contains_hosts(self, group_node):
-        return host_tree.contains_hosts(group_node)
-
-    def _get_potential_parents(self):
-        # Any group or host can be a potential parent.
-        return host_tree.potential_parents(self.hosts)
-
     def delete_host(self, name):
         node, parent_list, index = self.find_node_and_parent(name)
         return self._delete_node_from_parent(node, parent_list, index, name)
@@ -798,7 +746,7 @@ class HostManager:
             return self._record_save_conflict()
 
         if host_crud.delete_node_from_parent(parent_list, index):
-            self._rebuild_nest_parents(self.hosts)
+            host_tree.rebuild_nest_parents(self.hosts)
             return self._save_hosts()
         else:
             print(
@@ -811,7 +759,7 @@ class HostManager:
         if self._config_changed_since_load():
             return self._record_save_conflict()
         existing_ids = host_crud.existing_node_ids(self.hosts)
-        self._ensure_node_ids([node_data], existing_ids)
+        host_tree.ensure_node_ids([node_data], self._new_node_id, existing_ids)
         if parent_name:
             parent_node, _, _ = self.find_node_and_parent(parent_name)
             if parent_node:
@@ -830,14 +778,14 @@ class HostManager:
         else:
             host_crud.add_node_to_tree(self.hosts, node_data)
 
-        self._rebuild_nest_parents(self.hosts)
+        host_tree.rebuild_nest_parents(self.hosts)
         return self._save_hosts()
 
     def add_node_to_parent_id(self, node_data, parent_id=None):
         if self._config_changed_since_load():
             return self._record_save_conflict()
         existing_ids = host_crud.existing_node_ids(self.hosts)
-        self._ensure_node_ids([node_data], existing_ids)
+        host_tree.ensure_node_ids([node_data], self._new_node_id, existing_ids)
         if parent_id:
             parent_node, _, _ = self.find_node_and_parent_by_id(parent_id)
             if parent_node:
@@ -856,7 +804,7 @@ class HostManager:
         else:
             host_crud.add_node_to_tree(self.hosts, node_data)
 
-        self._rebuild_nest_parents(self.hosts)
+        host_tree.rebuild_nest_parents(self.hosts)
         return self._save_hosts()
 
     @staticmethod
@@ -883,13 +831,13 @@ class HostManager:
         if self._config_changed_since_load():
             return self._record_save_conflict()
 
-        self._apply_update_data_to_node(
+        host_crud.apply_update_data_to_node(
             node,
             new_data,
             is_nested_host=self._is_nested_host_node(node),
         )
 
-        self._rebuild_nest_parents(self.hosts)
+        host_tree.rebuild_nest_parents(self.hosts)
         return self._save_hosts()
 
     def describe_host(self, node):
@@ -897,6 +845,7 @@ class HostManager:
         if not node or node.get("type") != "host":
             return details
 
+        planner = self._connection_planner()
         details.append(("Name", node.get("name", "N/A")))
         try:
             host, port = self._parse_host_port(node)
@@ -913,10 +862,10 @@ class HostManager:
             details.append(("SSH Mode", ssh_mode))
             details.append(("Transfer", transfer_mode))
             if nest_parent and ssh_mode == "shell":
-                details.append(("First Hop Host Key", self._host_key_checking_mode()))
+                details.append(("First Hop Host Key", planner.host_key_checking_mode()))
                 details.append(("Target Host Key", "managed on jump host"))
             else:
-                details.append(("Host Key", self._host_key_checking_mode()))
+                details.append(("Host Key", planner.host_key_checking_mode()))
             if nest_parent and transfer_mode == "relay":
                 details.append(("Relay Target Host Key", "managed on jump host"))
             if self._uses_target_agent_for_mode(node, ssh_mode):
@@ -925,7 +874,7 @@ class HostManager:
             if id_file:
                 details.append(("Key", os.path.basename(id_file)))
             if nest_parent:
-                j_host, j_port, jumper_str = self._jump_endpoint(nest_parent)
+                j_host, j_port, jumper_str = planner.jump_endpoint(nest_parent)
                 details.append(("Jump Host", self._target_display("", j_host, j_port)))
                 details.append(("Jump Alias", nest_parent.get("name", "")))
                 jump_proxy_command = self._proxy_command(nest_parent)
@@ -937,7 +886,7 @@ class HostManager:
                 proxy_command = self._proxy_command(node)
                 if proxy_command:
                     details.append(("ProxyCommand", proxy_command))
-        except (PlaceholderResolutionError, ConfigRuntimeError, ValueError) as e:
+        except (_PlaceholderResolutionError, _ConfigRuntimeError, ValueError) as e:
             details.append(("Config Error", str(e)))
 
         return details
@@ -970,67 +919,8 @@ class HostManager:
         status = "ON" if self.config["encryption_enabled"] else "OFF"
         print(f"Success: Encryption is now {status}.")
 
-    def toggle_ssh_config(self):
-        current = self.config.get("import_ssh_config", True)
-        new = not current
-        self.config["import_ssh_config"] = new
-        if not self._save_hosts():
-            return
-        status = "ON" if new else "OFF"
-        print(f"Success: Import from ~/.ssh/config is now {status}.")
-
-    def toggle_language(self):
-        current = self.config.get("language", "en")
-        new = "zh" if current == "en" else "en"
-        self.config["language"] = new
-        # Update runtime i18n if available
-        try:
-            i18n.set_language(new)
-        except Exception:
-            # If i18n isn't available for some reason, ignore but continue to save
-            pass
-        if not self._save_hosts():
-            return
-        print(f"Success: Language set to {new}.")
-
-    def toggle_detail_pane(self):
-        current = self.config.get("show_detail_pane", True)
-        new = not current
-        self.config["show_detail_pane"] = new
-        if not self._save_hosts():
-            return
-        status = "ON" if new else "OFF"
-        print(f"Success: Host detail pane is now {status}.")
-
-    def toggle_ssh_agent(self):
-        current = self.config.get("use_ssh_agent", False)
-        new = not current
-        self.config["use_ssh_agent"] = new
-        if not self._save_hosts():
-            return
-        status = "ON" if new else "OFF"
-        print(f"Success: SSH agent is now {status}.")
-
     def _connection_planner(self):
         return ConnectionPlanner(self, SCRIPT_DIR)
-
-    def _build_common_ssh_options(self, node):
-        return self._connection_planner()._build_common_ssh_options(node)
-
-    def _host_key_checking_mode(self):
-        return self._connection_planner()._host_key_checking_mode()
-
-    def _secret_env(self, secrets):
-        return self._env_for_secret_values(self._secret_env_values(secrets))
-
-    def _secret_env_values(self, secrets):
-        return secret_env_values(secrets)
-
-    def _env_for_secret_values(self, secret_env):
-        return env_for_secret_values(secret_env)
-
-    def _env_for_plan(self, plan):
-        return env_for_plan(plan)
 
     def _connection_runtime(self):
         return ConnectionRuntime(
@@ -1046,187 +936,40 @@ class HostManager:
         isatty = getattr(sys.stdout, "isatty", None)
         return bool(isatty and isatty())
 
-    def _emit_terminal_title_for_plan(self, plan):
-        self._connection_runtime().emit_terminal_title(plan)
-
-    def _ensure_utf8_locale(self, env):
-        ensure_utf8_locale(env)
-
-    def _ensure_executable(self, script_path):
-        ConnectionRuntime.ensure_executable(script_path)
-
-    def _build_jump_args(self, node):
-        return self._connection_planner()._build_jump_args(node)
-
-    def _jump_endpoint(self, nest_parent):
-        return self._connection_planner()._jump_endpoint(nest_parent)
-
-    @staticmethod
-    def _escape_nested_proxy_command(proxy_command):
-        return ConnectionPlanner._escape_nested_proxy_command(proxy_command)
-
-    def _build_tunnel_proxy_command(self, nest_parent, target_node=None):
-        return self._connection_planner()._build_tunnel_proxy_command(
-            nest_parent,
-            target_node,
-        )
-
-    def build_ssh_command_args(self, node, remote_command=None):
-        return self._connection_planner().build_ssh_command_args(
-            node,
-            remote_command=remote_command,
-        )
-
-    def build_file_transfer_command_args(self, node, action, path1, path2):
-        return self._connection_planner().build_file_transfer_command_args(
-            node,
-            action,
-            path1,
-            path2,
-        )
-
-    def build_sftp_command_args(self, node, action, path1, path2):
-        return self._connection_planner().build_sftp_command_args(
-            node,
-            action,
-            path1,
-            path2,
-        )
-
-    def _command_plan(
-        self,
-        script_path,
-        args,
-        secrets,
-        audit,
-        start_result,
-        missing_result,
-        exec_failed_prefix,
-        missing_message="",
-        exec_error_message="",
-    ):
-        return self._connection_planner()._command_plan(
-            script_path=script_path,
-            args=args,
-            secrets=secrets,
-            audit=audit,
-            start_result=start_result,
-            missing_result=missing_result,
-            exec_failed_prefix=exec_failed_prefix,
-            missing_message=missing_message,
-            exec_error_message=exec_error_message,
-        )
-
-    def _audit_metadata(self, node, auth, command=None, jump_chain=None, extra=None):
-        return self._connection_planner()._audit_metadata(
-            node,
-            auth,
-            command=command,
-            jump_chain=jump_chain,
-            extra=extra,
-        )
-
-    def _record_plan_audit(self, plan, result):
-        self._connection_runtime().record_plan_audit(plan, result)
-
     def _execute_command_plan(self, plan):
         self._connection_runtime().execute(plan)
 
-    def build_sftp_command_plan(self, node, action, path1, path2):
-        return self._connection_planner().build_sftp_command_plan(
-            node,
-            action,
-            path1,
-            path2,
-        )
-
-    def build_interactive_sftp_command_plan(self, node):
-        return self._connection_planner().build_interactive_sftp_command_plan(node)
-
-    def build_relay_command_plan(self, node, action, path1, path2):
-        return self._connection_planner().build_relay_command_plan(
-            node,
-            action,
-            path1,
-            path2,
-        )
-
-    def build_file_transfer_command_plan(self, node, action, path1, path2):
-        return self._connection_planner().build_file_transfer_command_plan(
-            node,
-            action,
-            path1,
-            path2,
-        )
-
     def execute_file_transfer(self, node, action, path1, path2):
         try:
-            plan = self.build_file_transfer_command_plan(node, action, path1, path2)
-        except (PlaceholderResolutionError, ConfigRuntimeError) as e:
+            plan = self._connection_planner().build_file_transfer_command_plan(
+                node,
+                action,
+                path1,
+                path2,
+            )
+        except (_PlaceholderResolutionError, _ConfigRuntimeError) as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
         self._execute_command_plan(plan)
 
     def execute_interactive_sftp_session(self, node):
         try:
-            plan = self.build_interactive_sftp_command_plan(node)
-        except (PlaceholderResolutionError, ConfigRuntimeError) as e:
+            plan = self._connection_planner().build_interactive_sftp_command_plan(node)
+        except (_PlaceholderResolutionError, _ConfigRuntimeError) as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
         self._execute_command_plan(plan)
-
-    def execute_sftp_transfer(self, node, action, path1, path2):
-        return self.execute_file_transfer(node, action, path1, path2)
-
-    def _execute_relay_transfer(self, node, action, path1, path2):
-        try:
-            plan = self.build_relay_command_plan(node, action, path1, path2)
-        except (PlaceholderResolutionError, ConfigRuntimeError) as e:
-            print(f"Error: {e}", file=sys.stderr)
-            sys.exit(1)
-        self._execute_command_plan(plan)
-
-    def _build_relay_command_parts(self, node, action, path1, path2):
-        return self._connection_planner()._build_relay_command_parts(
-            node,
-            action,
-            path1,
-            path2,
-        )
-
-    def _build_sftp_connection_parts(self, node):
-        return self._connection_planner()._build_sftp_connection_parts(node)
-
-    def _build_sftp_command_parts(self, node, action, path1, path2):
-        return self._connection_planner()._build_sftp_command_parts(
-            node,
-            action,
-            path1,
-            path2,
-        )
-
-    def _build_interactive_sftp_command_parts(self, node):
-        return self._connection_planner()._build_interactive_sftp_command_parts(node)
 
     def execute_interactive_connection(self, node, remote_command=None):
         try:
-            plan = self.build_interactive_command_plan(node, remote_command)
-        except (PlaceholderResolutionError, ConfigRuntimeError) as e:
+            plan = self._connection_planner().build_interactive_command_plan(
+                node,
+                remote_command,
+            )
+        except (_PlaceholderResolutionError, _ConfigRuntimeError) as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
         self._execute_command_plan(plan)
-
-    def _build_interactive_command_parts(self, node, remote_command=None):
-        return self._connection_planner()._build_interactive_command_parts(
-            node,
-            remote_command=remote_command,
-        )
-
-    def build_interactive_command_plan(self, node, remote_command=None):
-        return self._connection_planner().build_interactive_command_plan(
-            node,
-            remote_command=remote_command,
-        )
 
     def build_interactive_launch_command_args(self, node, remote_command=None):
         return self._connection_planner().build_interactive_launch_command_args(

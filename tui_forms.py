@@ -2,9 +2,142 @@
 # -*- coding: utf-8 -*-
 
 import getpass
+import textwrap
 
 from endpoint import DEFAULT_PORT, normalize_port
 from i18n import i18n
+
+
+FORM_INPUT_MIN_WIDTH = 18
+FORM_INPUT_MAX_WIDTH = 52
+
+
+def layout_form_fields(visible_fields, width, start_y=2):
+    label_width = 0
+    labels = [
+        len(field.get("label", ""))
+        for field in visible_fields
+        if field.get("type") not in ("static_text", "section", "button", "toggle")
+    ]
+    if labels:
+        label_width = min(max(labels), max(10, width // 3))
+
+    left_x = 3
+    input_x = min(left_x + label_width + 2, max(left_x + 1, width - 8))
+    input_width = min(
+        FORM_INPUT_MAX_WIDTH,
+        max(FORM_INPUT_MIN_WIDTH, width - input_x - 4),
+    )
+
+    y = start_y
+    i = 0
+    while i < len(visible_fields):
+        field = visible_fields[i]
+        field_type = field.get("type")
+
+        if field_type == "button":
+            if y > start_y:
+                y += 1
+            x = left_x
+            while i < len(visible_fields) and visible_fields[i].get("type") == "button":
+                button = visible_fields[i]
+                button["_screen_y"] = y
+                button["_label_x"] = x
+                button["_input_x"] = x
+                button["_input_width"] = len(button.get("label", "")) + 4
+                x += button["_input_width"] + 2
+                i += 1
+            y += 1
+            continue
+
+        if field_type == "section":
+            if y > start_y:
+                y += 1
+            field["_screen_y"] = y
+            field["_label_x"] = left_x
+            field["_input_x"] = left_x
+            field["_input_width"] = max(20, width - left_x - 4)
+            y += 1
+            i += 1
+            continue
+
+        field["_screen_y"] = y
+        field["_label_x"] = left_x
+        field["_input_x"] = input_x
+        field["_input_width"] = input_width
+
+        if field_type == "static_text":
+            text_width = max(20, width - left_x - 4)
+            field["_wrapped_lines"] = textwrap.wrap(
+                field.get("label", ""),
+                text_width,
+            ) or [field.get("label", "")]
+            y += len(field["_wrapped_lines"])
+        elif field_type == "toggle":
+            y += 1
+        elif field_type == "radio":
+            field["_radio_height"] = max(1, len(field.get("options", [])))
+            y += field["_radio_height"]
+        else:
+            y += 1
+        i += 1
+
+    return {
+        "label_width": label_width,
+        "input_x": input_x,
+        "input_width": input_width,
+        "required_height": max(1, y - start_y),
+    }
+
+
+def infer_validation_focus(errors):
+    joined = "\n".join(errors).lower()
+    if "duplicate node name" in joined or "name" in joined:
+        return "name"
+    if "port" in joined:
+        return "port"
+    if "proxy" in joined:
+        return "proxy_command"
+    if "ssh_jump" in joined:
+        return "ssh_jump_mode"
+    if "transfer" in joined or "relay" in joined:
+        return "transfer_jump_mode"
+    if "auth" in joined or "credential" in joined:
+        return "auth"
+    if "host" in joined or "placeholder" in joined:
+        return "host"
+    return None
+
+
+def normalize_validation_result(result):
+    if not result:
+        return [], None
+    if isinstance(result, tuple):
+        errors, focus_name = result
+    else:
+        errors, focus_name = result, None
+    if isinstance(errors, str):
+        errors = [errors]
+    return list(errors), focus_name or infer_validation_focus(errors)
+
+
+def set_pending_focus(fields, form_data, focus_name):
+    if not focus_name:
+        return None
+    for field in fields:
+        if field.get("name") == focus_name and field.get("advanced"):
+            form_data["_advanced_open"] = True
+            break
+    return focus_name
+
+
+def interactive_index_by_name(interactive_fields, name):
+    if not name:
+        return None
+    for index, field in enumerate(interactive_fields):
+        if field.get("name") == name:
+            return index
+    return None
 
 
 def node_type_form_fields():

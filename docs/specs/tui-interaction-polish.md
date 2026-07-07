@@ -50,11 +50,9 @@ This spec records the accepted TUI interaction and implementation boundaries aft
 
 ## Verification
 
-```bash
-python3 -m unittest tests.test_tui tests.test_tui_text tests.test_tui_forms
-python3 -m py_compile tui.py tui_text.py tui_forms.py tests/test_tui.py tests/test_tui_text.py tests/test_tui_forms.py
-git diff --check
-```
+Use the broad verification commands in `AGENTS.md`. For narrow TUI-only changes,
+the minimum focused coverage should include `tests.test_tui`,
+`tests.test_tui_text`, and `tests.test_tui_forms`.
 
 ## Review Status
 

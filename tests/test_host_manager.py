@@ -1,7 +1,6 @@
 import json
 import os
 import tempfile
-import types
 import unittest
 from contextlib import redirect_stderr
 from io import StringIO
@@ -9,40 +8,15 @@ from io import StringIO
 from config_store import ConfigStore, ConfigWriteConflictError
 from host_manager import HostManager
 
+try:
+    from fixtures import jump_with_target, manager_for_config
+except ImportError:
+    from tests.fixtures import jump_with_target, manager_for_config
+
 
 class HostManagerPersistenceCrudTests(unittest.TestCase):
     def _manager(self, temp_dir):
-        config = {
-            "config": {"import_ssh_config": False},
-            "hosts": [
-                {
-                    "type": "host",
-                    "name": "jump",
-                    "host": "jump.example.com",
-                    "port": "2200",
-                    "user": "jumpuser",
-                    "password": "jump-pass",
-                    "id_file": "/tmp/jump_key",
-                    "mfa_secret": "JBSWY3DPEHPK3PXP",
-                    "children": [
-                        {
-                            "type": "host",
-                            "name": "target",
-                            "host": "target.internal",
-                            "port": "2222",
-                            "user": "targetuser",
-                            "password": "target-pass",
-                            "id_file": "/tmp/target_key",
-                            "mfa_secret": "JBSWY3DPEHPK3PXP",
-                        }
-                    ],
-                }
-            ],
-        }
-        path = os.path.join(temp_dir, "hosts.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(config, f)
-        return HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+        return manager_for_config(temp_dir, hosts=[jump_with_target()])
 
     def test_save_hosts_writes_valid_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -668,22 +642,6 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                 manager.get_hosts()[1]["children"][0]["name"],
                 "child",
             )
-
-    def test_host_tree_wrappers_keep_generator_and_empty_id_behavior(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            manager = self._manager(temp_dir)
-
-            traversal = manager._traverse_all(manager.get_hosts())
-            self.assertIsInstance(traversal, types.GeneratorType)
-            self.assertEqual(
-                [node["name"] for node in traversal],
-                ["jump", "target"],
-            )
-            self.assertEqual(
-                manager.find_node_and_parent_by_id(""),
-                (None, None, -1),
-            )
-
 
 if __name__ == "__main__":
     unittest.main()

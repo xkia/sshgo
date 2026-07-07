@@ -61,7 +61,7 @@ def run_add_flow(tui, preselected_parent=None):
     try:
         if preselected_parent:
             if not tui._is_editable_parent(preselected_parent):
-                tui._show_readonly_error()
+                show_readonly_error(tui)
                 return
             parent_node = preselected_parent
         else:
@@ -84,17 +84,17 @@ def run_add_flow(tui, preselected_parent=None):
         node_type = type_data["type"]
 
         if node_type == "host":
-            form_fields = tui._host_form_fields(
+            form_fields = tui_forms.host_form_fields(
                 include_proxy=parent_node.get("type") != "host",
                 advanced_open=False,
             )
             title = i18n.get("add_new_host")
         else:
-            form_fields = tui._group_form_fields()
+            form_fields = tui_forms.group_form_fields()
             title = i18n.get("add_new_group")
 
         def validate_add_form(form_data):
-            clean_data = tui._clean_form_data(form_data)
+            clean_data = tui_forms.clean_form_data(form_data)
             if (
                 clean_data.get("name")
                 and clean_data["name"] != parent_node.get("name")
@@ -110,9 +110,9 @@ def run_add_flow(tui, preselected_parent=None):
                     )
 
             candidate = (
-                tui._host_node_from_form(form_data)
+                tui_forms.host_node_from_form(form_data)
                 if node_type == "host"
-                else tui._group_node_from_form(form_data)
+                else tui_forms.group_node_from_form(form_data)
             )
             if parent_id:
                 errors = tui.host_manager.validate_add_candidate_by_parent_id(
@@ -133,7 +133,7 @@ def run_add_flow(tui, preselected_parent=None):
         )
 
         if final_data:
-            final_data = tui._clean_form_data(final_data)
+            final_data = tui_forms.clean_form_data(final_data)
             if (
                 final_data.get("name")
                 and final_data["name"] != parent_node.get("name")
@@ -143,15 +143,16 @@ def run_add_flow(tui, preselected_parent=None):
                     final_data["name"]
                 )
                 if existing_node:
-                    tui._show_error(
+                    show_error(
+                        tui,
                         i18n.get("error_name_exists", name=final_data["name"])
                     )
                     return
 
             if node_type == "host":
-                new_node = tui._host_node_from_form(final_data)
+                new_node = tui_forms.host_node_from_form(final_data)
             else:
-                new_node = tui._group_node_from_form(final_data)
+                new_node = tui_forms.group_node_from_form(final_data)
             if parent_id:
                 validation_errors = tui.host_manager.validate_add_candidate_by_parent_id(
                     new_node,
@@ -163,7 +164,8 @@ def run_add_flow(tui, preselected_parent=None):
                     parent_name,
                 )
             if validation_errors:
-                tui._show_error(
+                show_error(
+                    tui,
                     i18n.get("validate_failed") + ":\n" + "\n".join(validation_errors)
                 )
                 return
@@ -176,9 +178,9 @@ def run_add_flow(tui, preselected_parent=None):
             else:
                 saved = tui.host_manager.add_node(new_node, parent_name)
             if not saved:
-                tui._show_save_error()
+                show_save_error(tui)
                 return
-            tui._show_success(i18n.get("success_added", name=new_node["name"]))
+            show_success(tui, i18n.get("success_added", name=new_node["name"]))
     except Exception as exc:
         tui.restore_screen()
         print(f"An error occurred in add flow: {exc}")
@@ -194,7 +196,7 @@ def run_edit_flow(tui):
         return
 
     if selected_node.get("source") in READONLY_SOURCES:
-        tui._show_readonly_error()
+        show_readonly_error(tui)
         return
 
     original_name = selected_node["name"]
@@ -230,7 +232,7 @@ def run_edit_flow(tui):
             or selected_node.get("ssh_jump_mode")
             or selected_node.get("transfer_jump_mode")
         )
-        form_fields = tui._host_form_fields(
+        form_fields = tui_forms.host_form_fields(
             values,
             include_proxy=not selected_node.get("nest_parent"),
             advanced_open=advanced_open,
@@ -238,14 +240,14 @@ def run_edit_flow(tui):
         )
         title = i18n.get("edit_host", name=original_name)
     else:
-        form_fields = tui._group_form_fields(selected_node.get("name", ""))
+        form_fields = tui_forms.group_form_fields(selected_node.get("name", ""))
         title = i18n.get("edit_group", name=original_name)
 
     def validate_edit_form(form_data):
         clean_data = (
-            tui._update_data_from_form(form_data)
+            tui_forms.update_data_from_form(form_data)
             if node_type == "host"
-            else tui._clean_form_data(form_data)
+            else tui_forms.clean_form_data(form_data)
         )
         if clean_data.get("name") and clean_data["name"] != original_name:
             existing_node, _, _ = tui.host_manager.find_node_and_parent(
@@ -279,9 +281,9 @@ def run_edit_flow(tui):
 
     if final_data:
         final_data = (
-            tui._update_data_from_form(final_data)
+            tui_forms.update_data_from_form(final_data)
             if node_type == "host"
-            else tui._clean_form_data(final_data)
+            else tui_forms.clean_form_data(final_data)
         )
         if final_data.get("name") and final_data["name"] != original_name:
             existing_node, _, _ = tui.host_manager.find_node_and_parent(
@@ -290,7 +292,8 @@ def run_edit_flow(tui):
             if existing_node and (
                 not selected_id or existing_node.get("id") != selected_id
             ):
-                tui._show_error(
+                show_error(
+                    tui,
                     i18n.get("error_name_exists", name=final_data["name"])
                 )
                 return
@@ -306,7 +309,8 @@ def run_edit_flow(tui):
                 final_data,
             )
         if validation_errors:
-            tui._show_error(
+            show_error(
+                tui,
                 i18n.get("validate_failed") + ":\n" + "\n".join(validation_errors)
             )
             return
@@ -316,11 +320,11 @@ def run_edit_flow(tui):
         else:
             saved = tui.host_manager.update_node(original_name, final_data)
         if not saved:
-            tui._show_save_error()
+            show_save_error(tui)
             return
         tui._recent_group = None
         tui._recent_group_ts = 0
-        tui._show_success(i18n.get("success_updated", name=final_data["name"]))
+        show_success(tui, i18n.get("success_updated", name=final_data["name"]))
 
 
 def run_delete_flow(tui):
@@ -329,7 +333,7 @@ def run_delete_flow(tui):
         return
 
     if selected_node.get("source") in READONLY_SOURCES:
-        tui._show_readonly_error()
+        show_readonly_error(tui)
         return
 
     title = i18n.get("confirm_deletion")
@@ -339,7 +343,7 @@ def run_delete_flow(tui):
             "type": "static_text",
         },
         {
-            "label": tui._delete_impact_text(selected_node),
+            "label": delete_impact_text(tui, selected_node),
             "type": "static_text",
         },
         {
@@ -366,6 +370,6 @@ def run_delete_flow(tui):
         else:
             saved = tui.host_manager.delete_host(selected_node["name"])
         if not saved:
-            tui._show_save_error()
+            show_save_error(tui)
             return
         tui.highlight_line_number = max(0, tui.highlight_line_number - 1)

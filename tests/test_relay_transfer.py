@@ -7,42 +7,21 @@ from contextlib import redirect_stderr
 from io import StringIO
 
 import host_manager as host_manager_module
-from host_manager import HostManager
+from connection_planner import ConnectionPlanner
+
+try:
+    from fixtures import jump_with_target, manager_for_config
+except ImportError:
+    from tests.fixtures import jump_with_target, manager_for_config
 
 
 class RelayTransferTests(unittest.TestCase):
+    def _planner(self, manager):
+        script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return ConnectionPlanner(manager, script_dir)
+
     def _manager(self, temp_dir):
-        config = {
-            "config": {"import_ssh_config": False},
-            "hosts": [
-                {
-                    "type": "host",
-                    "name": "jump",
-                    "host": "jump.example.com",
-                    "port": "2200",
-                    "user": "jumpuser",
-                    "password": "jump-pass",
-                    "id_file": "/tmp/jump_key",
-                    "mfa_secret": "JBSWY3DPEHPK3PXP",
-                    "children": [
-                        {
-                            "type": "host",
-                            "name": "target",
-                            "host": "target.internal",
-                            "port": "2222",
-                            "user": "targetuser",
-                            "password": "target-pass",
-                            "id_file": "/tmp/target_key",
-                            "mfa_secret": "JBSWY3DPEHPK3PXP",
-                        }
-                    ],
-                }
-            ],
-        }
-        path = os.path.join(temp_dir, "hosts.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(config, f)
-        return HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+        return manager_for_config(temp_dir, hosts=[jump_with_target()])
 
     def test_relay_transfer_uses_relay_expect_script(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -94,9 +73,10 @@ class RelayTransferTests(unittest.TestCase):
             target = manager.find_host_by_alias("target")
             target["transfer_jump_mode"] = "relay"
 
-            args, _ = manager._build_relay_command_parts(
+            plan = self._planner(manager).build_relay_command_plan(
                 target, "download", "/remote/file.txt", "local-file.txt"
             )
+            args = plan.args
 
         self.assertEqual(args[args.index("-action") + 1], "download")
         self.assertEqual(args[args.index("-local") + 1], "local-file.txt")

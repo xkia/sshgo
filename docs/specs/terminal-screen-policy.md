@@ -156,15 +156,9 @@ Add English and Chinese i18n strings for invalid policy validation.
   - doctor output includes terminal screen policy
   - doctor reports missing alternate-screen support as a warning
 
-Verification commands:
-
-```bash
-python3 -m unittest discover -s tests -p 'test*.py'
-python3 -m py_compile sshgo.py host_manager.py config_store.py tui.py audit_logger.py auth.py crypto.py config_parser.py i18n.py sftp_ssh_wrapper.py config_validation.py host_tree.py
-python3 sshgo.py --validate
-python3 sshgo.py --doctor
-git diff --check
-```
+Use the broad verification commands in `AGENTS.md`. Also run
+`python3 sshgo.py --doctor` when touching terminal-screen diagnostics or doctor
+output.
 
 ## Review Status
 

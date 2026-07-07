@@ -27,10 +27,10 @@
 -   **配置占位符**: 用 `{{name}}` 复用域名、用户名、密钥路径、代理端点和 relay 目录等字符串.
 -   **可选的凭证加密**: 使用主密码保护您保存的密码和 MFA 密钥. 加密可以随时开启或关闭.
 -   **~/.ssh/config 导入**: 自动从您现有的 `~/.ssh/config` 文件中导入主机并分组.
--   **多语言支持**: 可随时在中英文之间切换显示语言.
+-   **多语言支持**: 通过 `config.language` 使用中文或英文界面.
 -   **连接历史与审计**: TUI 中展示 Recent 分组记录最近连接, 并通过稳定节点身份关联当前配置, 审计日志以 JSONL 格式存储.
 -   **配置验证**: 通过 `--validate` 检查重复名称/ID、非法端口、未知字段和格式错误.
--   **主机详情预览**: 通过 `--toggle-details` 在 TUI 中切换详情预览窗口.
+-   **主机详情预览**: TUI 中可选显示主机详情预览窗口.
 
 ---
 
@@ -130,62 +130,25 @@ sshgo
 
 ### 全局选项
 
--   `sshgo --toggle-encryption`
-    为 `hosts.json` 文件启用或禁用主密码加密.
-
--   `sshgo --toggle-ssh-config`
-    启用或禁用从 `~/.ssh/config` 导入主机.
-
--   `sshgo --toggle-details`
-    在 TUI 中切换主机详情预览窗口的显示与隐藏。
-
--   `sshgo --toggle-ssh-agent`
-    启用或禁用 SSH agent.
-
--   `sshgo --toggle-language`
-    在中英文之间切换显示语言.
-
--   `sshgo --history`
-    显示最近连接历史. 使用 `--limit N` (默认 10) 和 `--filter <name>` 过滤结果.
-
--   `sshgo --validate`
-    验证配置文件是否有错误.
-
--   `sshgo --doctor`
-    运行本地诊断, 检查配置有效性、`expect`、OpenSSH 客户端工具、内置 Expect 脚本和传输辅助脚本、运行时数据目录可写性、SSH agent 状态和 host key 模式。
-
--   `sshgo --list-backups`
-    列出当前解析到的 `hosts.json` 路径对应的轮转备份。
-
--   `sshgo --restore-backup <index>`
-    按索引恢复轮转备份。`0` 表示 `hosts.json.bak`, `1` 表示 `hosts.json.bak.1`, 依此类推。
-
--   `sshgo --print-command <主机别名> [命令|upload|download ...]`
-    打印解析后的 sshgo 移交命令但不发起连接。不会打印密码或 MFA secret。
-
--   `sshgo --print-command --sftp <主机别名>`
-    打印交互式 SFTP 的移交命令但不发起连接。
-
--   `sshgo --sftp <主机别名>`
-    打开交互式 SFTP 会话。嵌套主机要求生效的 `transfer_jump_mode: "tunnel"`；`relay` 会被拒绝，因为它不是实时 SFTP 会话。
-
--   `sshgo --audit-full`
-    启用完整审计日志记录。当前完整记录可包含命令、路径和跳转链上下文, 其中可能包含敏感参数；由于 Python 通过 `execve` 移交给 Expect，不记录最终时长和退出码.
-
--   `sshgo --edit`
-    直接以编辑模式打开 TUI。
-
--   `sshgo -e <路径>, --extra-config <路径>`
-    仅本次会话使用一个不同的配置文件或配置目录。此选项会覆盖 `SSHGO_CONFIG_PATH` 环境变量。
-
--   `sshgo -h, --help`
-    显示详细的帮助信息.
+| 选项 | 用途 |
+| --- | --- |
+| `--toggle-encryption` | 为 `hosts.json` 启用或禁用主密码加密。 |
+| `--history [--limit N] [--filter name]` | 显示最近连接历史。 |
+| `--validate` | 只读验证当前配置。 |
+| `--doctor` | 检查配置、依赖、内置脚本、运行时数据、SSH agent 和 host key 模式。 |
+| `--list-backups` | 列出当前配置文件的轮转备份。 |
+| `--restore-backup <index>` | 按索引恢复 `hosts.json.bak`、`.bak.1` 或 `.bak.2`。 |
+| `--print-command <主机别名> ...` | 打印解析后的 SSH/SFTP/传输移交命令, 不发起连接。 |
+| `--sftp <主机别名>` | 为 direct 或 tunnel 主机打开交互式 `sftp>` 提示符。 |
+| `--audit-full` | 对当前进程启用完整审计记录。记录中可能包含命令/路径上下文。 |
+| `-e <路径>, --extra-config <路径>` | 仅当前进程使用其他配置文件或配置目录。 |
+| `-h, --help` | 显示详细帮助信息。 |
 
 ---
 
 ## 配置文件 (`hosts.json`)
 
-`hosts.json` 是唯一支持的配置格式。当前不支持 TOML 和 YAML，因为 sshgo 避免引入外部 Python 依赖，并要求任何受支持的格式都具备完整读写能力。
+`hosts.json` 是唯一支持的配置格式。它是 JSONC: 读取时支持 `//`、`#` 注释和尾随逗号, 保存时写回格式化 JSON。
 
 `sshgo` 按以下优先级加载配置文件:
 
@@ -196,132 +159,82 @@ sshgo
 
 如果 `--extra-config` 或 `SSHGO_CONFIG_PATH` 指向目录, sshgo 会使用该目录下的 `hosts.json`。
 
-所有主机信息都存储在当前选中的 `hosts.json` 文件中. 为了方便手动编辑, 该文件支持使用 `//` 和 `#` 符号的单行注释, 以及尾随逗号.
+sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用于在节点改名后仍然让 Recent 关联到当前节点。手动编辑已有节点时请保留该字段。
 
-sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用于在节点改名后仍然让 Recent 关联到当前节点。您不需要手动编写 ID；旧配置会在正常启动或编辑流程中自动迁移, 并通过正常的原子写入路径保存回文件。`--validate` 保持只读。
-
-在替换已有配置文件前, sshgo 会在同目录保留最多三份尽力而为的备份:
-
-- `hosts.json.bak`
-- `hosts.json.bak.1`
-- `hosts.json.bak.2`
-
-使用 `sshgo --list-backups` 查看备份轮转, 使用 `sshgo --restore-backup <index>` 恢复其中一份。恢复前会先验证所选备份, 并在当前配置存在时将恢复前的当前配置保留为最新备份。
-
-新的审计/历史记录会包含 `node_id`、`host`、`port` 和 `endpoint`, 因此 Recent 可以区分相同主机和用户但端口不同的节点。
-
-运行时历史和审计数据与 `hosts.json` 分离。默认情况下, sshgo 写入:
-
-- `~/.sshgo/history.jsonl`
-- `~/.sshgo/audit-simple.jsonl`
-- 启用完整审计时写入 `~/.sshgo/audit-full.jsonl`
-
-可通过 `SSHGO_DATA_DIR` 或 `config.data_dir` 指定不同的运行时数据目录。`SSHGO_DATA_DIR` 对当前进程优先级更高。
-
-### 顶层结构
+### 最小示例
 
 ```json
 {
   "config": {
-    "encryption_enabled": true,
-    "encryption_salt": "...",
-    "import_ssh_config": true,
-    "language": "zh",
-    "show_detail_pane": true,
-    "audit_full": false,
-    "use_ssh_agent": false,
-    "data_dir": null,
-    "strict_host_key_checking": true,
-    "show_recent": true,
-    "recent_expanded": false,
-    "tui_screen_policy": "isolated",
-    "terminal_title_enabled": false,
-    "terminal_title_target": "tab",
-    "terminal_title_format": "alias_host",
-    "terminal_title_scope": "auto",
-    "default_ssh_jump_mode": "shell",
-    "default_transfer_jump_mode": "tunnel",
-    "relay_temp_dir": "/tmp",
-    "placeholders": {
-      "site_domain": "example.com",
-      "local_socks": "127.0.0.1:1080"
-    },
-    "theme": {
-      "highlight_fg": "white",
-      "highlight_bg": "blue",
-      "prefix_color": "red"
-    }
+    "import_ssh_config": false,
+    "language": "zh"
   },
   "hosts": [
-    // ... 主机和分组节点列表 ...
+    {
+      "type": "group",
+      "name": "Production",
+      "expanded": true,
+      "children": [
+        {
+          "type": "host",
+          "name": "web-1",
+          "host": "192.168.1.100",
+          "port": 22,
+          "user": "deploy",
+          "id_file": "~/.ssh/id_rsa"
+        }
+      ]
+    }
   ]
 }
 ```
-
-常用 `config` 字段:
-
-- `import_ssh_config`: 从 `~/.ssh/config` 导入只读主机。
-- `show_detail_pane`: 显示或隐藏 TUI 主机详情预览窗口。
-- `audit_full`: 默认持久化完整审计记录, 等同于始终使用 `--audit-full`。完整记录可包含命令/路径上下文, 其中可能包含敏感参数。
-- `use_ssh_agent`: 当 `SSH_AUTH_SOCK` 存在时全局使用 SSH agent 认证；主机节点可用自己的 `use_ssh_agent` 覆盖。使用 `ssh_jump_mode: "shell"` 或 `transfer_jump_mode: "relay"` 的嵌套目标不能依赖全局设置, 因为目标认证运行在跳板机环境；这些模式下请为目标显式配置 `password`、`id_file` 或 `use_ssh_agent: true`。
-- `data_dir`: history 和 audit 日志的运行时数据目录。
-- `strict_host_key_checking`: `true` 使用 OpenSSH `accept-new`；`false` 恢复旧的宽松模式并使用 `UserKnownHostsFile=/dev/null`。
-- `show_recent`: 显示或隐藏 TUI Recent 分组。
-- `recent_expanded`: 存储 TUI Recent 分组是否展开。
-- `tui_screen_policy`: `isolated` 使用终端 alternate screen 且不清理滚屏历史；`private` 会在 TUI 退出后尝试清理当前可见屏幕和滚屏历史。
-- `terminal_title_enabled`: 设为 `true` 时, 在 SSH、SFTP、上传/下载或 relay 交接前设置终端 tab/window 标题。默认关闭。
-- `terminal_title_target`: 标题目标, 可选 `tab`、`window` 或 `both`。在 Ghostty 中, `tab` 会使用兼容 Ghostty 的 window-title 序列来更新可见 tab/surface 标题。
-- `terminal_title_format`: 标题内容格式, 可选 `alias`、`host` 或 `alias_host`。
-- `terminal_title_scope`: `auto` 仅在已知兼容的终端环境中输出标题序列；`always` 会在启用后总是尝试输出。sshgo 不会在远程会话退出后恢复旧标题。
-  如果 Ghostty shell integration 在下一个 prompt 覆盖标题, 可在 Ghostty 配置中设置 `shell-integration-features = no-title`。
-- `default_ssh_jump_mode`: 嵌套 SSH 的默认模式, 可选 `shell` 或 `tunnel`。
-- `default_transfer_jump_mode`: 嵌套文件传输的默认模式, 可选 `tunnel` 或 `relay`。
-- `relay_temp_dir`: `transfer_jump_mode: "relay"` 使用的跳板机绝对临时目录。
-- `placeholders`: 可选字符串占位符, 可在连接字段中以 `{{name}}` 使用。
-- `theme`: 可选 TUI 颜色。支持 `black`、`red`、`green`、`yellow`、`blue`、`magenta`、`cyan`、`white` 和 `default`。
 
 ### 节点类型
 
 `hosts` 列表包含两种类型的节点: `group` 和 `host`.
 
-**1. `group` (分组)**
+- `group`: `{"type": "group", "name": "我的项目", "expanded": true, "children": [...]}`
+- `host`: 可连接服务器。`host` 和 `port` 是独立字段；`port` 可省略, 默认 `22`。
 
-用于组织主机, 可以无限嵌套.
+常用 host 字段:
 
-```json
-{
-  "type": "group",
-  "name": "我的项目",
-  "expanded": true, // 在TUI中是否默认展开
-  "children": [ ... ] // 包含的其他 group 或 host 节点列表
-}
-```
+| 字段 | 用途 |
+| --- | --- |
+| `name` | TUI 和 CLI 使用的别名。 |
+| `host` | 主机名或 IP。不要拼接 `:port`; 端口写到 `port`。 |
+| `port` | 可选 SSH 端口。默认 `22`。 |
+| `user` | SSH 用户名。 |
+| `password` | 密码认证值, 可由 sshgo 加密。 |
+| `id_file` | 私钥路径。 |
+| `mfa_secret` | 可选 TOTP secret。 |
+| `use_ssh_agent` | 可选的单主机 SSH agent 覆盖。 |
+| `children` | 嵌套主机; 包含子节点的 host 会成为跳板机。 |
 
-**2. `host` (主机)**
+### 高级配置
 
-代表一个您可以连接的真实服务器. 如果一个 `host` 包含 `children` 列表, 它也可以充当**跳板机**.
+可选 `config` 字段包括:
 
-```json
-{
-  "type": "host",
-  "name": "我的网页服务器",
-  "host": "192.168.1.100",
-  "port": 22,              // 可选; 默认 22
-  "user": "dev_user",
-  "password": "...",         // 如果不使用密钥, 则为必填项
-  "id_file": "~/.ssh/id_rsa",  // 如果不使用密码, 则为必填项
-  "mfa_secret": "...",       // 可选: 用于 TOTP 认证
-  "use_ssh_agent": false,    // 可选: 覆盖 config.use_ssh_agent
-  "proxy_command": "nc -X 5 -x {{local_socks}} %h %p", // 可选
-  "ssh_jump_mode": "shell",  // 可选: shell 或 tunnel
-  "transfer_jump_mode": "tunnel", // 可选: tunnel 或 relay
-  "children": [ ... ]        // 可选: 使此主机成为一个跳板机
-}
-```
+| 字段 | 用途 |
+| --- | --- |
+| `encryption_enabled`, `encryption_salt` | 由 `--toggle-encryption` 管理。 |
+| `show_detail_pane`, `show_recent`, `recent_expanded` | TUI 显示状态。 |
+| `audit_full`, `data_dir` | 运行时审计行为和运行时数据目录。`SSHGO_DATA_DIR` 对单次进程优先。 |
+| `strict_host_key_checking` | `true` 使用 OpenSSH `accept-new`; `false` 使用旧的宽松模式。 |
+| `tui_screen_policy` | `isolated` 使用 alternate screen 且不清理滚屏历史; `private` 退出时还会尝试清理可见屏幕和滚屏历史。 |
+| `terminal_title_enabled`, `terminal_title_target`, `terminal_title_format`, `terminal_title_scope` | 在 SSH/SFTP/传输移交前可选更新 tab/window 标题。 |
+| `default_ssh_jump_mode` | 嵌套 SSH 默认模式: `shell` 或 `tunnel`。 |
+| `default_transfer_jump_mode` | 嵌套传输默认模式: `tunnel` 或 `relay`。 |
+| `relay_temp_dir` | relay 传输在跳板机上的绝对临时目录。 |
+| `placeholders` | 可在部分连接字段中以 `{{name}}` 使用的字符串占位符。 |
+| `theme` | 可选 TUI 颜色: `black`、`red`、`green`、`yellow`、`blue`、`magenta`、`cyan`、`white`、`default`。 |
 
-### 自定义 ProxyCommand 和占位符
+运行时 history 和 audit 日志与 `hosts.json` 分离, 默认写到 `~/.sshgo/history.jsonl`、`audit-simple.jsonl` 和启用完整审计时的 `audit-full.jsonl`。配置保存时会在同目录保留小型备份轮转: `hosts.json.bak`、`.bak.1` 和 `.bak.2`。
 
-普通直连主机可以配置 OpenSSH `ProxyCommand`。sshgo 只解析自己的 `{{name}}` 占位符，然后把命令交给 OpenSSH；`%h` 和 `%p` 仍由 OpenSSH 展开。
+启用终端标题时, `terminal_title_target: "tab"` 在 Ghostty 中会使用兼容 window-title 的序列更新标题。如果 Ghostty shell integration 在下一个 prompt 覆盖标题, 可在 Ghostty 配置中设置 `shell-integration-features = no-title`。sshgo 不会在远程会话结束后恢复旧标题。
+
+### 代理、占位符和跳板机
+
+普通直连主机可以配置 OpenSSH `ProxyCommand`。sshgo 只解析自己的 `{{name}}` 占位符, 然后把命令交给 OpenSSH；`%h` 和 `%p` 仍由 OpenSSH 展开。
 
 ```json
 {
@@ -344,23 +257,15 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 }
 ```
 
-该配置解析后的连接效果等价于:
+占位符在 JSONC 解析后展开, 只作用于 `host`、`user`、`id_file`、`proxy_command` 和 `config.relay_temp_dir`。它们不会在 `password` 或 `mfa_secret` 等密钥字段中展开。
 
-```bash
-ssh -o 'ProxyCommand=nc -X 5 -x 127.0.0.1:1080 %h %p' admin@ssh.example.com
-```
-
-占位符在 JSONC 解析后展开, 第一版只作用于 `host`、`user`、`id_file`、`proxy_command` 和 `config.relay_temp_dir`。它们不会在 `password` 或 `mfa_secret` 等密钥字段中展开。
-
-`proxy_command` 作用于配置它的主机。当这个主机被用作跳板机时, 子节点连接会把父节点的 `proxy_command` 用在第一跳。嵌套目标自身仍会拒绝该字段, 因为 nested `tunnel` 模式已经会生成自己的 `ProxyCommand=ssh -W ...`, 而 `shell` 和 `relay` 模式会在跳板机环境中执行目标操作。在多层树中, 只有非嵌套的父跳板主机可以定义 `proxy_command`; 嵌套中间节点也不能定义自己的值。TUI 只会在单节点和父跳板主机上显示 `ProxyCommand` 字段。`~/.ssh/config` 中的 `ProxyCommand` 不会被导入；如果希望 sshgo 管理该行为, 请在 `hosts.json` 中显式配置。
+`proxy_command` 作用于配置它的主机。当这个主机被用作跳板机时, 子节点连接会把父节点的 `proxy_command` 用在第一跳。嵌套目标自身仍会拒绝该字段, 因为 nested `tunnel` 模式已经会生成自己的 `ProxyCommand=ssh -W ...`, 而 `shell` 和 `relay` 模式会在跳板机环境中执行目标操作。
 
 `ProxyCommand` 会由 OpenSSH 在本机执行。只应配置可信命令, 不要用不可信输入拼接 `proxy_command`。
 
-### 跳板机示例
+要配置跳板机, 将目标主机放在另一个 host 的 `children` 数组中。嵌套 SSH 默认使用 `ssh_jump_mode: "shell"`: 先登录父主机, 再从父主机 shell 发起目标 SSH。如需使用 OpenSSH 转发, 设置 `ssh_jump_mode: "tunnel"`。
 
-要配置跳板机, 只需将目标主机放置在另一个主机的 `children` 数组中. 嵌套 SSH 默认使用 `ssh_jump_mode: "shell"`: `sshgo` 会先登录父主机, 再从父主机 shell 中发起到目标主机的 SSH. 如需使用 OpenSSH 转发, 可设置 `ssh_jump_mode: "tunnel"`.
-
-文件传输默认使用 `transfer_jump_mode: "tunnel"`, 这是真正的本机 SFTP, 要求跳板机允许 TCP forwarding. 交互式 SFTP (`sshgo --sftp <alias>`) 同样要求 direct 或 tunnel 模式. 当 forwarding 被禁用且接受文件通过跳板机临时中继时, 可以显式设置 `transfer_jump_mode: "relay"`; relay 支持 upload/download 快捷命令, 但不支持实时 `sftp>` 提示符. 如果本机到跳板机的 `scp` 因协议不兼容失败, relay 会对这一段重试 legacy scp protocol.
+文件传输默认使用 `transfer_jump_mode: "tunnel"`, 这是真正的本机 SFTP, 要求跳板机允许 TCP forwarding。当 forwarding 被禁用且接受文件经过跳板机临时目录中继时, 才设置 `transfer_jump_mode: "relay"`; relay 支持 upload/download 快捷命令, 但不支持实时 `sftp>` 提示符。
 
 ```json
 {

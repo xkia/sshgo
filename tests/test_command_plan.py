@@ -1,10 +1,13 @@
+import os
 import shlex
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 
-from host_manager import CommandPlan, ConfigRuntimeError
+from connection_errors import ConfigRuntimeError
+from connection_plan import CommandPlan
+from connection_planner import ConnectionPlanner
 
 try:
     from fixtures import host, jump_with_target, manager_for_config
@@ -13,6 +16,10 @@ except ModuleNotFoundError:
 
 
 class CommandPlanTests(unittest.TestCase):
+    def _planner(self, manager):
+        script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return ConnectionPlanner(manager, script_dir)
+
     def _manager(self, temp_dir):
         return manager_for_config(
             temp_dir,
@@ -33,7 +40,10 @@ class CommandPlanTests(unittest.TestCase):
             manager = self._manager(temp_dir)
             target = manager.find_host_by_alias("target")
 
-            plan = manager.build_interactive_command_plan(target, "uptime")
+            plan = self._planner(manager).build_interactive_command_plan(
+                target,
+                "uptime",
+            )
 
             self.assertIsInstance(plan, CommandPlan)
             self.assertTrue(plan.script_path.endswith("login.exp"))
@@ -84,7 +94,7 @@ class CommandPlanTests(unittest.TestCase):
             )
             target = manager.find_host_by_alias("ipv6")
 
-            plan = manager.build_interactive_command_plan(target)
+            plan = self._planner(manager).build_interactive_command_plan(target)
 
             self.assertEqual(plan.args[plan.args.index("-h") + 1], "2001:db8::10")
             self.assertEqual(plan.args[plan.args.index("-p") + 1], "2200")
@@ -113,7 +123,7 @@ class CommandPlanTests(unittest.TestCase):
             )
             target = manager.find_host_by_alias("target")
 
-            plan = manager.build_interactive_command_plan(target)
+            plan = self._planner(manager).build_interactive_command_plan(target)
             proxy_command = plan.args[plan.args.index("-tunnel-proxy-command") + 1]
 
             self.assertEqual(
@@ -145,7 +155,7 @@ class CommandPlanTests(unittest.TestCase):
             )
             target = manager.find_host_by_alias("target6")
 
-            plan = manager.build_interactive_command_plan(target)
+            plan = self._planner(manager).build_interactive_command_plan(target)
             proxy_command = plan.args[plan.args.index("-tunnel-proxy-command") + 1]
             proxy_parts = shlex.split(proxy_command)
 
@@ -173,7 +183,7 @@ class CommandPlanTests(unittest.TestCase):
             )
             target = manager.find_host_by_alias("target6")
 
-            plan = manager.build_file_transfer_command_plan(
+            plan = self._planner(manager).build_file_transfer_command_plan(
                 target,
                 "upload",
                 "local.txt",
@@ -191,7 +201,7 @@ class CommandPlanTests(unittest.TestCase):
             manager = self._manager(temp_dir)
             target = manager.find_host_by_alias("target")
 
-            plan = manager.build_file_transfer_command_plan(
+            plan = self._planner(manager).build_file_transfer_command_plan(
                 target,
                 "download",
                 "/remote/file.txt",
@@ -232,7 +242,7 @@ class CommandPlanTests(unittest.TestCase):
             manager = self._manager(temp_dir)
             target = manager.find_host_by_alias("direct")
 
-            plan = manager.build_interactive_sftp_command_plan(target)
+            plan = self._planner(manager).build_interactive_sftp_command_plan(target)
 
             self.assertIsInstance(plan, CommandPlan)
             self.assertTrue(plan.script_path.endswith("sftp_login.exp"))
@@ -257,7 +267,7 @@ class CommandPlanTests(unittest.TestCase):
             manager = self._manager(temp_dir)
             target = manager.find_host_by_alias("target")
 
-            plan = manager.build_interactive_sftp_command_plan(target)
+            plan = self._planner(manager).build_interactive_sftp_command_plan(target)
 
             self.assertTrue(plan.script_path.endswith("sftp_login.exp"))
             self.assertEqual(plan.args[plan.args.index("-action") + 1], "interactive")
@@ -274,7 +284,7 @@ class CommandPlanTests(unittest.TestCase):
             target["transfer_jump_mode"] = "relay"
 
             with self.assertRaisesRegex(ConfigRuntimeError, "Interactive SFTP"):
-                manager.build_interactive_sftp_command_plan(target)
+                self._planner(manager).build_interactive_sftp_command_plan(target)
 
     def test_relay_command_plan_contains_relay_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -282,7 +292,7 @@ class CommandPlanTests(unittest.TestCase):
             target = manager.find_host_by_alias("target")
             target["transfer_jump_mode"] = "relay"
 
-            plan = manager.build_file_transfer_command_plan(
+            plan = self._planner(manager).build_file_transfer_command_plan(
                 target,
                 "upload",
                 "local.txt",
@@ -308,45 +318,47 @@ class CommandPlanTests(unittest.TestCase):
             self.assertTrue(launch_args[0].endswith("relay_transfer.exp"))
             self.assertIn("-temp", launch_args)
 
-    def test_file_transfer_args_api_uses_transfer_mode_dispatch(self):
+    def test_file_transfer_plan_uses_transfer_mode_dispatch(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
             target = manager.find_host_by_alias("target")
             target["transfer_jump_mode"] = "relay"
 
-            args = manager.build_file_transfer_command_args(
+            plan = self._planner(manager).build_file_transfer_command_plan(
                 target,
                 "upload",
                 "local.txt",
                 "/tmp/remote.txt",
             )
+            args = plan.args
 
             self.assertIn("-temp", args)
             self.assertIn("-J-host", args)
             self.assertNotIn("-tunnel-proxy-command", args)
 
-    def test_legacy_sftp_args_api_stays_sftp_only_for_relay_nodes(self):
+    def test_explicit_sftp_plan_stays_sftp_only_for_relay_nodes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
+            planner = self._planner(manager)
             target = manager.find_host_by_alias("target")
             target["transfer_jump_mode"] = "relay"
 
-            file_args = manager.build_file_transfer_command_args(
+            file_plan = planner.build_file_transfer_command_plan(
                 target,
                 "upload",
                 "local.txt",
                 "/tmp/remote.txt",
             )
-            sftp_args = manager.build_sftp_command_args(
+            sftp_plan = planner.build_sftp_command_plan(
                 target,
                 "upload",
                 "local.txt",
                 "/tmp/remote.txt",
             )
 
-            self.assertIn("-temp", file_args)
-            self.assertNotIn("-temp", sftp_args)
-            self.assertIn("-tunnel-proxy-command", sftp_args)
+            self.assertIn("-temp", file_plan.args)
+            self.assertNotIn("-temp", sftp_plan.args)
+            self.assertIn("-tunnel-proxy-command", sftp_plan.args)
 
 
 if __name__ == "__main__":

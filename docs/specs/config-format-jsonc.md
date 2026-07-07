@@ -8,17 +8,11 @@
 - related_roadmap: docs/roadmap.md#2026-06
 - replaces: earlier TOML/YAML exploration
 
-## Changelog
-
-| Version | Date | Author | Changes |
-|---|---|---|---|
-| v1.0 | 2026-06-24 | PM/Architect | Standardize on JSONC only and remove TOML/YAML support |
-
-## Background
+## Decision
 
 sshgo should avoid additional Python package dependencies. TOML/YAML exploration was rejected because Python's standard library has no YAML support and only provides TOML reading through `tomllib`, not TOML writing.
 
-Partial TOML support is not acceptable because users can edit hosts, toggle settings, and change encryption from the TUI/CLI. Any supported config format must support the full read/write lifecycle.
+Partial TOML support is not acceptable because users can edit hosts from the TUI and change encryption from the CLI. Any supported config format must support the full read/write lifecycle.
 
 ## Scope
 
@@ -54,7 +48,7 @@ Partial TOML support is not acceptable because users can edit hosts, toggle sett
 
 If the CLI or environment path is a directory, sshgo uses `<that_dir>/hosts.json`.
 
-`HostManager` always reads text as UTF-8 and parses it through `_parse_jsonc()`. Saves always use `json.dump(..., ensure_ascii=False, indent=4)`.
+`ConfigStore` reads text as UTF-8 and parses it through `config_store.parse_jsonc()`. Saves always use `json.dump(..., ensure_ascii=False, indent=4)`.
 
 ## Risks
 

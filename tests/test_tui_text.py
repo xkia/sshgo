@@ -1,3 +1,4 @@
+import curses
 import unittest
 
 import tui_text
@@ -36,6 +37,24 @@ class TuiTextTests(unittest.TestCase):
             tui_text.apply_text_edit_key("done", 4, 27)[2],
             "cancel",
         )
+
+    def test_apply_text_edit_key_cursor_control_delete_and_paste(self):
+        cases = [
+            ("abc", 3, curses.KEY_LEFT, ("abc", 2, None)),
+            ("abXc", 3, "\x01", ("abXc", 0, None)),
+            ("abXc", 0, ">", (">abXc", 1, None)),
+            (">abXc", 1, "\x05", (">abXc", 5, None)),
+            (">abXc", 5, curses.KEY_BACKSPACE, (">abX", 4, None)),
+            ("abcd", 2, curses.KEY_DC, ("abd", 2, None)),
+            ("ab", 1, "xy", ("axyb", 3, None)),
+            ("axyb", 3, "\x15", ("", 0, None)),
+        ]
+        for value, cursor, key, expected in cases:
+            with self.subTest(key=key):
+                self.assertEqual(
+                    tui_text.apply_text_edit_key(value, cursor, key),
+                    expected,
+                )
 
 
 if __name__ == "__main__":

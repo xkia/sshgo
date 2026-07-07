@@ -6,44 +6,21 @@ import unittest
 from io import StringIO
 
 import tui as tui_module
+import tui_flows
+import tui_forms
 from host_manager import HostManager
 from i18n import i18n
 from tui import Tui
 
+try:
+    from fixtures import jump_with_target, manager_for_config
+except ImportError:
+    from tests.fixtures import jump_with_target, manager_for_config
+
 
 class TuiTests(unittest.TestCase):
     def _manager(self, temp_dir):
-        config = {
-            "config": {"import_ssh_config": False},
-            "hosts": [
-                {
-                    "type": "host",
-                    "name": "jump",
-                    "host": "jump.example.com",
-                    "port": "2200",
-                    "user": "jumpuser",
-                    "password": "jump-pass",
-                    "id_file": "/tmp/jump_key",
-                    "mfa_secret": "JBSWY3DPEHPK3PXP",
-                    "children": [
-                        {
-                            "type": "host",
-                            "name": "target",
-                            "host": "target.internal",
-                            "port": "2222",
-                            "user": "targetuser",
-                            "password": "target-pass",
-                            "id_file": "/tmp/target_key",
-                            "mfa_secret": "JBSWY3DPEHPK3PXP",
-                        }
-                    ],
-                }
-            ],
-        }
-        path = os.path.join(temp_dir, "hosts.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(config, f)
-        return HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+        return manager_for_config(temp_dir, hosts=[jump_with_target()])
 
     def test_form_reports_terminal_too_small(self):
         class FakeScreen:
@@ -86,7 +63,6 @@ class TuiTests(unittest.TestCase):
         )
 
     def test_form_layout_uses_single_dynamic_template(self):
-        tui = object.__new__(Tui)
         fields = [
             {
                 "label": "Name",
@@ -107,7 +83,7 @@ class TuiTests(unittest.TestCase):
             {"label": "Cancel", "type": "button", "y": 99, "x": 99},
         ]
 
-        layout = Tui._layout_form_fields(tui, fields, 100, start_y=2)
+        layout = tui_forms.layout_form_fields(fields, 100, start_y=2)
 
         self.assertGreaterEqual(layout["input_width"], 18)
         self.assertEqual(fields[0]["_screen_y"], 2)
@@ -115,60 +91,6 @@ class TuiTests(unittest.TestCase):
         self.assertGreater(fields[1]["_radio_height"], 1)
         self.assertEqual(fields[2]["_screen_y"], fields[3]["_screen_y"])
         self.assertLess(fields[2]["_label_x"], fields[3]["_label_x"])
-
-    def test_text_edit_key_supports_cursor_clear_delete_and_paste(self):
-        tui = object.__new__(Tui)
-
-        value, cursor, action = Tui._apply_text_edit_key(
-            tui,
-            "abc",
-            3,
-            curses.KEY_LEFT,
-        )
-        self.assertEqual((value, cursor, action), ("abc", 2, None))
-
-        value, cursor, action = Tui._apply_text_edit_key(tui, value, cursor, "X")
-        self.assertEqual((value, cursor, action), ("abXc", 3, None))
-
-        value, cursor, action = Tui._apply_text_edit_key(tui, value, cursor, "\x01")
-        self.assertEqual((value, cursor, action), ("abXc", 0, None))
-
-        value, cursor, action = Tui._apply_text_edit_key(tui, value, cursor, ">")
-        self.assertEqual((value, cursor, action), (">abXc", 1, None))
-
-        value, cursor, action = Tui._apply_text_edit_key(tui, value, cursor, "\x05")
-        self.assertEqual((value, cursor, action), (">abXc", 5, None))
-
-        value, cursor, action = Tui._apply_text_edit_key(
-            tui,
-            value,
-            cursor,
-            curses.KEY_BACKSPACE,
-        )
-        self.assertEqual((value, cursor, action), (">abX", 4, None))
-
-        value, cursor, action = Tui._apply_text_edit_key(
-            tui,
-            "abcd",
-            2,
-            curses.KEY_DC,
-        )
-        self.assertEqual((value, cursor, action), ("abd", 2, None))
-
-        value, cursor, action = Tui._apply_text_edit_key(tui, "ab", 1, "xy")
-        self.assertEqual((value, cursor, action), ("axyb", 3, None))
-
-        value, cursor, action = Tui._apply_text_edit_key(tui, value, cursor, "\x15")
-        self.assertEqual((value, cursor, action), ("", 0, None))
-
-        self.assertEqual(
-            Tui._apply_text_edit_key(tui, "done", 4, "\n")[2],
-            "commit",
-        )
-        self.assertEqual(
-            Tui._apply_text_edit_key(tui, "done", 4, 27)[2],
-            "cancel",
-        )
 
     def test_form_text_edit_inserts_at_cursor(self):
         class FakeScreen:
@@ -502,27 +424,6 @@ class TuiTests(unittest.TestCase):
             ],
         )
 
-    def test_main_split_layout_reserves_detail_pane_width(self):
-        class FakeManager:
-            config = {"show_detail_pane": True}
-
-        tui = object.__new__(Tui)
-        tui.host_manager = FakeManager()
-        host_node = {"type": "host", "name": "demo"}
-
-        wide = Tui._main_split_layout(tui, 120, host_node)
-        self.assertIsNotNone(wide["detail_x"])
-        self.assertGreaterEqual(wide["detail_width"], 34)
-        self.assertGreaterEqual(wide["list_width"], 24)
-        self.assertEqual(wide["separator_x"], wide["detail_x"] - 1)
-
-        narrow = Tui._main_split_layout(tui, 80, host_node)
-        self.assertIsNone(narrow["detail_x"])
-
-        tui.host_manager.config["show_detail_pane"] = False
-        disabled = Tui._main_split_layout(tui, 120, host_node)
-        self.assertIsNone(disabled["detail_x"])
-
     def test_selection_screen_does_not_draw_outer_frame(self):
         class FakeScreen:
             def __init__(self):
@@ -707,15 +608,9 @@ class TuiTests(unittest.TestCase):
     def test_enter_on_empty_group_keeps_add_prompt(self):
         node = {"type": "group", "name": "empty", "expanded": True, "children": []}
 
-        class FakeManager:
-            def contains_hosts(self, selected):
-                self.selected = selected
-                return False
-
-        manager = FakeManager()
         tui = object.__new__(Tui)
         tui.mode = "connect"
-        tui.host_manager = manager
+        tui.host_manager = object()
         tui.get_current_node = lambda: node
         prompts = []
 
@@ -724,13 +619,9 @@ class TuiTests(unittest.TestCase):
             return {"confirm": False}
 
         tui._run_form_loop = fake_form_loop
-        tui.run_add_flow = lambda preselected_parent=None: self.fail(
-            "cancelled prompt must not add"
-        )
 
         Tui.handle_enter(tui)
 
-        self.assertIs(manager.selected, node)
         self.assertEqual(len(prompts), 1)
         self.assertIn("empty", prompts[0][1])
 
@@ -806,7 +697,7 @@ class TuiTests(unittest.TestCase):
             tui.restore_screen = lambda: None
             tui._run_form_loop = lambda fields, title="", **kwargs: responses.pop(0)
 
-            Tui.run_add_flow(
+            tui_flows.run_add_flow(
                 tui,
                 preselected_parent={"type": "system", "name": "Top Level"},
             )
@@ -873,7 +764,7 @@ class TuiTests(unittest.TestCase):
                 "transfer_jump_mode": "default",
             }
 
-            Tui.run_edit_flow(tui)
+            tui_flows.run_edit_flow(tui)
 
             with open(path, "r", encoding="utf-8") as f:
                 saved = json.load(f)
@@ -949,7 +840,7 @@ class TuiTests(unittest.TestCase):
             tui.get_current_node = lambda: manager.find_host_by_alias("target")
             tui._run_form_loop = fake_form
 
-            Tui.run_edit_flow(tui)
+            tui_flows.run_edit_flow(tui)
 
             self.assertNotIn("proxy_command", field_names)
             target = manager.find_host_by_alias("target")
@@ -959,9 +850,7 @@ class TuiTests(unittest.TestCase):
             self.assertNotIn("proxy_command", saved["hosts"][0]["children"][0])
 
     def test_tui_host_form_marks_advanced_fields_collapsed_by_default(self):
-        tui = object.__new__(Tui)
-
-        fields = Tui._host_form_fields(tui, include_proxy=True, advanced_open=False)
+        fields = tui_forms.host_form_fields(include_proxy=True, advanced_open=False)
 
         advanced_toggle = next(
             field for field in fields if field.get("name") == "_advanced_open"
@@ -1024,7 +913,7 @@ class TuiTests(unittest.TestCase):
             tui.get_current_node = lambda: manager.find_host_by_alias("advanced")
             tui._run_form_loop = fake_form
 
-            Tui.run_edit_flow(tui)
+            tui_flows.run_edit_flow(tui)
 
             advanced_toggle = next(
                 field
@@ -1069,11 +958,11 @@ class TuiTests(unittest.TestCase):
         tui._run_form_loop = lambda fields, title="", **kwargs: {
             "name": "new-name",
         }
-        tui._show_success = lambda message: None
+        tui._show_message = lambda title, message: None
         tui._recent_group = None
         tui._recent_group_ts = 0
 
-        Tui.run_edit_flow(tui)
+        tui_flows.run_edit_flow(tui)
 
         self.assertIn(("validate_by_id", "selected-id", {"name": "new-name"}), calls)
         self.assertIn(("update_by_id", "selected-id", {"name": "new-name"}), calls)
@@ -1117,9 +1006,9 @@ class TuiTests(unittest.TestCase):
         tui.host_manager = FakeManager()
         tui.mode = "connect"
         tui._run_form_loop = lambda fields, title="", **kwargs: next(responses)
-        tui._show_success = lambda message: None
+        tui._show_message = lambda title, message: None
 
-        Tui.run_add_flow(tui, preselected_parent=parent)
+        tui_flows.run_add_flow(tui, preselected_parent=parent)
 
         self.assertIn(("validate_by_parent_id", "child", "parent-id"), calls)
         self.assertIn(("add_by_parent_id", "child", "parent-id"), calls)
@@ -1190,14 +1079,14 @@ class TuiTests(unittest.TestCase):
 
         tui = object.__new__(Tui)
         tui.mode = "connect"
-        tui._show_readonly_error = lambda: calls.append("readonly")
+        tui._show_message = lambda title, message: calls.append("readonly")
 
         def fail_form(*args, **kwargs):
             raise AssertionError("form should not open for read-only parent")
 
         tui._run_form_loop = fail_form
 
-        Tui.run_add_flow(
+        tui_flows.run_add_flow(
             tui,
             preselected_parent={
                 "type": "host",
@@ -1296,7 +1185,7 @@ class TuiTests(unittest.TestCase):
             tui.get_current_node = lambda: manager.find_host_by_alias("target")
             tui._run_form_loop = fake_form
 
-            Tui.run_delete_flow(tui)
+            tui_flows.run_delete_flow(tui)
 
             labels = [field["label"] for field in captured["fields"]]
             self.assertEqual(captured["kwargs"]["initial_focus_name"], "cancel")
@@ -1329,7 +1218,7 @@ class TuiTests(unittest.TestCase):
         tui._run_form_loop = lambda fields, title="", **kwargs: {"confirm": True}
         tui.highlight_line_number = 1
 
-        Tui.run_delete_flow(tui)
+        tui_flows.run_delete_flow(tui)
 
         self.assertEqual(calls, [("delete_by_id", "selected-id")])
         self.assertEqual(tui.highlight_line_number, 0)

@@ -7,21 +7,12 @@ import locale
 import textwrap
 import argparse
 import shlex
-import shutil
+import cli_config
+import cli_diagnostics
 from endpoint import DEFAULT_PORT, format_endpoint
-from cli_config import (
-    _default_config_path,
-    _probe_config_files,
-    _should_persist_node_id_migration,
-    restore_config_backup as _restore_config_backup,
-    show_config_backups as _show_config_backups,
-)
-from cli_diagnostics import (
-    run_doctor as _run_doctor,
-    run_doctor_for_path as _run_doctor_for_path,
-)
 from host_manager import HostManager
 from tui import Tui
+import tui_flows
 from i18n import i18n
 
 
@@ -126,7 +117,7 @@ def run_tui(host_manager):
                 tui = None
                 try:
                     tui = Tui(host_manager, mode="add")
-                    tui.run_add_flow()
+                    tui_flows.run_add_flow(tui)
                 finally:
                     if tui is not None:
                         tui.restore_screen()
@@ -162,16 +153,6 @@ def run_tui(host_manager):
         sys.exit(128)
 
 
-def run_edit_tui(host_manager):
-    tui = None
-    try:
-        tui = Tui(host_manager, mode="edit")
-        tui.run()
-    finally:
-        if tui is not None:
-            tui.restore_screen()
-
-
 def show_history(host_manager, limit, filter_name):
     records = host_manager.audit.get_history(limit=limit, filter_name=filter_name)
     if not records:
@@ -192,41 +173,6 @@ def show_history(host_manager, limit, filter_name):
             f"{r.get('ts', ''):<22} {r.get('name', ''):<20} {host:<25} "
             f"{r.get('user', ''):<10} {r.get('auth', ''):<10} {r.get('result', '')}"
         )
-
-
-def show_config_backups(config_path):
-    return _show_config_backups(config_path, host_manager_cls=HostManager)
-
-
-def restore_config_backup(config_path, index):
-    return _restore_config_backup(
-        config_path,
-        index,
-        host_manager_cls=HostManager,
-    )
-
-
-def run_doctor_for_path(config_path, data_dir=None):
-    return _run_doctor_for_path(
-        config_path,
-        data_dir=data_dir,
-        host_manager_cls=HostManager,
-        tui_cls=Tui,
-        which=shutil.which,
-    )
-
-
-def run_doctor(host_manager, config_path, config_errors=None,
-               config_snapshot=None, data_dir=None):
-    return _run_doctor(
-        host_manager,
-        config_path,
-        config_errors=config_errors,
-        config_snapshot=config_snapshot,
-        data_dir=data_dir,
-        tui_cls=Tui,
-        which=shutil.which,
-    )
 
 
 def main():
@@ -250,26 +196,6 @@ def main():
         "--toggle-encryption",
         action="store_true",
         help="Enable or disable password encryption",
-    )
-    parser.add_argument(
-        "--toggle-ssh-config",
-        action="store_true",
-        help="Enable or disable importing hosts from ~/.ssh/config",
-    )
-    parser.add_argument(
-        "--toggle-language",
-        action="store_true",
-        help="Toggle language between English and Chinese",
-    )
-    parser.add_argument(
-        "--toggle-details",
-        action="store_true",
-        help="Toggle the host detail preview pane in the TUI",
-    )
-    parser.add_argument(
-        "--toggle-ssh-agent",
-        action="store_true",
-        help="Enable or disable SSH agent for this session",
     )
     parser.add_argument(
         "--audit-full",
@@ -323,11 +249,6 @@ def main():
         help="Restore a rotated config backup by index: 0=.bak, 1=.bak.1",
     )
     parser.add_argument(
-        "--edit",
-        action="store_true",
-        help="Edit configuration in TUI mode",
-    )
-    parser.add_argument(
         "-e",
         "--extra-config",
         help="Use a different configuration file or directory for this session only",
@@ -346,22 +267,22 @@ def main():
             config_path = os.path.abspath(os.path.expanduser(config_path_from_env))
 
     if config_path and os.path.isdir(config_path):
-        config_path = _probe_config_files(config_path)
+        config_path = cli_config._probe_config_files(config_path)
 
     if not config_path:
         script_dir = os.path.dirname(os.path.realpath(__file__))
-        config_path = _default_config_path(script_dir)
+        config_path = cli_config._default_config_path(script_dir)
 
     if args.list_backups:
-        sys.exit(show_config_backups(config_path))
+        sys.exit(cli_config.show_config_backups(config_path))
 
     if args.restore_backup is not None:
-        sys.exit(restore_config_backup(config_path, args.restore_backup))
+        sys.exit(cli_config.restore_config_backup(config_path, args.restore_backup))
 
     data_dir = os.getenv("SSHGO_DATA_DIR")
 
     if args.doctor:
-        sys.exit(run_doctor_for_path(config_path, data_dir=data_dir))
+        sys.exit(cli_diagnostics.run_doctor_for_path(config_path, data_dir=data_dir))
 
     host_manager = HostManager(
         config_path,
@@ -375,7 +296,7 @@ def main():
     if args.audit_full:
         host_manager.enable_full_audit()
 
-    if _should_persist_node_id_migration(args):
+    if cli_config._should_persist_node_id_migration(args):
         host_manager.persist_node_id_migration_if_needed()
 
     if args.validate:
@@ -387,10 +308,6 @@ def main():
             sys.exit(1)
         else:
             print(i18n.get("validate_ok"))
-        return
-
-    if args.edit:
-        run_edit_tui(host_manager)
         return
 
     if args.history:
@@ -420,14 +337,6 @@ def main():
 
     elif args.toggle_encryption:
         host_manager.toggle_encryption()
-    elif args.toggle_ssh_config:
-        host_manager.toggle_ssh_config()
-    elif args.toggle_language:
-        host_manager.toggle_language()
-    elif args.toggle_details:
-        host_manager.toggle_detail_pane()
-    elif args.toggle_ssh_agent:
-        host_manager.toggle_ssh_agent()
 
     else:
         run_tui(host_manager)

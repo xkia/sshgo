@@ -163,15 +163,8 @@ Output text may still be shown to the user as context, but it should not be requ
   - tunnel upload/download through a jump host
   - one MFA-protected login path if available
 
-## Rollout
-
-1. Implement behind the existing direct/tunnel SFTP path without adding a user-facing flag.
-2. Keep relay transfers unchanged.
-3. Run the full unit suite plus manual direct/tunnel transfer smoke checks.
-4. If batch mode breaks a real auth flow, revert only `sftp_login.exp` and its tests because command planning and user-facing config should not need to change.
-
 ## Review Status
 
 - status: reviewed
 - verdict: PASS
-- notes: Implementation is complete; scope remains limited to direct/tunnel single-file SFTP hardening. Unit and command-behavior tests cover batch lifecycle, exit status handling, dry-run preview, and the `sftp_ssh_wrapper.py` BatchMode override. Real password/passphrase/MFA/tunnel smoke remains recommended when changing this path.
+- notes: Scope remains limited to direct/tunnel single-file SFTP hardening. Unit and command-behavior tests cover batch lifecycle, exit status handling, dry-run preview, and the `sftp_ssh_wrapper.py` BatchMode override. Real password/passphrase/MFA/tunnel smoke remains recommended when changing this path.

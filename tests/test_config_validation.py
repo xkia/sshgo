@@ -1,16 +1,9 @@
 import unittest
 
 import config_validation
-import host_manager
 
 
 class ConfigValidationExtractionTests(unittest.TestCase):
-    def test_host_manager_keeps_validator_compatibility_export(self):
-        self.assertIs(
-            host_manager.validate_hosts_config,
-            config_validation.validate_hosts_config,
-        )
-
     def test_direct_validator_accepts_valid_minimal_config(self):
         errors = config_validation.validate_hosts_config(
             {

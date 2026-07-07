@@ -1,5 +1,6 @@
 import json
 import os
+import builtins
 import subprocess
 import sys
 import tempfile
@@ -7,44 +8,32 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 
+import cli_config
+import cli_diagnostics
 import host_manager as host_manager_module
 import sshgo as sshgo_module
 from host_manager import HostManager
 
+try:
+    from fixtures import jump_with_target, manager_for_config
+except ImportError:
+    from tests.fixtures import jump_with_target, manager_for_config
+
 
 class CliTests(unittest.TestCase):
     def _manager(self, temp_dir):
-        config = {
-            "config": {"import_ssh_config": False},
-            "hosts": [
-                {
-                    "type": "host",
-                    "name": "jump",
-                    "host": "jump.example.com",
-                    "port": "2200",
-                    "user": "jumpuser",
-                    "password": "jump-pass",
-                    "id_file": "/tmp/jump_key",
-                    "mfa_secret": "JBSWY3DPEHPK3PXP",
-                    "children": [
-                        {
-                            "type": "host",
-                            "name": "target",
-                            "host": "target.internal",
-                            "port": "2222",
-                            "user": "targetuser",
-                            "password": "target-pass",
-                            "id_file": "/tmp/target_key",
-                            "mfa_secret": "JBSWY3DPEHPK3PXP",
-                        }
-                    ],
-                }
-            ],
-        }
-        path = os.path.join(temp_dir, "hosts.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(config, f)
-        return HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+        return manager_for_config(temp_dir, hosts=[jump_with_target()])
+
+    def _doctor_tui_cls(self, alternate_screen=True):
+        class FakeTui:
+            @staticmethod
+            def terminal_supports_alternate_screen():
+                return alternate_screen
+
+        return FakeTui
+
+    def _which_all(self, prefix="/usr/bin"):
+        return lambda name: f"{prefix}/{name}"
 
     def _write_legacy_config(self, temp_dir):
         path = os.path.join(temp_dir, "hosts.json")
@@ -165,8 +154,8 @@ class CliTests(unittest.TestCase):
     def test_doctor_does_not_persist_node_id_migration(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = self._write_legacy_config(temp_dir)
-            real_which = sshgo_module.shutil.which
-            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
+            real_run_doctor_for_path = cli_diagnostics.run_doctor_for_path
+            cli_diagnostics.run_doctor_for_path = lambda *args, **kwargs: 0
             try:
                 with redirect_stdout(StringIO()):
                     with self.assertRaises(SystemExit) as cm:
@@ -176,7 +165,7 @@ class CliTests(unittest.TestCase):
                         )
                     self.assertEqual(cm.exception.code, 0)
             finally:
-                sshgo_module.shutil.which = real_which
+                cli_diagnostics.run_doctor_for_path = real_run_doctor_for_path
 
             self.assertNotIn("id", self._saved_host(path))
             self.assertFalse(os.path.exists(path + ".bak"))
@@ -439,7 +428,7 @@ exit 0
             os.environ["HOME"] = home_dir
             try:
                 self.assertEqual(
-                    sshgo_module._default_config_path(script_dir),
+                    cli_config._default_config_path(script_dir),
                     user_config,
                 )
             finally:
@@ -459,7 +448,7 @@ exit 0
             os.environ["HOME"] = home_dir
             try:
                 self.assertEqual(
-                    sshgo_module._default_config_path(script_dir),
+                    cli_config._default_config_path(script_dir),
                     os.path.join(script_dir, "hosts.json"),
                 )
             finally:
@@ -471,22 +460,13 @@ exit 0
     def test_doctor_reports_local_preflight_status(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
-            real_which = sshgo_module.shutil.which
-            real_terminal_supports_alternate_screen = (
-                sshgo_module.Tui.terminal_supports_alternate_screen
-            )
-            sshgo_module.shutil.which = lambda name: "/usr/bin/expect"
-            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
-                lambda: True
-            )
-            try:
-                stdout = StringIO()
-                with redirect_stdout(stdout):
-                    code = sshgo_module.run_doctor(manager, manager.json_path)
-            finally:
-                sshgo_module.shutil.which = real_which
-                sshgo_module.Tui.terminal_supports_alternate_screen = (
-                    real_terminal_supports_alternate_screen
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = cli_diagnostics.run_doctor(
+                    manager,
+                    manager.json_path,
+                    tui_cls=self._doctor_tui_cls(True),
+                    which=lambda name: "/usr/bin/expect",
                 )
 
             self.assertEqual(code, 0)
@@ -501,7 +481,7 @@ exit 0
             self.assertIn("sftp_ssh_wrapper.py", output)
             self.assertIn("Runtime data dir", output)
 
-    def test_doctor_uses_sshgo_module_dependency_bindings(self):
+    def test_doctor_accepts_explicit_dependency_bindings(self):
         class FakeShutil:
             @staticmethod
             def which(name):
@@ -514,17 +494,14 @@ exit 0
 
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
-            real_shutil = sshgo_module.shutil
-            real_tui = sshgo_module.Tui
-            sshgo_module.shutil = FakeShutil
-            sshgo_module.Tui = FakeTui
-            try:
-                stdout = StringIO()
-                with redirect_stdout(stdout):
-                    code = sshgo_module.run_doctor(manager, manager.json_path)
-            finally:
-                sshgo_module.shutil = real_shutil
-                sshgo_module.Tui = real_tui
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = cli_diagnostics.run_doctor(
+                    manager,
+                    manager.json_path,
+                    tui_cls=FakeTui,
+                    which=FakeShutil.which,
+                )
 
             self.assertEqual(code, 0)
             output = stdout.getvalue()
@@ -534,22 +511,13 @@ exit 0
     def test_doctor_warns_when_alternate_screen_is_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
-            real_which = sshgo_module.shutil.which
-            real_terminal_supports_alternate_screen = (
-                sshgo_module.Tui.terminal_supports_alternate_screen
-            )
-            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
-            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
-                lambda: False
-            )
-            try:
-                stdout = StringIO()
-                with redirect_stdout(stdout):
-                    code = sshgo_module.run_doctor(manager, manager.json_path)
-            finally:
-                sshgo_module.shutil.which = real_which
-                sshgo_module.Tui.terminal_supports_alternate_screen = (
-                    real_terminal_supports_alternate_screen
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = cli_diagnostics.run_doctor(
+                    manager,
+                    manager.json_path,
+                    tui_cls=self._doctor_tui_cls(False),
+                    which=self._which_all(),
                 )
 
             self.assertEqual(code, 0)
@@ -561,22 +529,13 @@ exit 0
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
             manager.config["tui_screen_policy"] = []
-            real_which = sshgo_module.shutil.which
-            real_terminal_supports_alternate_screen = (
-                sshgo_module.Tui.terminal_supports_alternate_screen
-            )
-            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
-            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
-                lambda: True
-            )
-            try:
-                stdout = StringIO()
-                with redirect_stdout(stdout):
-                    code = sshgo_module.run_doctor(manager, manager.json_path)
-            finally:
-                sshgo_module.shutil.which = real_which
-                sshgo_module.Tui.terminal_supports_alternate_screen = (
-                    real_terminal_supports_alternate_screen
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = cli_diagnostics.run_doctor(
+                    manager,
+                    manager.json_path,
+                    tui_cls=self._doctor_tui_cls(True),
+                    which=self._which_all(),
                 )
 
             self.assertEqual(code, 0)
@@ -590,25 +549,13 @@ exit 0
             with open(path, "w", encoding="utf-8") as f:
                 json.dump({"config": {"tui_screen_policy": []}, "hosts": []}, f)
 
-            real_which = sshgo_module.shutil.which
-            real_terminal_supports_alternate_screen = (
-                sshgo_module.Tui.terminal_supports_alternate_screen
-            )
-            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
-            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
-                lambda: True
-            )
-            try:
-                stdout = StringIO()
-                with redirect_stdout(stdout):
-                    code = sshgo_module.run_doctor_for_path(
-                        path,
-                        data_dir=os.path.join(temp_dir, "data"),
-                    )
-            finally:
-                sshgo_module.shutil.which = real_which
-                sshgo_module.Tui.terminal_supports_alternate_screen = (
-                    real_terminal_supports_alternate_screen
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = cli_diagnostics.run_doctor_for_path(
+                    path,
+                    data_dir=os.path.join(temp_dir, "data"),
+                    tui_cls=self._doctor_tui_cls(True),
+                    which=self._which_all(),
                 )
 
             self.assertEqual(code, 1)
@@ -621,20 +568,20 @@ exit 0
     def test_doctor_fails_when_openssh_transfer_tool_is_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
-            real_which = sshgo_module.shutil.which
 
             def fake_which(name):
                 if name == "sftp":
                     return None
                 return f"/usr/bin/{name}"
 
-            sshgo_module.shutil.which = fake_which
-            try:
-                stdout = StringIO()
-                with redirect_stdout(stdout):
-                    code = sshgo_module.run_doctor(manager, manager.json_path)
-            finally:
-                sshgo_module.shutil.which = real_which
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = cli_diagnostics.run_doctor(
+                    manager,
+                    manager.json_path,
+                    tui_cls=self._doctor_tui_cls(True),
+                    which=fake_which,
+                )
 
             self.assertEqual(code, 1)
             output = stdout.getvalue()
@@ -648,22 +595,17 @@ exit 0
             with open(path, "w", encoding="utf-8") as f:
                 f.write("{bad json")
 
-            real_which = sshgo_module.shutil.which
-            real_host_manager = sshgo_module.HostManager
-            sshgo_module.shutil.which = lambda name: "/usr/bin/expect"
-            sshgo_module.HostManager = lambda *args, **kwargs: self.fail(
-                "malformed config should not construct HostManager"
-            )
-            try:
-                stdout = StringIO()
-                with redirect_stdout(stdout):
-                    code = sshgo_module.run_doctor_for_path(
-                        path,
-                        data_dir=os.path.join(temp_dir, "data"),
-                    )
-            finally:
-                sshgo_module.shutil.which = real_which
-                sshgo_module.HostManager = real_host_manager
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = cli_diagnostics.run_doctor_for_path(
+                    path,
+                    data_dir=os.path.join(temp_dir, "data"),
+                    host_manager_cls=lambda *args, **kwargs: self.fail(
+                        "malformed config should not construct HostManager"
+                    ),
+                    tui_cls=self._doctor_tui_cls(True),
+                    which=lambda name: "/usr/bin/expect",
+                )
 
             output = stdout.getvalue()
             self.assertEqual(code, 1)
@@ -696,30 +638,16 @@ exit 0
                     f,
                 )
 
-            real_which = sshgo_module.shutil.which
-            real_host_manager = sshgo_module.HostManager
-            real_terminal_supports_alternate_screen = (
-                sshgo_module.Tui.terminal_supports_alternate_screen
-            )
-            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
-            sshgo_module.HostManager = lambda *args, **kwargs: self.fail(
-                "encrypted doctor should not construct HostManager"
-            )
-            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
-                lambda: True
-            )
-            try:
-                stdout = StringIO()
-                with redirect_stdout(stdout):
-                    code = sshgo_module.run_doctor_for_path(
-                        path,
-                        data_dir=os.path.join(temp_dir, "data"),
-                    )
-            finally:
-                sshgo_module.shutil.which = real_which
-                sshgo_module.HostManager = real_host_manager
-                sshgo_module.Tui.terminal_supports_alternate_screen = (
-                    real_terminal_supports_alternate_screen
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = cli_diagnostics.run_doctor_for_path(
+                    path,
+                    data_dir=os.path.join(temp_dir, "data"),
+                    host_manager_cls=lambda *args, **kwargs: self.fail(
+                        "encrypted doctor should not construct HostManager"
+                    ),
+                    tui_cls=self._doctor_tui_cls(True),
+                    which=self._which_all(),
                 )
 
             output = stdout.getvalue()
@@ -759,22 +687,13 @@ exit 0
             os.chmod(data_dir, 0o755)
             os.chmod(history_path, 0o644)
 
-            real_which = sshgo_module.shutil.which
-            real_terminal_supports_alternate_screen = (
-                sshgo_module.Tui.terminal_supports_alternate_screen
-            )
-            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
-            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
-                lambda: True
-            )
-            try:
-                stdout = StringIO()
-                with redirect_stdout(stdout):
-                    code = sshgo_module.run_doctor_for_path(path, data_dir=data_dir)
-            finally:
-                sshgo_module.shutil.which = real_which
-                sshgo_module.Tui.terminal_supports_alternate_screen = (
-                    real_terminal_supports_alternate_screen
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = cli_diagnostics.run_doctor_for_path(
+                    path,
+                    data_dir=data_dir,
+                    tui_cls=self._doctor_tui_cls(True),
+                    which=self._which_all(),
                 )
 
             output = stdout.getvalue()
@@ -783,7 +702,7 @@ exit 0
             self.assertIn("[WARN] Runtime data dir permissions", output)
             self.assertIn("[WARN] history.jsonl permissions", output)
 
-    def test_doctor_for_path_uses_sshgo_host_manager_binding(self):
+    def test_doctor_for_path_accepts_explicit_host_manager_dependency(self):
         class FakeAudit:
             data_dir = ""
 
@@ -802,28 +721,14 @@ exit 0
         with tempfile.TemporaryDirectory() as temp_dir:
             path = self._write_legacy_config(temp_dir)
             data_dir = os.path.join(temp_dir, "data")
-            real_which = sshgo_module.shutil.which
-            real_host_manager = sshgo_module.HostManager
-            real_terminal_supports_alternate_screen = (
-                sshgo_module.Tui.terminal_supports_alternate_screen
-            )
-            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
-            sshgo_module.HostManager = FakeHostManager
-            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
-                lambda: True
-            )
-            try:
-                stdout = StringIO()
-                with redirect_stdout(stdout):
-                    code = sshgo_module.run_doctor_for_path(
-                        path,
-                        data_dir=data_dir,
-                    )
-            finally:
-                sshgo_module.shutil.which = real_which
-                sshgo_module.HostManager = real_host_manager
-                sshgo_module.Tui.terminal_supports_alternate_screen = (
-                    real_terminal_supports_alternate_screen
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = cli_diagnostics.run_doctor_for_path(
+                    path,
+                    data_dir=data_dir,
+                    host_manager_cls=FakeHostManager,
+                    tui_cls=self._doctor_tui_cls(True),
+                    which=self._which_all(),
                 )
 
             self.assertTrue(FakeHostManager.constructed)
@@ -847,30 +752,37 @@ exit 0
         finally:
             sshgo_module.Tui = real_tui
 
-    def test_run_edit_tui_restores_screen_on_failure(self):
+    def test_run_tui_empty_config_uses_flow_helper(self):
         events = []
+
+        class FakeManager:
+            def get_hosts(self):
+                return []
 
         class FakeTui:
             def __init__(self, host_manager, mode="connect"):
                 events.append(("init", mode))
 
-            def run(self):
-                events.append(("run",))
-                raise RuntimeError("edit failed")
-
             def restore_screen(self):
                 events.append(("restore",))
 
         real_tui = sshgo_module.Tui
+        real_input = builtins.input
+        real_run_add_flow = sshgo_module.tui_flows.run_add_flow
         sshgo_module.Tui = FakeTui
+        builtins.input = lambda prompt: "y"
+        sshgo_module.tui_flows.run_add_flow = lambda tui: events.append(("add",))
         try:
-            with self.assertRaisesRegex(RuntimeError, "edit failed"):
-                sshgo_module.run_edit_tui(object())
+            with redirect_stdout(StringIO()):
+                with self.assertRaises(SystemExit) as ctx:
+                    sshgo_module.run_tui(FakeManager())
         finally:
             sshgo_module.Tui = real_tui
+            builtins.input = real_input
+            sshgo_module.tui_flows.run_add_flow = real_run_add_flow
 
-        self.assertEqual(events, [("init", "edit"), ("run",), ("restore",)])
-
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertEqual(events, [("init", "add"), ("add",), ("restore",)])
 
 if __name__ == "__main__":
     unittest.main()
