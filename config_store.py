@@ -262,11 +262,6 @@ class ConfigStore:
         with self._locked():
             self._rotate_backups_unlocked()
 
-    @classmethod
-    def rotate_backups_for(cls, config_path):
-        with cls._locked_for(config_path):
-            cls._rotate_backups_for_unlocked(config_path)
-
     def _rotate_backups_unlocked(self):
         self._rotate_backups_for_unlocked(self.path)
 

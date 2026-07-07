@@ -73,14 +73,6 @@ def contains_hosts(node):
     return False
 
 
-def potential_parents(nodes):
-    return [
-        node
-        for node in traverse_all(nodes)
-        if node.get("type") in ("group", "host")
-    ]
-
-
 def ensure_node_ids(nodes, new_id, seen_ids=None):
     if seen_ids is None:
         seen_ids = set()

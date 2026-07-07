@@ -92,20 +92,18 @@ def layout_form_fields(visible_fields, width, start_y=2):
 
 def infer_validation_focus(errors):
     joined = "\n".join(errors).lower()
-    if "duplicate node name" in joined or "name" in joined:
-        return "name"
-    if "port" in joined:
-        return "port"
-    if "proxy" in joined:
-        return "proxy_command"
-    if "ssh_jump" in joined:
-        return "ssh_jump_mode"
-    if "transfer" in joined or "relay" in joined:
-        return "transfer_jump_mode"
-    if "auth" in joined or "credential" in joined:
-        return "auth"
-    if "host" in joined or "placeholder" in joined:
-        return "host"
+    focus_rules = (
+        (("duplicate node name", "name"), "name"),
+        (("port",), "port"),
+        (("proxy",), "proxy_command"),
+        (("ssh_jump",), "ssh_jump_mode"),
+        (("transfer", "relay"), "transfer_jump_mode"),
+        (("auth", "credential"), "auth"),
+        (("host", "placeholder"), "host"),
+    )
+    for keywords, focus_name in focus_rules:
+        if any(keyword in joined for keyword in keywords):
+            return focus_name
     return None
 
 
@@ -138,6 +136,49 @@ def interactive_index_by_name(interactive_fields, name):
         if field.get("name") == name:
             return index
     return None
+
+
+def form_data_from_fields(fields):
+    return {field["name"]: field.get("value") for field in fields if field.get("name")}
+
+
+def visible_form_fields(fields):
+    return [field for field in fields if field.get("visible", True)]
+
+
+def interactive_form_fields(visible_fields):
+    return [
+        field for field in visible_fields if field.get("type") not in ("static_text", "section")
+    ]
+
+
+def sync_field_values(fields, form_data):
+    for field in fields:
+        if field.get("name") in form_data:
+            field["value"] = form_data.get(field["name"])
+
+
+def advance_radio_value(form_data, field):
+    current_value = form_data.get(field.get("name"))
+    options = field.get("options", [])
+    if current_value in options:
+        current_option_index = options.index(current_value)
+        form_data[field["name"]] = options[(current_option_index + 1) % len(options)]
+
+
+def toggle_field_value(form_data, field):
+    name = field.get("name")
+    form_data[name] = not bool(form_data.get(name))
+
+
+def first_required_error(visible_fields, form_data):
+    for field in visible_fields:
+        if field.get("required") and not form_data.get(field["name"]):
+            return (
+                i18n.get("error_field_required", field=field["label"]),
+                field.get("name"),
+            )
+    return "", None
 
 
 def node_type_form_fields():
@@ -308,23 +349,19 @@ def group_form_fields(name=""):
 
 def clean_form_data(form_data):
     return {
-        key: value
-        for key, value in form_data.items()
-        if not str(key).startswith("_")
+        key: value for key, value in form_data.items() if not str(key).startswith("_")
     }
 
 
 def apply_dynamic_visibility(fields, form_data):
     auth_method = form_data.get("auth")
     advanced_open = bool(form_data.get("_advanced_open"))
+    auth_fields = {"password": "password", "id_file": "key"}
     for field in fields:
+        name = field.get("name")
         if auth_method:
-            if field.get("name") == "password":
-                field["visible"] = auth_method == "password"
-                field["required"] = auth_method == "password"
-            elif field.get("name") == "id_file":
-                field["visible"] = auth_method == "key"
-                field["required"] = auth_method == "key"
+            if name in auth_fields:
+                field["visible"] = field["required"] = auth_method == auth_fields[name]
             elif field.get("auth_visible") is not None:
                 allowed = field.get("auth_visible")
                 if isinstance(allowed, str):
@@ -349,10 +386,9 @@ def host_node_from_form(final_data):
     }
     if port != DEFAULT_PORT:
         node["port"] = port
-    if data.get("ssh_jump_mode") != "default":
-        node["ssh_jump_mode"] = data.get("ssh_jump_mode")
-    if data.get("transfer_jump_mode") != "default":
-        node["transfer_jump_mode"] = data.get("transfer_jump_mode")
+    for key in ("ssh_jump_mode", "transfer_jump_mode"):
+        if data.get(key) != "default":
+            node[key] = data.get(key)
     if data.get("proxy_command"):
         node["proxy_command"] = data.get("proxy_command")
     return node

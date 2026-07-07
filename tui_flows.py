@@ -10,19 +10,12 @@ READONLY_SOURCES = frozenset({"ssh_config", "history"})
 
 
 def count_descendants(node):
-    total = 0
-    for child in node.get("children", []) or []:
-        total += 1
-        total += count_descendants(child)
-    return total
+    return sum(1 + count_descendants(child) for child in node.get("children", []) or [])
 
 
 def delete_impact_text(tui, node):
     if node.get("type") == "group":
-        return i18n.get(
-            "delete_group_impact",
-            count=count_descendants(node),
-        )
+        return i18n.get("delete_group_impact", count=count_descendants(node))
     host, port = tui.host_manager.raw_host_port(node)
     target = tui.host_manager._target_display(node.get("user", ""), host, port)
     return i18n.get("delete_host_impact", target=target)
@@ -31,20 +24,17 @@ def delete_impact_text(tui, node):
 def show_readonly_error(tui):
     tui._show_message(
         i18n.get("readonly_title"),
-        "\n".join(
-            [
-                i18n.get("edit_ssh_config_not_supported"),
-                i18n.get("edit_ssh_config_advice"),
-            ]
-        ),
+        "\n".join((
+            i18n.get("edit_ssh_config_not_supported"),
+            i18n.get("edit_ssh_config_advice"),
+        )),
     )
 
 
 def show_save_error(tui):
     show_error(
         tui,
-        getattr(tui.host_manager, "last_save_error", None)
-        or i18n.get("config_save_conflict"),
+        getattr(tui.host_manager, "last_save_error", None) or i18n.get("config_save_conflict"),
     )
 
 
@@ -54,6 +44,15 @@ def show_error(tui, message):
 
 def show_success(tui, message):
     tui._show_message(i18n.get("success_title"), message)
+
+
+def conflicting_name(tui, name, current_name=None, current_id=None):
+    if not name or name in (current_name, "Top Level"):
+        return None
+    existing_node, _, _ = tui.host_manager.find_node_and_parent(name)
+    if existing_node and (not current_id or existing_node.get("id") != current_id):
+        return name
+    return None
 
 
 def run_add_flow(tui, preselected_parent=None):
@@ -95,19 +94,9 @@ def run_add_flow(tui, preselected_parent=None):
 
         def validate_add_form(form_data):
             clean_data = tui_forms.clean_form_data(form_data)
-            if (
-                clean_data.get("name")
-                and clean_data["name"] != parent_node.get("name")
-                and clean_data["name"] != "Top Level"
-            ):
-                existing_node, _, _ = tui.host_manager.find_node_and_parent(
-                    clean_data["name"]
-                )
-                if existing_node:
-                    return (
-                        [i18n.get("error_name_exists", name=clean_data["name"])],
-                        "name",
-                    )
+            conflict = conflicting_name(tui, clean_data.get("name"), parent_node.get("name"))
+            if conflict:
+                return ([i18n.get("error_name_exists", name=conflict)], "name")
 
             candidate = (
                 tui_forms.host_node_from_form(form_data)
@@ -124,7 +113,7 @@ def run_add_flow(tui, preselected_parent=None):
                     candidate,
                     parent_name,
                 )
-            return (errors, tui._infer_validation_focus(errors))
+            return (errors, tui_forms.infer_validation_focus(errors))
 
         final_data = tui._run_form_loop(
             form_fields,
@@ -134,20 +123,10 @@ def run_add_flow(tui, preselected_parent=None):
 
         if final_data:
             final_data = tui_forms.clean_form_data(final_data)
-            if (
-                final_data.get("name")
-                and final_data["name"] != parent_node.get("name")
-                and final_data["name"] != "Top Level"
-            ):
-                existing_node, _, _ = tui.host_manager.find_node_and_parent(
-                    final_data["name"]
-                )
-                if existing_node:
-                    show_error(
-                        tui,
-                        i18n.get("error_name_exists", name=final_data["name"])
-                    )
-                    return
+            conflict = conflicting_name(tui, final_data.get("name"), parent_node.get("name"))
+            if conflict:
+                show_error(tui, i18n.get("error_name_exists", name=conflict))
+                return
 
             if node_type == "host":
                 new_node = tui_forms.host_node_from_form(final_data)
@@ -249,17 +228,9 @@ def run_edit_flow(tui):
             if node_type == "host"
             else tui_forms.clean_form_data(form_data)
         )
-        if clean_data.get("name") and clean_data["name"] != original_name:
-            existing_node, _, _ = tui.host_manager.find_node_and_parent(
-                clean_data["name"]
-            )
-            if existing_node and (
-                not selected_id or existing_node.get("id") != selected_id
-            ):
-                return (
-                    [i18n.get("error_name_exists", name=clean_data["name"])],
-                    "name",
-                )
+        conflict = conflicting_name(tui, clean_data.get("name"), original_name, selected_id)
+        if conflict:
+            return ([i18n.get("error_name_exists", name=conflict)], "name")
 
         if selected_id:
             errors = tui.host_manager.validate_update_candidate_by_id(
@@ -271,7 +242,7 @@ def run_edit_flow(tui):
                 original_name,
                 clean_data,
             )
-        return (errors, tui._infer_validation_focus(errors))
+        return (errors, tui_forms.infer_validation_focus(errors))
 
     final_data = tui._run_form_loop(
         form_fields,
@@ -285,18 +256,10 @@ def run_edit_flow(tui):
             if node_type == "host"
             else tui_forms.clean_form_data(final_data)
         )
-        if final_data.get("name") and final_data["name"] != original_name:
-            existing_node, _, _ = tui.host_manager.find_node_and_parent(
-                final_data["name"]
-            )
-            if existing_node and (
-                not selected_id or existing_node.get("id") != selected_id
-            ):
-                show_error(
-                    tui,
-                    i18n.get("error_name_exists", name=final_data["name"])
-                )
-                return
+        conflict = conflicting_name(tui, final_data.get("name"), original_name, selected_id)
+        if conflict:
+            show_error(tui, i18n.get("error_name_exists", name=conflict))
+            return
 
         if selected_id:
             validation_errors = tui.host_manager.validate_update_candidate_by_id(

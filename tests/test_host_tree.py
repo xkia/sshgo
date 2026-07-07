@@ -62,16 +62,12 @@ class HostTreeTests(unittest.TestCase):
         self.assertIs(parent_list, nodes[0]["children"][0]["children"])
         self.assertEqual(index, 0)
 
-    def test_contains_hosts_and_potential_parents(self):
+    def test_contains_hosts(self):
         nodes = self._tree()
         empty_group = {"type": "group", "name": "empty", "children": []}
 
         self.assertTrue(host_tree.contains_hosts(nodes[0]))
         self.assertFalse(host_tree.contains_hosts(empty_group))
-        self.assertEqual(
-            [node["name"] for node in host_tree.potential_parents(nodes)],
-            ["group", "jump", "target", "direct"],
-        )
 
     def test_ensure_node_ids_assigns_missing_blank_invalid_and_duplicate_saved_nodes(self):
         nodes = [

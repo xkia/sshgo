@@ -108,11 +108,9 @@ def handle_interactive_sftp_command(host_alias, host_manager, print_command=Fals
 def run_tui(host_manager):
     script_dir = os.path.dirname(os.path.realpath(__file__))
     if not host_manager.get_hosts():
-        print("Welcome to sshgo! Your host list is empty.")
+        print(i18n.get("first_run_welcome"))
         try:
-            choice = (
-                input("Would you like to add your first host? [Y/n]: ").strip().lower()
-            )
+            choice = input(i18n.get("first_run_add_prompt")).strip().lower()
             if choice != "n":
                 tui = None
                 try:
@@ -122,11 +120,9 @@ def run_tui(host_manager):
                     if tui is not None:
                         tui.restore_screen()
             else:
-                print(
-                    "Exiting. You can add a host later by running sshgo and pressing 'a'."
-                )
+                print(i18n.get("first_run_exit_hint"))
         except (KeyboardInterrupt, EOFError):
-            print("\nOperation cancelled.")
+            print("\n" + i18n.get("operation_cancelled"))
         sys.exit(0)
 
     for script in [

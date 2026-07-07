@@ -70,6 +70,12 @@ STRINGS = {
         "no_results": "No results for '{query}'",
         "no_hosts": "No hosts configured.",
         "empty_hosts_hint": "Press 'a' to add a new host or 'q' to quit.",
+        "first_run_welcome": "Welcome to sshgo! Your host list is empty.",
+        "first_run_add_prompt": "Would you like to add your first host? [Y/n]: ",
+        "first_run_exit_hint": (
+            "Exiting. You can add a host later by running sshgo and pressing 'a'."
+        ),
+        "operation_cancelled": "Operation cancelled.",
         "host_details_title": "Host Details",
         "select_host_details": "Select a host to see details.",
         "empty_group_title": "Group '{name}' is empty.",
@@ -200,6 +206,10 @@ STRINGS = {
         "no_results": "未找到 '{query}'",
         "no_hosts": "尚未配置主机.",
         "empty_hosts_hint": "按 'a' 添加新主机, 或按 'q' 退出.",
+        "first_run_welcome": "欢迎使用 sshgo! 当前主机列表为空.",
+        "first_run_add_prompt": "是否添加第一台主机? [Y/n]: ",
+        "first_run_exit_hint": "已退出. 之后可运行 sshgo 并按 'a' 添加主机.",
+        "operation_cancelled": "操作已取消.",
         "host_details_title": "主机详情",
         "select_host_details": "选择主机查看详情.",
         "empty_group_title": "分组 '{name}' 为空.",

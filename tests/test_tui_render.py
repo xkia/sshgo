@@ -72,6 +72,20 @@ class TuiRenderTests(unittest.TestCase):
         self.assertIsNone(no_host["detail_x"])
         self.assertIsNone(disabled["detail_x"])
 
+    def test_draw_form_fields_marks_active_and_masks_password(self):
+        window = FakeWindow(height=8, width=40)
+        password = dict(type="password", label="Password", value="secret")
+        password.update(_screen_y=1, _label_x=4, _input_x=16, _input_width=8)
+        fields = [
+            password,
+            dict(type="button", label="Save", _screen_y=2, _label_x=4),
+        ]
+
+        tui_render.draw_form_fields(window, fields, 0, 40, 1, 99, 8)
+
+        rendered = [call[2] for call in window.addstr_calls]
+        self.assertLessEqual({">", " ******   ", "[ Save ]"}, set(rendered))
+
     def test_draw_detail_pane_renders_host_details(self):
         window = FakeWindow(height=8, width=36)
 

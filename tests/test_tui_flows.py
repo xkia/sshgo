@@ -70,6 +70,21 @@ class TuiFlowsTests(unittest.TestCase):
 
         self.assertEqual(messages, [(i18n.get("error_title"), "stale write")])
 
+    def test_conflicting_name_ignores_current_node_id(self):
+        class FakeManager:
+            def find_node_and_parent(self, name):
+                return {"name": name, "id": "same-id"}, None, -1
+
+        tui = type("FakeTui", (), {"host_manager": FakeManager()})()
+
+        self.assertIsNone(
+            tui_flows.conflicting_name(tui, "host", "old-host", "same-id")
+        )
+        self.assertEqual(
+            tui_flows.conflicting_name(tui, "host", "old-host", "other-id"),
+            "host",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,12 +16,8 @@ class ConnectionPlanner:
         self.context = context
         self.script_dir = script_dir
 
-    def _build_common_ssh_options(self, node):
-        opts = []
-        id_file = self.context._node_id_file(node)
-        if id_file:
-            opts.extend(["-i", id_file])
-        return opts
+    def _script_path(self, script_name):
+        return os.path.join(self.script_dir, script_name)
 
     def host_key_checking_mode(self):
         return (
@@ -114,6 +110,20 @@ class ConnectionPlanner:
         ])
         return " ".join(shlex.quote(part) for part in parts)
 
+    @staticmethod
+    def _jump_chain(nest_parent):
+        return [nest_parent.get("name", "")] if nest_parent else []
+
+    @staticmethod
+    def _transfer_paths(action, path1, path2):
+        if action == "upload":
+            return path1, path2
+        return path2, path1
+
+    @staticmethod
+    def _sftp_auth_mode(node):
+        return "tunnel" if node.get("nest_parent") else "direct"
+
     def _command_plan(
         self,
         script_path,
@@ -158,6 +168,14 @@ class ConnectionPlanner:
         if id_file:
             args.extend([option_name, id_file])
 
+    def _append_host_key_checking(self, args):
+        args.extend(["-host-key-checking", self.host_key_checking_mode()])
+
+    def _append_proxy_command(self, args, node, option_name):
+        proxy_command = self.context._proxy_command(node)
+        if proxy_command:
+            args.extend([option_name, proxy_command])
+
     @staticmethod
     def _add_secret(secrets, key, value):
         if value:
@@ -185,19 +203,17 @@ class ConnectionPlanner:
         self._add_secret(secrets, "jumper_mfa_secret", node.get("mfa_secret", ""))
 
     def build_sftp_command_plan(self, node, action, path1, path2):
-        script_path = os.path.join(self.script_dir, "sftp_login.exp")
         args, secrets = self._build_sftp_command_parts(node, action, path1, path2)
         nest_parent = node.get("nest_parent")
-        jump_chain = [nest_parent.get("name", "")] if nest_parent else []
         return self._command_plan(
-            script_path=script_path,
+            script_path=self._script_path("sftp_login.exp"),
             args=args,
             secrets=secrets,
             audit=self._audit_metadata(
                 node,
                 auth=self.context._auth_method(node),
                 command=f"{action} {path1} {path2}",
-                jump_chain=jump_chain,
+                jump_chain=self._jump_chain(nest_parent),
                 extra={
                     "transfer_jump_mode": self.context._effective_transfer_jump_mode(
                         node
@@ -212,7 +228,6 @@ class ConnectionPlanner:
         )
 
     def build_interactive_sftp_command_plan(self, node):
-        script_path = os.path.join(self.script_dir, "sftp_login.exp")
         args, secrets = self._build_interactive_sftp_command_parts(node)
         nest_parent = node.get("nest_parent")
         transfer_jump_mode = (
@@ -220,19 +235,18 @@ class ConnectionPlanner:
             if nest_parent
             else "direct"
         )
-        jump_chain = [nest_parent.get("name", "")] if nest_parent else []
         return self._command_plan(
-            script_path=script_path,
+            script_path=self._script_path("sftp_login.exp"),
             args=args,
             secrets=secrets,
             audit=self._audit_metadata(
                 node,
                 auth=self.context._auth_method_for_mode(
                     node,
-                    "tunnel" if nest_parent else "direct",
+                    self._sftp_auth_mode(node),
                 ),
                 command="sftp",
-                jump_chain=jump_chain,
+                jump_chain=self._jump_chain(nest_parent),
                 extra={
                     "transfer_jump_mode": transfer_jump_mode,
                     "interactive": True,
@@ -246,19 +260,17 @@ class ConnectionPlanner:
         )
 
     def build_relay_command_plan(self, node, action, path1, path2):
-        script_path = os.path.join(self.script_dir, "relay_transfer.exp")
         args, secrets = self._build_relay_command_parts(node, action, path1, path2)
         nest_parent = node.get("nest_parent")
-        jump_chain = [nest_parent.get("name", "")] if nest_parent else []
         return self._command_plan(
-            script_path=script_path,
+            script_path=self._script_path("relay_transfer.exp"),
             args=args,
             secrets=secrets,
             audit=self._audit_metadata(
                 node,
                 auth=self.context._auth_method_for_mode(node, "relay"),
                 command=f"{action} {path1} {path2}",
-                jump_chain=jump_chain,
+                jump_chain=self._jump_chain(nest_parent),
                 extra={"transfer_jump_mode": "relay"},
             ),
             start_result=f"relay_{action}_started",
@@ -289,19 +301,16 @@ class ConnectionPlanner:
             raise ValueError("relay transfer requires a jump host")
 
         j_host, j_port = self.context._parse_host_port(nest_parent)
-        local_path = path1 if action == "upload" else path2
-        remote_path = path2 if action == "upload" else path1
+        local_path, remote_path = self._transfer_paths(action, path1, path2)
         relay_temp_source = local_path
         temp_path = self.context._relay_temp_path(relay_temp_source)
 
         args.extend(["-h", host, "-u", self.context._node_user(node)])
-        args.extend(["-host-key-checking", self.host_key_checking_mode()])
+        self._append_host_key_checking(args)
         args.extend(["-P", port])
         args.extend(["-J-host", j_host, "-J-user", self.context._node_user(nest_parent)])
         args.extend(["-J-port", j_port])
-        jump_proxy_command = self.context._proxy_command(nest_parent)
-        if jump_proxy_command:
-            args.extend(["-j-proxy-command", jump_proxy_command])
+        self._append_proxy_command(args, nest_parent, "-j-proxy-command")
         args.extend(["-action", action, "-local", local_path, "-remote", remote_path])
         args.extend(["-temp", temp_path])
 
@@ -321,7 +330,7 @@ class ConnectionPlanner:
         nest_parent = node.get("nest_parent")
 
         args.extend(["-h", host, "-u", self.context._node_user(node)])
-        args.extend(["-host-key-checking", self.host_key_checking_mode()])
+        self._append_host_key_checking(args)
         if port != DEFAULT_PORT:
             args.extend(["-P", port])
 
@@ -329,7 +338,7 @@ class ConnectionPlanner:
             args,
             secrets,
             node,
-            "tunnel" if nest_parent else "direct",
+            self._sftp_auth_mode(node),
         )
 
         if nest_parent:
@@ -351,16 +360,13 @@ class ConnectionPlanner:
             )
 
         if not nest_parent:
-            proxy_command = self.context._proxy_command(node)
-            if proxy_command:
-                args.extend(["-proxy-command", proxy_command])
+            self._append_proxy_command(args, node, "-proxy-command")
 
         return args, secrets
 
     def _build_sftp_command_parts(self, node, action, path1, path2):
         args, secrets = self._build_sftp_connection_parts(node)
-        local_path = path1 if action == "upload" else path2
-        remote_path = path2 if action == "upload" else path1
+        local_path, remote_path = self._transfer_paths(action, path1, path2)
         self.context._validate_sftp_path(local_path, "local")
         self.context._validate_sftp_path(remote_path, "remote")
         args.extend(["-action", action, "-local", local_path, "-remote", remote_path])
@@ -392,7 +398,7 @@ class ConnectionPlanner:
         )
 
         args.extend(["-h", host, "-u", user])
-        args.extend(["-host-key-checking", self.host_key_checking_mode()])
+        self._append_host_key_checking(args)
         if port != DEFAULT_PORT:
             args.extend(["-p", port])
 
@@ -407,14 +413,10 @@ class ConnectionPlanner:
                     self._build_tunnel_proxy_command(nest_parent, node),
                 ])
             else:
-                jump_proxy_command = self.context._proxy_command(nest_parent)
-                if jump_proxy_command:
-                    args.extend(["-j-proxy-command", jump_proxy_command])
+                self._append_proxy_command(args, nest_parent, "-j-proxy-command")
             self._append_jump_auth(args, secrets, nest_parent)
         else:
-            proxy_command = self.context._proxy_command(node)
-            if proxy_command:
-                args.extend(["-proxy-command", proxy_command])
+            self._append_proxy_command(args, node, "-proxy-command")
 
         if remote_command:
             args.extend(["-c", remote_command])
@@ -422,7 +424,6 @@ class ConnectionPlanner:
         return args, secrets
 
     def build_interactive_command_plan(self, node, remote_command=None):
-        login_script = os.path.join(self.script_dir, "login.exp")
         args, secrets = self._build_interactive_command_parts(
             node,
             remote_command=remote_command,
@@ -431,16 +432,15 @@ class ConnectionPlanner:
         ssh_jump_mode = (
             self.context._effective_ssh_jump_mode(node) if nest_parent else "direct"
         )
-        jump_chain = [nest_parent.get("name", "")] if nest_parent else []
         return self._command_plan(
-            script_path=login_script,
+            script_path=self._script_path("login.exp"),
             args=args,
             secrets=secrets,
             audit=self._audit_metadata(
                 node,
                 auth=self.context._auth_method_for_mode(node, ssh_jump_mode),
                 command=remote_command,
-                jump_chain=jump_chain,
+                jump_chain=self._jump_chain(nest_parent),
                 extra={
                     "ssh_jump_mode": self.context._effective_ssh_jump_mode(node),
                 },

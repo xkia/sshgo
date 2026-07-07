@@ -231,9 +231,8 @@ class HostManager:
             return bool(node.get("use_ssh_agent"))
         return self._uses_ssh_agent(node)
 
-    def _auth_method(self, node):
-        if self._uses_ssh_agent(node):
-            return "agent"
+    @staticmethod
+    def _credential_auth_method(node):
         if node.get("id_file"):
             return "key"
         if node.get("mfa_secret"):
@@ -242,16 +241,15 @@ class HostManager:
             return "password"
         return "none"
 
+    def _auth_method(self, node):
+        if self._uses_ssh_agent(node):
+            return "agent"
+        return self._credential_auth_method(node)
+
     def _auth_method_for_mode(self, node, mode):
         if self._uses_target_agent_for_mode(node, mode):
             return "agent"
-        if node.get("id_file"):
-            return "key"
-        if node.get("mfa_secret"):
-            return "mfa"
-        if node.get("password"):
-            return "password"
-        return "none"
+        return self._credential_auth_method(node)
 
     def _effective_ssh_jump_mode(self, node):
         return self._effective_jump_mode(
@@ -462,60 +460,66 @@ class HostManager:
     def _candidate_config_data(self, hosts):
         return host_crud.candidate_config_data(self.config, hosts)
 
-    def validate_add_candidate(self, node_data, parent_name=None):
+    def _validate_add_candidate(self, node_data, parent_name=None, parent_id=None):
         hosts = self._clean_hosts_for_validation()
         host_crud.build_add_candidate_hosts(
             hosts,
             node_data,
             parent_name=parent_name,
-        )
-        return _validate_hosts_config(self._candidate_config_data(hosts))
-
-    def validate_add_candidate_by_parent_id(self, node_data, parent_id=None):
-        hosts = self._clean_hosts_for_validation()
-        host_crud.build_add_candidate_hosts(
-            hosts,
-            node_data,
             parent_id=parent_id,
         )
         return _validate_hosts_config(self._candidate_config_data(hosts))
 
-    def validate_update_candidate(self, node_name, new_data):
-        current, _, _ = self.find_node_and_parent(node_name)
+    def validate_add_candidate(self, node_data, parent_name=None):
+        return self._validate_add_candidate(node_data, parent_name=parent_name)
+
+    def validate_add_candidate_by_parent_id(self, node_data, parent_id=None):
+        return self._validate_add_candidate(node_data, parent_id=parent_id)
+
+    def _validate_update_candidate(
+        self,
+        current,
+        new_data,
+        missing_label,
+        candidate_missing_label,
+        node_name=None,
+        node_id=None,
+    ):
         if not current:
-            return [i18n.get("validate_node_not_found", name=node_name)]
+            return [i18n.get("validate_node_not_found", name=missing_label)]
 
         hosts = self._clean_hosts_for_validation()
-        current_id = current.get("id")
         candidate_hosts = host_crud.build_update_candidate_hosts(
             hosts,
             current,
             new_data,
             is_nested_host=self._is_nested_host_node(current),
             node_name=node_name,
-            node_id=current_id,
+            node_id=node_id or current.get("id"),
         )
         if candidate_hosts is None:
-            return [i18n.get("validate_node_not_found", name=node_name)]
+            return [i18n.get("validate_node_not_found", name=candidate_missing_label)]
         return _validate_hosts_config(self._candidate_config_data(hosts))
+
+    def validate_update_candidate(self, node_name, new_data):
+        current, _, _ = self.find_node_and_parent(node_name)
+        return self._validate_update_candidate(
+            current,
+            new_data,
+            node_name,
+            node_name,
+            node_name=node_name,
+        )
 
     def validate_update_candidate_by_id(self, node_id, new_data):
         current, _, _ = self.find_node_and_parent_by_id(node_id)
-        if not current:
-            return [i18n.get("validate_node_not_found", name=node_id)]
-
-        hosts = self._clean_hosts_for_validation()
-        candidate_hosts = host_crud.build_update_candidate_hosts(
-            hosts,
+        return self._validate_update_candidate(
             current,
             new_data,
-            is_nested_host=self._is_nested_host_node(current),
+            node_id,
+            current.get("name", "") if current else node_id,
             node_id=node_id,
         )
-        if candidate_hosts is None:
-            return [i18n.get("validate_node_not_found", name=current.get("name", ""))]
-        return _validate_hosts_config(self._candidate_config_data(hosts))
-
 
     def _save_hosts(self):
         self.last_save_error = None
@@ -617,12 +621,6 @@ class HostManager:
             index,
             validate_func=_validate_hosts_config,
         )
-
-    def _rotate_config_backups(self):
-        try:
-            self.store.rotate_backups()
-        except OSError as e:
-            print(f"Warning: Could not create config backup: {e}", file=sys.stderr)
 
     def _encrypt_all_nodes(self, nodes, key):
         self._apply_crypto(nodes, key, encrypt)
@@ -756,52 +754,36 @@ class HostManager:
             return False
 
     def add_node(self, node_data, parent_name):
-        if self._config_changed_since_load():
-            return self._record_save_conflict()
-        existing_ids = host_crud.existing_node_ids(self.hosts)
-        host_tree.ensure_node_ids([node_data], self._new_node_id, existing_ids)
+        parent_node = None
         if parent_name:
             parent_node, _, _ = self.find_node_and_parent(parent_name)
-            if parent_node:
-                host_crud.add_node_to_tree(
-                    self.hosts,
-                    node_data,
-                    parent_node=parent_node,
-                    is_nested_host=self._is_nested_host_node(node_data, parent_node),
-                )
-            else:
-                print(
-                    f"Warning: Parent '{parent_name}' not found. Adding to top level.",
-                    file=sys.stderr,
-                )
-                host_crud.add_node_to_tree(self.hosts, node_data)
-        else:
-            host_crud.add_node_to_tree(self.hosts, node_data)
-
-        host_tree.rebuild_nest_parents(self.hosts)
-        return self._save_hosts()
+        return self._add_node(node_data, parent_node, "Parent", parent_name)
 
     def add_node_to_parent_id(self, node_data, parent_id=None):
+        parent_node = None
+        if parent_id:
+            parent_node, _, _ = self.find_node_and_parent_by_id(parent_id)
+        return self._add_node(node_data, parent_node, "Parent id", parent_id)
+
+    def _add_node(self, node_data, parent_node=None, parent_label="Parent", parent_value=None):
         if self._config_changed_since_load():
             return self._record_save_conflict()
         existing_ids = host_crud.existing_node_ids(self.hosts)
         host_tree.ensure_node_ids([node_data], self._new_node_id, existing_ids)
-        if parent_id:
-            parent_node, _, _ = self.find_node_and_parent_by_id(parent_id)
-            if parent_node:
-                host_crud.add_node_to_tree(
-                    self.hosts,
-                    node_data,
-                    parent_node=parent_node,
-                    is_nested_host=self._is_nested_host_node(node_data, parent_node),
-                )
-            else:
+
+        if parent_node:
+            host_crud.add_node_to_tree(
+                self.hosts,
+                node_data,
+                parent_node=parent_node,
+                is_nested_host=self._is_nested_host_node(node_data, parent_node),
+            )
+        else:
+            if parent_value:
                 print(
-                    f"Warning: Parent id '{parent_id}' not found. Adding to top level.",
+                    f"Warning: {parent_label} '{parent_value}' not found. Adding to top level.",
                     file=sys.stderr,
                 )
-                host_crud.add_node_to_tree(self.hosts, node_data)
-        else:
             host_crud.add_node_to_tree(self.hosts, node_data)
 
         host_tree.rebuild_nest_parents(self.hosts)
@@ -939,37 +921,37 @@ class HostManager:
     def _execute_command_plan(self, plan):
         self._connection_runtime().execute(plan)
 
-    def execute_file_transfer(self, node, action, path1, path2):
+    def _command_plan_or_exit(self, build_plan, *args):
         try:
-            plan = self._connection_planner().build_file_transfer_command_plan(
-                node,
-                action,
-                path1,
-                path2,
-            )
+            return build_plan(*args)
         except (_PlaceholderResolutionError, _ConfigRuntimeError) as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
-        self._execute_command_plan(plan)
+
+    def _execute_planned_command(self, build_plan, *args):
+        self._execute_command_plan(self._command_plan_or_exit(build_plan, *args))
+
+    def execute_file_transfer(self, node, action, path1, path2):
+        self._execute_planned_command(
+            self._connection_planner().build_file_transfer_command_plan,
+            node,
+            action,
+            path1,
+            path2,
+        )
 
     def execute_interactive_sftp_session(self, node):
-        try:
-            plan = self._connection_planner().build_interactive_sftp_command_plan(node)
-        except (_PlaceholderResolutionError, _ConfigRuntimeError) as e:
-            print(f"Error: {e}", file=sys.stderr)
-            sys.exit(1)
-        self._execute_command_plan(plan)
+        self._execute_planned_command(
+            self._connection_planner().build_interactive_sftp_command_plan,
+            node,
+        )
 
     def execute_interactive_connection(self, node, remote_command=None):
-        try:
-            plan = self._connection_planner().build_interactive_command_plan(
-                node,
-                remote_command,
-            )
-        except (_PlaceholderResolutionError, _ConfigRuntimeError) as e:
-            print(f"Error: {e}", file=sys.stderr)
-            sys.exit(1)
-        self._execute_command_plan(plan)
+        self._execute_planned_command(
+            self._connection_planner().build_interactive_command_plan,
+            node,
+            remote_command,
+        )
 
     def build_interactive_launch_command_args(self, node, remote_command=None):
         return self._connection_planner().build_interactive_launch_command_args(

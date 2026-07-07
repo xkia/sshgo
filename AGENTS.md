@@ -49,7 +49,7 @@ This file provides repository guidance for coding agents and maintainers working
 | `connection_plan.py` | `CommandPlan` plus secret environment mapping and UTF-8 locale normalization for Expect handoff |
 | `connection_planner.py` | SSH, SFTP, interactive SFTP, and relay command-plan builders; consumes `HostManager` through a narrow structural adapter and must not import `host_manager.py` |
 | `connection_runtime.py` | Executes `CommandPlan` objects: executable checks, optional terminal title, audit start/failure records, environment construction, and `os.execve()` handoff |
-| `host_tree.py` | Pure host/group tree helpers — traversal, lookup, replacement, parent/index lookup, potential parent listing, node ID assignment, and runtime parent-link rebuilding |
+| `host_tree.py` | Pure host/group tree helpers — traversal, lookup, replacement, parent/index lookup, node ID assignment, and runtime parent-link rebuilding |
 | `host_crud.py` | Internal host/group CRUD helpers — validation candidate assembly, update-data application, and tree mutations delegated by `HostManager` |
 | `config_store.py` | `ConfigStore` plus JSONC parser — reads `hosts.json`, fingerprints loaded files, writes JSON atomically with optional stale-write detection, rotates/list/restores backups, and preserves JSONC comments/trailing-comma read support |
 | `config_validation.py` | Pure parsed-config validation helpers — validates top-level config, placeholders, host/group nodes, jump modes, and relay temp paths |

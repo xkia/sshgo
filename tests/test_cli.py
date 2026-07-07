@@ -769,8 +769,14 @@ exit 0
         real_tui = sshgo_module.Tui
         real_input = builtins.input
         real_run_add_flow = sshgo_module.tui_flows.run_add_flow
+        prompts = []
         sshgo_module.Tui = FakeTui
-        builtins.input = lambda prompt: "y"
+
+        def fake_input(prompt):
+            prompts.append(prompt)
+            return "y"
+
+        builtins.input = fake_input
         sshgo_module.tui_flows.run_add_flow = lambda tui: events.append(("add",))
         try:
             with redirect_stdout(StringIO()):
@@ -783,6 +789,7 @@ exit 0
 
         self.assertEqual(ctx.exception.code, 0)
         self.assertEqual(events, [("init", "add"), ("add",), ("restore",)])
+        self.assertEqual(prompts, [sshgo_module.i18n.get("first_run_add_prompt")])
 
 if __name__ == "__main__":
     unittest.main()

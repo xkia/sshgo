@@ -87,6 +87,73 @@ def draw_shell(
     }
 
 
+def draw_form_fields(
+    window,
+    visible_fields,
+    active_field_index,
+    screen_width,
+    start_y,
+    highlight_attr,
+    min_input_width,
+):
+    for i, field in enumerate(visible_fields):
+        y = field.get("_screen_y", start_y)
+        x = field.get("_label_x", 3)
+        input_x = field.get("_input_x", x + 2)
+        input_width = field.get("_input_width", min_input_width)
+        label = field.get("label", "")
+        field_type = field.get("type")
+        is_active = i == active_field_index
+        attr = highlight_attr if is_active else curses.A_NORMAL
+        right_width = max(0, screen_width - x - 2)
+
+        if field_type == "static_text":
+            for offset, line in enumerate(field.get("_wrapped_lines", [label])):
+                safe_addstr(window, y + offset, x, line, max_width=right_width)
+            continue
+
+        safe_addstr(window, y, max(1, x - 2), ">" if is_active else " ", curses.A_BOLD)
+
+        if field_type == "section":
+            safe_addstr(
+                window, y, x, f"-- {label} --", curses.A_BOLD, max_width=right_width
+            )
+        elif field_type == "toggle":
+            toggle_marker = "[-]" if field.get("value") else "[+]"
+            safe_addstr(
+                window,
+                y,
+                x,
+                f"{toggle_marker} {label}",
+                attr | curses.A_BOLD,
+                max_width=right_width,
+            )
+        elif field_type in ("text", "password"):
+            safe_addstr(window, y, x, label, curses.A_BOLD)
+            value = field.get("value") or ""
+            display_value = "*" * len(value) if field_type == "password" else value
+            display_value = tui_text.ellipsize(
+                display_value, input_width, tail=field_type != "password"
+            )
+            padded_value = f" {display_value:<{input_width}} "
+            safe_addstr(window, y, input_x, padded_value, attr, max_width=input_width + 2)
+        elif field_type == "radio":
+            safe_addstr(window, y, x, label, curses.A_BOLD)
+            value = field.get("value")
+            option_width = max(0, screen_width - input_x - 2)
+            for j, option in enumerate(field.get("options", [])):
+                option_attr = curses.A_BOLD if is_active else curses.A_NORMAL
+                marker = "(x)" if value == option else "( )"
+                if value == option:
+                    option_attr |= attr
+                option_label = f"{marker} {i18n.get(option)}"
+                safe_addstr(
+                    window, y + j, input_x, option_label, option_attr, max_width=option_width
+                )
+        elif field_type == "button":
+            safe_addstr(window, y, x, f"[ {label} ]", attr)
+
+
 def main_split_layout(screen_cols, node, show_detail_pane=True):
     content_width = max(1, screen_cols - 2)
     show_details = (
@@ -123,6 +190,19 @@ def main_split_layout(screen_cols, node, show_detail_pane=True):
         "detail_width": detail_width,
         "separator_x": separator_x,
     }
+
+
+def draw_empty_list(window, split, content_top, search_query):
+    x = split["list_x"] + 1
+    width = max(0, split["list_width"] - 2)
+    message = (
+        i18n.get("no_results", query=search_query)
+        if search_query
+        else i18n.get("no_hosts")
+    )
+    safe_addstr(window, content_top, x, message, max_width=width)
+    if not search_query:
+        safe_addstr(window, content_top + 1, x, i18n.get("empty_hosts_hint"), max_width=width)
 
 
 def draw_detail_pane(window, node, details):
