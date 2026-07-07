@@ -22,6 +22,19 @@ def _plan(start_result="started", command=None):
     )
 
 
+def _ipv6_plan():
+    return SimpleNamespace(
+        start_result="started",
+        audit={
+            "name": "demo",
+            "host": "2001:db8::5",
+            "port": "2222",
+            "endpoint": "[2001:db8::5]:2222",
+            "command": None,
+        },
+    )
+
+
 class BrokenOutput:
     def write(self, value):
         raise UnicodeEncodeError("ascii", value, 0, 1, "fake")
@@ -69,6 +82,20 @@ class TerminalTitleTests(unittest.TestCase):
         self.assertEqual(window_output.getvalue(), "\033]2;SSH demo | example.com\007")
         self.assertEqual(both_output.getvalue(), "\033]0;SSH demo | example.com\007")
 
+    def test_ghostty_tab_target_uses_window_title_sequence(self):
+        output = StringIO()
+
+        emitted = emit_terminal_title(
+            {"terminal_title_enabled": True},
+            _plan(),
+            env={"TERM_PROGRAM": "ghostty"},
+            output=output,
+            output_is_tty=lambda: True,
+        )
+
+        self.assertTrue(emitted)
+        self.assertEqual(output.getvalue(), "\033]0;SSH demo | example.com\007")
+
     def test_alias_only_format(self):
         title = terminal_title_for_plan(
             {"terminal_title_format": "alias"},
@@ -76,6 +103,14 @@ class TerminalTitleTests(unittest.TestCase):
         )
 
         self.assertEqual(title, "SSH demo")
+
+    def test_ipv6_endpoint_is_bracketed_when_port_is_displayed(self):
+        title = terminal_title_for_plan(
+            {},
+            _ipv6_plan(),
+        )
+
+        self.assertEqual(title, "SSH demo | [2001:db8::5]:2222")
 
     def test_transfer_mode_prefixes(self):
         upload_title = terminal_title_for_plan(

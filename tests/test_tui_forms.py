@@ -28,7 +28,8 @@ class TuiFormsTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(node["host"], "example.com:22")
+        self.assertEqual(node["host"], "example.com")
+        self.assertNotIn("port", node)
         self.assertNotIn("ssh_jump_mode", node)
         self.assertNotIn("transfer_jump_mode", node)
         self.assertEqual(node["proxy_command"], "nc %h %p")
@@ -49,7 +50,7 @@ class TuiFormsTests(unittest.TestCase):
         self.assertEqual(node["ssh_jump_mode"], "tunnel")
         self.assertEqual(node["transfer_jump_mode"], "relay")
 
-    def test_update_data_combines_host_and_port(self):
+    def test_update_data_keeps_host_and_port_separate(self):
         data = tui_forms.update_data_from_form(
             {
                 "name": "demo",
@@ -59,8 +60,22 @@ class TuiFormsTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(data["host"], "example.com:2222")
+        self.assertEqual(data["host"], "example.com")
+        self.assertEqual(data["port"], "2222")
         self.assertNotIn("_screen_y", data)
+
+    def test_host_form_keeps_ipv6_host_and_port_separate(self):
+        node = tui_forms.host_node_from_form(
+            {
+                "name": "ipv6",
+                "host": "2001:db8::5",
+                "port": "2222",
+                "user": "deploy",
+            }
+        )
+
+        self.assertEqual(node["host"], "2001:db8::5")
+        self.assertEqual(node["port"], "2222")
 
     def test_host_form_auth_required_state_and_proxy_visibility(self):
         password_fields = tui_forms.host_form_fields(

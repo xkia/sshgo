@@ -3,6 +3,7 @@
 
 import getpass
 
+from endpoint import DEFAULT_PORT, normalize_port
 from i18n import i18n
 
 
@@ -203,15 +204,18 @@ def apply_dynamic_visibility(fields, form_data):
 
 def host_node_from_form(final_data):
     data = clean_form_data(final_data)
+    port = normalize_port(data.get("port"))
     node = {
         "type": "host",
         "name": data["name"],
-        "host": f"{data['host']}:{data['port']}",
+        "host": data["host"],
         "user": data["user"],
         "password": data.get("password", ""),
         "id_file": data.get("id_file", ""),
         "mfa_secret": data.get("mfa_secret", ""),
     }
+    if port != DEFAULT_PORT:
+        node["port"] = port
     if data.get("ssh_jump_mode") != "default":
         node["ssh_jump_mode"] = data.get("ssh_jump_mode")
     if data.get("transfer_jump_mode") != "default":
@@ -233,6 +237,6 @@ def group_node_from_form(final_data):
 
 def update_data_from_form(final_data):
     data = clean_form_data(final_data)
-    if "host" in data and "port" in data:
-        data["host"] = f"{data['host']}:{data['port']}"
+    if "port" in data:
+        data["port"] = normalize_port(data.get("port"))
     return data

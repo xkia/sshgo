@@ -13,6 +13,7 @@ from config_validation import (
     TERMINAL_TITLE_SCOPES,
     TERMINAL_TITLE_TARGETS,
 )
+from endpoint import format_endpoint
 
 OSC_CODES = {
     "tab": "1",
@@ -51,7 +52,7 @@ def emit_terminal_title(
 
     if output is None:
         output = sys.stdout
-    code = terminal_title_target_code(config)
+    code = terminal_title_target_code(config, env=env)
     title = terminal_title_for_plan(config, plan)
     try:
         output.write(f"\033]{code};{title}\007")
@@ -85,7 +86,7 @@ def terminal_title_supported(env, output_is_tty=None):
         return False
 
     term_program = env.get("TERM_PROGRAM", "").lower()
-    if term_program in COMPATIBLE_TERM_PROGRAMS:
+    if term_program in COMPATIBLE_TERM_PROGRAMS or terminal_title_ghostty(env):
         return True
 
     if env.get("WT_SESSION") or env.get("KONSOLE_VERSION"):
@@ -95,11 +96,26 @@ def terminal_title_supported(env, output_is_tty=None):
     return any(marker in term for marker in COMPATIBLE_TERM_MARKERS)
 
 
-def terminal_title_target_code(config):
+def terminal_title_target_code(config, env=None):
     target = config.get("terminal_title_target", DEFAULT_TERMINAL_TITLE_TARGET)
     if target not in TERMINAL_TITLE_TARGETS:
         target = DEFAULT_TERMINAL_TITLE_TARGET
+    if target == "tab" and terminal_title_ghostty(env):
+        return OSC_CODES["both"]
     return OSC_CODES[target]
+
+
+def terminal_title_ghostty(env=None):
+    if env is None:
+        env = os.environ
+    term_program = env.get("TERM_PROGRAM", "").lower()
+    term = env.get("TERM", "").lower()
+    return (
+        term_program == "ghostty"
+        or "ghostty" in term
+        or bool(env.get("GHOSTTY_RESOURCES_DIR"))
+        or bool(env.get("GHOSTTY_BIN_DIR"))
+    )
 
 
 def terminal_title_format(config):
@@ -151,9 +167,12 @@ def terminal_title_endpoint(audit):
     host = str(audit.get("host") or "")
     port = str(audit.get("port") or "")
     if host:
-        if port and port != DEFAULT_PORT:
-            return f"{host}:{port}"
-        return host
+        return format_endpoint(
+            host,
+            port or DEFAULT_PORT,
+            default_port=DEFAULT_PORT,
+            include_default=False,
+        )
     return str(audit.get("endpoint") or "")
 
 

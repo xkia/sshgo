@@ -18,7 +18,8 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                 {
                     "type": "host",
                     "name": "jump",
-                    "host": "jump.example.com:2200",
+                    "host": "jump.example.com",
+                    "port": "2200",
                     "user": "jumpuser",
                     "password": "jump-pass",
                     "id_file": "/tmp/jump_key",
@@ -27,7 +28,8 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                         {
                             "type": "host",
                             "name": "target",
-                            "host": "target.internal:2222",
+                            "host": "target.internal",
+                            "port": "2222",
                             "user": "targetuser",
                             "password": "target-pass",
                             "id_file": "/tmp/target_key",
@@ -43,7 +45,15 @@ class ConnectionAuthAuditTests(unittest.TestCase):
         return HostManager(path, data_dir=os.path.join(temp_dir, "data"))
 
     def _run_handoff_and_capture(self, manager, action, env=None, tty=True):
-        env_keys = ("CI", "TERM", "TERM_PROGRAM", "WT_SESSION", "KONSOLE_VERSION")
+        env_keys = (
+            "CI",
+            "TERM",
+            "TERM_PROGRAM",
+            "WT_SESSION",
+            "KONSOLE_VERSION",
+            "GHOSTTY_RESOURCES_DIR",
+            "GHOSTTY_BIN_DIR",
+        )
         old_env = {key: os.environ.get(key) for key in env_keys}
         real_execve = host_manager_module.os.execve
         captured = {}
@@ -158,6 +168,23 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                 "\033]1;SSH target | target.internal:2222\007",
             )
 
+    def test_terminal_title_emits_ghostty_tab_compatible_sequence(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            manager.config["terminal_title_enabled"] = True
+            target = manager.find_host_by_alias("target")
+
+            output, _ = self._run_handoff_and_capture(
+                manager,
+                lambda: manager.execute_interactive_connection(target),
+                env={"TERM_PROGRAM": "ghostty"},
+            )
+
+            self.assertEqual(
+                output,
+                "\033]0;SSH target | target.internal:2222\007",
+            )
+
     def test_terminal_title_format_host_hides_default_port(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
@@ -168,6 +195,7 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             })
             target = manager.find_host_by_alias("target")
             target["host"] = "target.internal"
+            target.pop("port", None)
 
             output, _ = self._run_handoff_and_capture(
                 manager,
@@ -315,7 +343,9 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             self.assertEqual(args[args.index("-jump-mode") + 1], "tunnel")
             tunnel_proxy = args[args.index("-tunnel-proxy-command") + 1]
             self.assertIn("-W %h:%p", tunnel_proxy)
-            self.assertIn("jumpuser@jump.example.com:2200", tunnel_proxy)
+            self.assertIn("-p 2200", tunnel_proxy)
+            self.assertIn("jumpuser@jump.example.com", tunnel_proxy)
+            self.assertNotIn("jumpuser@jump.example.com:2200", tunnel_proxy)
 
     def test_proxy_command_and_placeholders_are_passed_to_login_exp(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -333,7 +363,8 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                     {
                         "type": "host",
                         "name": "demo-host",
-                        "host": "ssh.{{site_domain}}:2222",
+                        "host": "ssh.{{site_domain}}",
+                            "port": "2222",
                         "user": "{{default_user}}",
                         "id_file": "{{key_path}}",
                         "proxy_command": "nc -X 5 -x {{local_socks}} %h %p",
@@ -398,7 +429,8 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                     {
                         "type": "host",
                         "name": "jump",
-                        "host": "jump.example.com:2200",
+                        "host": "jump.example.com",
+                    "port": "2200",
                         "user": "jumpuser",
                         "password": "jump-pass",
                         "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
@@ -406,7 +438,7 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                             {
                                 "type": "host",
                                 "name": "target",
-                                "host": "target.internal:22",
+                                "host": "target.internal",
                                 "user": "targetuser",
                                 "password": "target-pass",
                             }
@@ -455,7 +487,8 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                     {
                         "type": "host",
                         "name": "jump",
-                        "host": "jump.example.com:2200",
+                        "host": "jump.example.com",
+                    "port": "2200",
                         "user": "jumpuser",
                         "password": "jump-pass",
                         "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
@@ -463,7 +496,8 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                             {
                                 "type": "host",
                                 "name": "target",
-                                "host": "target.internal:2222",
+                                "host": "target.internal",
+                            "port": "2222",
                                 "user": "targetuser",
                                 "password": "target-pass",
                                 "ssh_jump_mode": "tunnel",
@@ -498,7 +532,9 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             tunnel_proxy = args[args.index("-tunnel-proxy-command") + 1]
             self.assertIn("ProxyCommand=nc -X 5 -x 127.0.0.1:1080 %%h %%p", tunnel_proxy)
             self.assertIn("-W %h:%p", tunnel_proxy)
-            self.assertIn("jumpuser@jump.example.com:2200", tunnel_proxy)
+            self.assertIn("-p 2200", tunnel_proxy)
+            self.assertIn("jumpuser@jump.example.com", tunnel_proxy)
+            self.assertNotIn("jumpuser@jump.example.com:2200", tunnel_proxy)
             self.assertNotIn("-j-proxy-command", args)
             self.assertNotIn("-proxy-command", args)
 
@@ -513,7 +549,8 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                     {
                         "type": "host",
                         "name": "jump",
-                        "host": "jump.example.com:2200",
+                        "host": "jump.example.com",
+                    "port": "2200",
                         "user": "jumpuser",
                         "password": "jump-pass",
                         "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
@@ -521,7 +558,8 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                             {
                                 "type": "host",
                                 "name": "target",
-                                "host": "target.internal:2222",
+                                "host": "target.internal",
+                            "port": "2222",
                                 "user": "targetuser",
                                 "password": "target-pass",
                                 "ssh_jump_mode": "tunnel",
@@ -573,6 +611,33 @@ class ConnectionAuthAuditTests(unittest.TestCase):
         self.assertIn("ProxyCommand=ssh -o ProxyCommand=", rendered)
         self.assertIn("%%h %%p", rendered)
         self.assertIn("-W %h:%p", rendered)
+
+    def test_login_exp_print_command_unwraps_ipv6_shell_jump_target(self):
+        result = subprocess.run(
+            [
+                "./login.exp",
+                "-h",
+                "target.internal",
+                "-u",
+                "targetuser",
+                "-J",
+                "jumpuser@[2001:db8::1]:2200",
+                "-jump-mode",
+                "shell",
+                "-print-command",
+                "1",
+            ],
+            cwd=os.getcwd(),
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        rendered = result.stdout.strip()
+        self.assertIn("'-p' '2200'", rendered)
+        self.assertIn("'jumpuser@2001:db8::1'", rendered)
+        self.assertNotIn("jumpuser@[2001:db8::1]", rendered)
 
     def test_nested_sftp_tunnel_does_not_pass_jump_identity_file_arg(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -750,7 +815,8 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                     {
                         "type": "host",
                         "name": "files",
-                        "host": "{{host_base}}:2201",
+                        "host": "{{host_base}}",
+                            "port": "2201",
                         "user": "{{user}}",
                         "id_file": "{{key}}",
                         "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
@@ -787,7 +853,8 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                     {
                         "type": "host",
                         "name": "jump",
-                        "host": "jump.example.com:2200",
+                        "host": "jump.example.com",
+                    "port": "2200",
                         "user": "jumpuser",
                         "password": "jump-pass",
                         "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
@@ -795,7 +862,8 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                             {
                                 "type": "host",
                                 "name": "target",
-                                "host": "target.internal:2222",
+                                "host": "target.internal",
+                            "port": "2222",
                                 "user": "targetuser",
                                 "password": "target-pass",
                             }
@@ -822,7 +890,7 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             (
                 "ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "
                 "-p 2200 -o 'ProxyCommand=nc -X 5 -x 127.0.0.1:1080 %%h %%p' "
-                "-W %h:%p jumpuser@jump.example.com:2200"
+                "-W %h:%p jumpuser@jump.example.com"
             ),
         )
         self.assertEqual(
@@ -879,7 +947,7 @@ class ConnectionAuthAuditTests(unittest.TestCase):
                     {
                         "type": "host",
                         "name": "bad-runtime",
-                        "host": "bad.{{missing}}:22",
+                        "host": "bad.{{missing}}",
                         "user": "deploy",
                         "password": "pw",
                     }

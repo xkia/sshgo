@@ -2,19 +2,56 @@
 # -*- coding: utf-8 -*-
 
 import curses
+import unicodedata
+
+
+def char_width(ch):
+    if unicodedata.combining(ch):
+        return 0
+    if unicodedata.east_asian_width(ch) in ("F", "W"):
+        return 2
+    return 1
+
+
+def display_width(value):
+    return sum(char_width(ch) for ch in str(value))
+
+
+def _take_cells(value, width, tail=False):
+    if width <= 0:
+        return ""
+    chars = reversed(str(value)) if tail else iter(str(value))
+    used = 0
+    output = []
+    for ch in chars:
+        ch_width = char_width(ch)
+        if used + ch_width > width:
+            break
+        output.append(ch)
+        used += ch_width
+    if tail:
+        output.reverse()
+    return "".join(output)
+
+
+def truncate_cells(value, width):
+    value = str(value)
+    if display_width(value) <= width:
+        return value
+    return _take_cells(value, width)
 
 
 def ellipsize(value, width, tail=False):
     value = str(value)
     if width <= 0:
         return ""
-    if len(value) <= width:
+    if display_width(value) <= width:
         return value
     if width <= 3:
-        return value[:width]
+        return _take_cells(value, width)
     if tail:
-        return "..." + value[-(width - 3) :]
-    return value[: width - 3] + "..."
+        return "..." + _take_cells(value, width - 3, tail=True)
+    return _take_cells(value, width - 3) + "..."
 
 
 def matches_key(key, *candidates):

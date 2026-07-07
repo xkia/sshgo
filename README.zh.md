@@ -270,9 +270,10 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 - `recent_expanded`: 存储 TUI Recent 分组是否展开。
 - `tui_screen_policy`: `isolated` 使用终端 alternate screen 且不清理滚屏历史；`private` 会在 TUI 退出后尝试清理当前可见屏幕和滚屏历史。
 - `terminal_title_enabled`: 设为 `true` 时, 在 SSH、SFTP、上传/下载或 relay 交接前设置终端 tab/window 标题。默认关闭。
-- `terminal_title_target`: 标题目标, 可选 `tab`、`window` 或 `both`。
+- `terminal_title_target`: 标题目标, 可选 `tab`、`window` 或 `both`。在 Ghostty 中, `tab` 会使用兼容 Ghostty 的 window-title 序列来更新可见 tab/surface 标题。
 - `terminal_title_format`: 标题内容格式, 可选 `alias`、`host` 或 `alias_host`。
 - `terminal_title_scope`: `auto` 仅在已知兼容的终端环境中输出标题序列；`always` 会在启用后总是尝试输出。sshgo 不会在远程会话退出后恢复旧标题。
+  如果 Ghostty shell integration 在下一个 prompt 覆盖标题, 可在 Ghostty 配置中设置 `shell-integration-features = no-title`。
 - `default_ssh_jump_mode`: 嵌套 SSH 的默认模式, 可选 `shell` 或 `tunnel`。
 - `default_transfer_jump_mode`: 嵌套文件传输的默认模式, 可选 `tunnel` 或 `relay`。
 - `relay_temp_dir`: `transfer_jump_mode: "relay"` 使用的跳板机绝对临时目录。
@@ -304,7 +305,8 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 {
   "type": "host",
   "name": "我的网页服务器",
-  "host": "192.168.1.100:22",
+  "host": "192.168.1.100",
+  "port": 22,              // 可选; 默认 22
   "user": "dev_user",
   "password": "...",         // 如果不使用密钥, 则为必填项
   "id_file": "~/.ssh/id_rsa",  // 如果不使用密码, 则为必填项
@@ -334,7 +336,7 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
     {
       "type": "host",
       "name": "SSH via SOCKS",
-      "host": "ssh.{{site_domain}}:22",
+      "host": "ssh.{{site_domain}}",
       "user": "{{default_user}}",
       "proxy_command": "nc -X 5 -x {{local_socks}} %h %p"
     }

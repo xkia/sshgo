@@ -14,7 +14,8 @@ class ValidationTests(unittest.TestCase):
                 {
                     "type": "host",
                     "name": "jump",
-                    "host": "jump.example.com:2200",
+                    "host": "jump.example.com",
+                    "port": "2200",
                     "user": "jumpuser",
                     "password": "jump-pass",
                     "id_file": "/tmp/jump_key",
@@ -23,7 +24,8 @@ class ValidationTests(unittest.TestCase):
                         {
                             "type": "host",
                             "name": "target",
-                            "host": "target.internal:2222",
+                            "host": "target.internal",
+                            "port": "2222",
                             "user": "targetuser",
                             "password": "target-pass",
                             "id_file": "/tmp/target_key",
@@ -184,7 +186,8 @@ class ValidationTests(unittest.TestCase):
                         "id": "duplicate-id",
                         "type": "host",
                         "name": "duplicate-name",
-                        "host": "example.com:70000",
+                        "host": "example.com",
+                        "port": "70000",
                         "user": "deploy",
                         "password": "pw",
                         "unexpected": True,
@@ -205,6 +208,99 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("Duplicate node id", joined)
         self.assertIn("Port '70000'", joined)
         self.assertIn("Unknown field", joined)
+
+    def test_validation_accepts_ipv6_endpoint_forms(self):
+        errors = validate_hosts_config(
+            {
+                "config": {},
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "ipv6-default",
+                        "host": "2001:db8::1",
+                        "user": "deploy",
+                        "password": "pw",
+                    },
+                    {
+                        "type": "host",
+                        "name": "ipv6-port",
+                        "host": "2001:db8::2",
+                        "port": "2222",
+                        "user": "deploy",
+                        "password": "pw",
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(errors, [])
+
+    def test_validation_rejects_malformed_ipv6_endpoint(self):
+        errors = validate_hosts_config(
+            {
+                "config": {},
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "bad-ipv6",
+                        "host": "[2001:db8::1:2222",
+                        "user": "deploy",
+                        "password": "pw",
+                    }
+                ],
+            }
+        )
+
+        self.assertIn("Invalid host endpoint", "\n".join(errors))
+
+    def test_validation_rejects_invalid_unbracketed_multi_colon_endpoint(self):
+        for host in ("foo:bar:baz", "example.com:abc:def", "2001:db8::zz"):
+            with self.subTest(host=host):
+                errors = validate_hosts_config(
+                    {
+                        "config": {},
+                        "hosts": [
+                            {
+                                "type": "host",
+                                "name": "bad-host",
+                                "host": host,
+                                "user": "deploy",
+                                "password": "pw",
+                            }
+                        ],
+                    }
+                )
+
+                self.assertIn("Invalid host endpoint", "\n".join(errors))
+
+    def test_validation_rejects_invalid_or_missing_encryption_salt(self):
+        invalid = validate_hosts_config(
+            {
+                "config": {
+                    "encryption_salt": "not valid base64!?",
+                },
+                "hosts": [],
+            }
+        )
+        self.assertIn("encryption_salt must be valid", "\n".join(invalid))
+
+        missing = validate_hosts_config(
+            {
+                "config": {
+                    "encryption_enabled": True,
+                },
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "encrypted",
+                        "host": "example.com",
+                        "user": "deploy",
+                        "password": "ciphertext",
+                    }
+                ],
+            }
+        )
+        self.assertIn("encryption_salt is required", "\n".join(missing))
 
     def test_validate_config_schema_rejects_invalid_known_values(self):
         errors = validate_hosts_config(
@@ -463,7 +559,7 @@ class ValidationTests(unittest.TestCase):
                     {
                         "type": "host",
                         "name": "demo-host",
-                        "host": "ssh.{{site_domain}}:22",
+                        "host": "ssh.{{site_domain}}",
                         "user": "{{user}}",
                         "password": "pw",
                         "proxy_command": "nc -X 5 -x {{proxy}} %h %p",
@@ -500,7 +596,7 @@ class ValidationTests(unittest.TestCase):
                     {
                         "type": "host",
                         "name": "missing-placeholder",
-                        "host": "{{missing_host}}:22",
+                        "host": "{{missing_host}}",
                         "user": "deploy",
                         "password": "pw",
                         "proxy_command": "nc -x {{proxy}} %h %p",
@@ -644,7 +740,8 @@ class ValidationTests(unittest.TestCase):
                 {
                     "type": "host",
                     "name": "bad-port",
-                    "host": "bad.internal:70000",
+                    "host": "bad.internal",
+                    "port": "70000",
                     "user": "deploy",
                     "password": "pw",
                 }
@@ -676,7 +773,8 @@ class ValidationTests(unittest.TestCase):
                 "target",
                 {
                     "name": "target",
-                    "host": "target.internal:70000",
+                    "host": "target.internal",
+                    "port": "70000",
                     "user": "targetuser",
                     "auth": "password",
                     "password": "target-pass",
@@ -688,7 +786,8 @@ class ValidationTests(unittest.TestCase):
             )
 
             self.assertIn("Port '70000'", "\n".join(errors))
-            self.assertEqual(target["host"], "target.internal:2222")
+            self.assertEqual(target["host"], "target.internal")
+            self.assertEqual(target["port"], "2222")
             self.assertEqual(target["id_file"], "/tmp/target_key")
 
 

@@ -7,6 +7,7 @@ import shlex
 from config_validation import DEFAULT_PORT
 from connection_errors import ConfigRuntimeError
 from connection_plan import CommandPlan, secret_env_values
+from endpoint import format_proxy_jump_endpoint, host_needs_brackets
 from i18n import i18n
 
 
@@ -39,20 +40,47 @@ class ConnectionPlanner:
 
     def _jump_endpoint(self, nest_parent):
         j_host, j_port = self.context._parse_host_port(nest_parent)
+        jump_host = format_proxy_jump_endpoint(
+            j_host,
+            j_port,
+            default_port=DEFAULT_PORT,
+        )
         jumper_str = self.context._build_target_str(
             self.context._node_user(nest_parent),
-            j_host,
+            jump_host,
         )
-        if j_port != DEFAULT_PORT:
-            jumper_str = f"{jumper_str}:{j_port}"
         return j_host, j_port, jumper_str
+
+    def _jump_ssh_target(self, nest_parent):
+        j_host, j_port = self.context._parse_host_port(nest_parent)
+        return (
+            j_host,
+            j_port,
+            self.context._build_target_str(
+                self.context._node_user(nest_parent),
+                j_host,
+            ),
+        )
 
     @staticmethod
     def _escape_nested_proxy_command(proxy_command):
         return proxy_command.replace("%", "%%")
 
-    def _build_tunnel_proxy_command(self, nest_parent):
-        _, j_port, jumper_str = self._jump_endpoint(nest_parent)
+    def _tunnel_forward_spec(self, node=None, target_brackets_ipv6=False):
+        if node is None:
+            return "%h:%p"
+        if target_brackets_ipv6:
+            return "%h:%p"
+        host, _ = self.context._parse_host_port(node)
+        return "[%h]:%p" if host_needs_brackets(host) else "%h:%p"
+
+    def _build_tunnel_proxy_command(
+        self,
+        nest_parent,
+        target_node=None,
+        target_brackets_ipv6=False,
+    ):
+        _, j_port, jumper_ssh_target = self._jump_ssh_target(nest_parent)
         parts = ["ssh", "-o", "ConnectTimeout=10"]
         host_key_checking = self._host_key_checking_mode()
         if host_key_checking == "no":
@@ -76,7 +104,14 @@ class ConnectionPlanner:
                 "ProxyCommand="
                 + self._escape_nested_proxy_command(parent_proxy_command),
             ])
-        parts.extend(["-W", "%h:%p", jumper_str])
+        parts.extend([
+            "-W",
+            self._tunnel_forward_spec(
+                target_node,
+                target_brackets_ipv6=target_brackets_ipv6,
+            ),
+            jumper_ssh_target,
+        ])
         return " ".join(shlex.quote(part) for part in parts)
 
     def build_ssh_command_args(self, node, remote_command=None):
@@ -87,7 +122,7 @@ class ConnectionPlanner:
         if nest_parent and self.context._effective_ssh_jump_mode(node) == "tunnel":
             args.extend([
                 "-o",
-                f"ProxyCommand={self._build_tunnel_proxy_command(nest_parent)}",
+                f"ProxyCommand={self._build_tunnel_proxy_command(nest_parent, node)}",
             ])
         common_opts = self._build_common_ssh_options(node)
 
@@ -347,7 +382,11 @@ class ConnectionPlanner:
             args.extend(["-J", jumper_str])
             args.extend([
                 "-tunnel-proxy-command",
-                self._build_tunnel_proxy_command(nest_parent),
+                self._build_tunnel_proxy_command(
+                    nest_parent,
+                    node,
+                    target_brackets_ipv6=True,
+                ),
             ])
 
             if not jump_uses_agent:
@@ -428,7 +467,7 @@ class ConnectionPlanner:
             if ssh_jump_mode == "tunnel":
                 args.extend([
                     "-tunnel-proxy-command",
-                    self._build_tunnel_proxy_command(nest_parent),
+                    self._build_tunnel_proxy_command(nest_parent, node),
                 ])
             else:
                 jump_proxy_command = self.context._proxy_command(nest_parent)

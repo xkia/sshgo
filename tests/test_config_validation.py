@@ -27,7 +27,7 @@ class ConfigValidationExtractionTests(unittest.TestCase):
                     {
                         "type": "host",
                         "name": "demo",
-                        "host": "demo.example.com:22",
+                        "host": "demo.example.com",
                         "user": "deploy",
                     }
                 ],
@@ -49,7 +49,8 @@ class ConfigValidationExtractionTests(unittest.TestCase):
                     {
                         "type": "host",
                         "name": "bad",
-                        "host": "host.{{site}}:70000",
+                        "host": "host.{{site}}",
+                        "port": "70000",
                         "user": "{{missing_user}}",
                         "password": "pw",
                         "unknown": True,

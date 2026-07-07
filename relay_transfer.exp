@@ -34,6 +34,7 @@ set temp_path ""
 set print_command ""
 set jumper_proxy_command ""
 set has_tty [expr {![catch {stty size}]}]
+set shell_prompt_re {[$#%>❯➜] ?$}
 
 for {set i 0} {$i < $argc} {incr i} {
     set arg [lindex $argv $i]
@@ -119,6 +120,13 @@ proc target_string {user host} {
         return $host
     }
     return "$user@$host"
+}
+
+proc scp_target_string {user host} {
+    if {[string first ":" $host] >= 0 && ![regexp {^\[.*\]$} $host]} {
+        set host [format {[%s]} $host]
+    }
+    return [target_string $user $host]
 }
 
 proc common_ssh_options {host_key_checking} {
@@ -224,7 +232,7 @@ proc run_local_command {cmd stage {fatal 1}} {
 }
 
 proc run_jump_command {command expects_target_auth fatal} {
-    global jump_host jump_user jump_port jumper_id_file host_key_checking jumper_proxy_command
+    global jump_host jump_user jump_port jumper_id_file host_key_checking jumper_proxy_command shell_prompt_re
     set jump_target [target_string $jump_user $jump_host]
     set cmd [list ssh]
     foreach opt [common_ssh_options $host_key_checking] {
@@ -279,7 +287,7 @@ proc run_jump_command {command expects_target_auth fatal} {
             }
             return $status
         }
-        -re {[$#%>] ?$} {
+        -re $shell_prompt_re {
             if {$stage == "jump"} {
                 if {$expects_target_auth} {
                     set stage "target"
@@ -319,7 +327,7 @@ proc run_jump_command {command expects_target_auth fatal} {
 
 proc build_local_scp_to_jump {source dest {legacy 0}} {
     global jump_host jump_user jump_port jumper_id_file host_key_checking jumper_proxy_command
-    set jump_target [target_string $jump_user $jump_host]
+    set jump_target [scp_target_string $jump_user $jump_host]
     set cmd [list scp]
     if {$legacy} {
         lappend cmd -O
@@ -342,7 +350,7 @@ proc build_local_scp_to_jump {source dest {legacy 0}} {
 
 proc build_local_scp_from_jump {source dest {legacy 0}} {
     global jump_host jump_user jump_port jumper_id_file host_key_checking jumper_proxy_command
-    set jump_target [target_string $jump_user $jump_host]
+    set jump_target [scp_target_string $jump_user $jump_host]
     set cmd [list scp]
     if {$legacy} {
         lappend cmd -O
@@ -365,7 +373,7 @@ proc build_local_scp_from_jump {source dest {legacy 0}} {
 
 proc target_scp_spec {path} {
     global host user
-    return "[target_string $user $host]:$path"
+    return "[scp_target_string $user $host]:$path"
 }
 
 proc target_scp_command {source dest} {

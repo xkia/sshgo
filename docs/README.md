@@ -28,6 +28,9 @@
 | [interactive-sftp-session.md](specs/interactive-sftp-session.md) | CLI-only interactive `sftp>` session entry point for direct/tunnel hosts |
 | [terminal-screen-policy.md](specs/terminal-screen-policy.md) | TUI alternate-screen isolation and optional private scrollback cleanup |
 | [terminal-title.md](specs/terminal-title.md) | Optional terminal tab/window title updates before SSH, SFTP, and transfer handoff |
+| [review-compatibility-hardening.md](specs/review-compatibility-hardening.md) | Non-interactive diagnostics, private runtime files, prompt compatibility, and related hardening |
+| [host-port-schema-split.md](specs/host-port-schema-split.md) | Breaking config schema split for host address and optional port |
+| [codebase-size-reduction.md](specs/codebase-size-reduction.md) | Size assessment and low-risk cleanup for stale code and docs |
 
 ## TUI Specs
 

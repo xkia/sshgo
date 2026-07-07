@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -16,7 +17,8 @@ class CommandPlanTests(unittest.TestCase):
                 {
                     "type": "host",
                     "name": "jump",
-                    "host": "jump.example.com:2200",
+                    "host": "jump.example.com",
+                    "port": "2200",
                     "user": "jumpuser",
                     "password": "jump-pass",
                     "id_file": "/tmp/jump_key",
@@ -25,7 +27,8 @@ class CommandPlanTests(unittest.TestCase):
                         {
                             "type": "host",
                             "name": "target",
-                            "host": "target.internal:2222",
+                            "host": "target.internal",
+                            "port": "2222",
                             "user": "targetuser",
                             "password": "target-pass",
                             "id_file": "/tmp/target_key",
@@ -36,7 +39,8 @@ class CommandPlanTests(unittest.TestCase):
                 {
                     "type": "host",
                     "name": "direct",
-                    "host": "direct.example.com:2201",
+                    "host": "direct.example.com",
+                    "port": "2201",
                     "user": "directuser",
                     "password": "direct-pass",
                 },
@@ -86,6 +90,170 @@ class CommandPlanTests(unittest.TestCase):
 
             self.assertTrue(args[0].endswith("login.exp"))
             self.assertEqual(stdout.getvalue(), "")
+
+    def test_ipv6_interactive_command_plan_formats_endpoint_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = {
+                "config": {"import_ssh_config": False},
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "ipv6",
+                        "host": "2001:db8::10",
+                        "port": "2200",
+                        "user": "deploy",
+                        "password": "pw",
+                    }
+                ],
+            }
+            path = os.path.join(temp_dir, "hosts.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(config, f)
+            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            target = manager.find_host_by_alias("ipv6")
+
+            plan = manager.build_interactive_command_plan(target)
+
+            self.assertEqual(plan.args[plan.args.index("-h") + 1], "2001:db8::10")
+            self.assertEqual(plan.args[plan.args.index("-p") + 1], "2200")
+            self.assertEqual(plan.audit["host"], "2001:db8::10")
+            self.assertEqual(plan.audit["port"], "2200")
+            self.assertEqual(plan.audit["endpoint"], "[2001:db8::10]:2200")
+
+    def test_ipv6_jump_endpoint_is_bracketed_in_tunnel_arguments(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = {
+                "config": {
+                    "import_ssh_config": False,
+                    "default_ssh_jump_mode": "tunnel",
+                    "default_transfer_jump_mode": "tunnel",
+                },
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "jump6",
+                        "host": "2001:db8::1",
+                        "port": "2200",
+                        "user": "jumpuser",
+                        "password": "jump-pass",
+                        "children": [
+                            {
+                                "type": "host",
+                                "name": "target",
+                                "host": "target.internal",
+                                "user": "targetuser",
+                                "password": "target-pass",
+                            }
+                        ],
+                    }
+                ],
+            }
+            path = os.path.join(temp_dir, "hosts.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(config, f)
+            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            target = manager.find_host_by_alias("target")
+
+            plan = manager.build_interactive_command_plan(target)
+            proxy_command = plan.args[plan.args.index("-tunnel-proxy-command") + 1]
+
+            self.assertEqual(
+                plan.args[plan.args.index("-J") + 1],
+                "jumpuser@[2001:db8::1]:2200",
+            )
+            self.assertIn("-p 2200", proxy_command)
+            self.assertIn("jumpuser@2001:db8::1", proxy_command)
+            self.assertNotIn("jumpuser@[2001:db8::1]", proxy_command)
+
+    def test_ipv6_tunnel_target_brackets_forward_spec(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = {
+                "config": {
+                    "import_ssh_config": False,
+                    "default_ssh_jump_mode": "tunnel",
+                    "default_transfer_jump_mode": "tunnel",
+                },
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "jump",
+                        "host": "jump.example.com",
+                    "port": "2200",
+                        "user": "jumpuser",
+                        "password": "jump-pass",
+                        "children": [
+                            {
+                                "type": "host",
+                                "name": "target6",
+                                "host": "2001:db8::10",
+                                "port": "2201",
+                                "user": "targetuser",
+                                "password": "target-pass",
+                            }
+                        ],
+                    }
+                ],
+            }
+            path = os.path.join(temp_dir, "hosts.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(config, f)
+            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            target = manager.find_host_by_alias("target6")
+
+            plan = manager.build_interactive_command_plan(target)
+            proxy_command = plan.args[plan.args.index("-tunnel-proxy-command") + 1]
+            proxy_parts = shlex.split(proxy_command)
+
+            self.assertEqual(proxy_parts[proxy_parts.index("-W") + 1], "[%h]:%p")
+            self.assertEqual(plan.args[plan.args.index("-h") + 1], "2001:db8::10")
+            self.assertEqual(plan.args[plan.args.index("-p") + 1], "2201")
+
+    def test_ipv6_sftp_tunnel_target_uses_unbracketed_forward_spec(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = {
+                "config": {
+                    "import_ssh_config": False,
+                    "default_transfer_jump_mode": "tunnel",
+                },
+                "hosts": [
+                    {
+                        "type": "host",
+                        "name": "jump",
+                        "host": "jump.example.com",
+                    "port": "2200",
+                        "user": "jumpuser",
+                        "password": "jump-pass",
+                        "children": [
+                            {
+                                "type": "host",
+                                "name": "target6",
+                                "host": "2001:db8::10",
+                                "port": "2201",
+                                "user": "targetuser",
+                                "password": "target-pass",
+                            }
+                        ],
+                    }
+                ],
+            }
+            path = os.path.join(temp_dir, "hosts.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(config, f)
+            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            target = manager.find_host_by_alias("target6")
+
+            plan = manager.build_file_transfer_command_plan(
+                target,
+                "upload",
+                "local.txt",
+                "/tmp/remote.txt",
+            )
+            proxy_command = plan.args[plan.args.index("-tunnel-proxy-command") + 1]
+            proxy_parts = shlex.split(proxy_command)
+
+            self.assertEqual(proxy_parts[proxy_parts.index("-W") + 1], "%h:%p")
+            self.assertEqual(plan.args[plan.args.index("-h") + 1], "2001:db8::10")
+            self.assertEqual(plan.args[plan.args.index("-P") + 1], "2201")
 
     def test_sftp_command_plan_contains_transfer_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:

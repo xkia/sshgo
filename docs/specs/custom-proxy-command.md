@@ -56,7 +56,7 @@ Add an optional `proxy_command` field to `host` nodes:
 {
   "type": "host",
   "name": "SSH via SOCKS",
-  "host": "ssh.example.com:22",
+  "host": "ssh.example.com",
   "user": "admin",
   "proxy_command": "nc -X 5 -x 127.0.0.1:1080 %h %p"
 }
@@ -77,7 +77,7 @@ To avoid repeating local proxy endpoints, add optional placeholders under `confi
     {
       "type": "host",
       "name": "SSH via SOCKS",
-      "host": "ssh.{{site_domain}}:22",
+      "host": "ssh.{{site_domain}}",
       "user": "{{default_user}}",
       "proxy_command": "nc -X 5 -x {{local_socks}} %h %p"
     }
@@ -136,7 +136,7 @@ For a direct host with:
 
 ```json
 {
-  "host": "ssh.{{site_domain}}:22",
+  "host": "ssh.{{site_domain}}",
   "user": "{{default_user}}",
   "proxy_command": "nc -X 5 -x {{local_socks}} %h %p"
 }
@@ -186,7 +186,7 @@ For relay transfers, the parent `proxy_command` is used by local SSH/SCP command
 6. Placeholder values must be non-empty strings.
 7. Every placeholder used in allowed fields must resolve.
 8. Malformed placeholder braces such as `{{name`, `name}}`, or `{{bad-name}}` are invalid.
-9. Resolved `host` values must pass existing hostname/port validation.
+9. Resolved `host` and optional `port` values must pass current host/port validation.
 10. Resolved `config.relay_temp_dir` must be an absolute path.
 11. A nested target with `proxy_command` is invalid.
 
@@ -248,7 +248,7 @@ def _resolve_placeholders(self, value):
 
 Connection paths should read resolved values through helpers instead of accessing raw node strings directly:
 
-- `_parse_host_port(node)` resolves `node["host"]`.
+- `_parse_host_port(node)` resolves `node["host"]` plus optional `node["port"]`.
 - user values passed to OpenSSH/Expect are resolved.
 - `id_file` values passed to OpenSSH/Expect are resolved.
 - `proxy_command` is resolved before being passed as `-proxy-command`.
@@ -256,7 +256,7 @@ Connection paths should read resolved values through helpers instead of accessin
 - Nested SSH tunnel and SFTP tunnel paths receive a Python-generated `-tunnel-proxy-command` instead of rebuilding `ssh -W` inside Expect.
 - `_relay_temp_path()` resolves `config.relay_temp_dir`.
 
-TUI edit forms must use the raw configured host value through `raw_host_port()` instead of `_parse_host_port()`. This preserves `{{name}}` placeholders when a user edits and saves a host without touching that field.
+TUI edit forms must use the raw configured host and port values through `raw_host_port()` instead of `_parse_host_port()`. This preserves `{{name}}` placeholders when a user edits and saves a host without touching that field.
 
 `add_node()` and `update_node()` must not persist `proxy_command` on a host nested directly under another host. `add_node()` should drop it when the parent is a host, and `update_node()` should remove any existing nested-target value before applying submitted data. This keeps the save path aligned with validation even if callers bypass the TUI.
 

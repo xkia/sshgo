@@ -270,9 +270,10 @@ Important `config` fields:
 - `recent_expanded`: Stores whether the TUI Recent group is expanded.
 - `tui_screen_policy`: `isolated` uses the terminal alternate screen and does not clear scrollback; `private` also attempts to clear the visible screen and scrollback after TUI exit.
 - `terminal_title_enabled`: When `true`, set the terminal tab/window title before SSH, SFTP, upload/download, or relay handoff. Defaults to `false`.
-- `terminal_title_target`: Title target, one of `tab`, `window`, or `both`.
+- `terminal_title_target`: Title target, one of `tab`, `window`, or `both`. For Ghostty, `tab` uses Ghostty's window-title compatible sequence so the visible tab/surface title updates.
 - `terminal_title_format`: Title body format, one of `alias`, `host`, or `alias_host`.
 - `terminal_title_scope`: `auto` only emits title sequences for known compatible terminal contexts; `always` emits when enabled. sshgo does not restore the previous title after the remote session exits.
+  If Ghostty shell integration rewrites the title at the next prompt, set `shell-integration-features = no-title` in Ghostty config.
 - `default_ssh_jump_mode`: Default nested SSH mode, either `shell` or `tunnel`.
 - `default_transfer_jump_mode`: Default nested transfer mode, either `tunnel` or `relay`.
 - `relay_temp_dir`: Absolute temporary directory on the jump host for `transfer_jump_mode: "relay"`.
@@ -304,7 +305,8 @@ Represents a connectable server. A `host` can also act as a **jump host** if it 
 {
   "type": "host",
   "name": "My Web Server",
-  "host": "192.168.1.100:22",
+  "host": "192.168.1.100",
+  "port": 22,              // Optional; defaults to 22
   "user": "dev_user",
   "password": "...",         // Required if not using a key
   "id_file": "~/.ssh/id_rsa",  // Required if not using a password
@@ -334,7 +336,7 @@ Direct hosts can use an OpenSSH `ProxyCommand`. sshgo resolves only its own `{{n
     {
       "type": "host",
       "name": "SSH via SOCKS",
-      "host": "ssh.{{site_domain}}:22",
+      "host": "ssh.{{site_domain}}",
       "user": "{{default_user}}",
       "proxy_command": "nc -X 5 -x {{local_socks}} %h %p"
     }

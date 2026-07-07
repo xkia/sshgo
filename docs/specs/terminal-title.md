@@ -86,6 +86,7 @@ Rules:
 - Secrets, commands, local paths, and remote paths are never included in the title.
 - Control characters are stripped from title text before output.
 - Terminal compatibility detection is best-effort and based on environment variables such as `TERM_PROGRAM`, `TERM`, `WT_SESSION`, and `KONSOLE_VERSION`.
+- In Ghostty, `terminal_title_target: "tab"` emits `OSC 0` instead of `OSC 1` because Ghostty exposes the visible surface/tab title through the window-title sequence rather than a separate tab-title sequence.
 - Title output errors are ignored so terminal behavior cannot block connection startup.
 
 ## Technical Design
@@ -124,6 +125,7 @@ The emitter should:
    - tab: `ESC]1;title BEL`
    - window: `ESC]2;title BEL`
    - both: `ESC]0;title BEL`
+   - Ghostty tab compatibility: `tab` maps to `ESC]0;title BEL`
 5. Flush stdout.
 6. Swallow output errors and continue connection startup.
 
@@ -138,7 +140,8 @@ The emitter should:
 5. Interactive SFTP, upload/download, and relay transfers use the correct mode prefix.
 6. Invalid terminal title config values are reported by validation.
 7. `--print-command` output remains unchanged.
-8. Existing SSH, SFTP, relay, audit, and TUI screen behavior remains unchanged.
+8. Ghostty receives a title sequence that updates its visible tab/surface title when the default `tab` target is used.
+9. Existing SSH, SFTP, relay, audit, and TUI screen behavior remains unchanged.
 
 ## Test Plan
 
@@ -155,6 +158,7 @@ The emitter should:
   - terminal title write/flush errors are swallowed
   - C0, DEL, and C1 control characters are stripped
   - window and both OSC targets use the expected codes
+  - Ghostty default tab target uses `OSC 0`
   - alias-only format and transfer mode prefixes render correctly
 - `tests/test_command_plan.py`
   - command preview args remain title-free through existing plan assertions

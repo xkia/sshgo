@@ -27,7 +27,13 @@ class AuditLogger:
             data_dir = os.path.expanduser("~/.sshgo")
 
         self.data_dir = os.path.expanduser(data_dir)
-        os.makedirs(self.data_dir, exist_ok=True)
+        data_dir_exists = os.path.exists(self.data_dir)
+        os.makedirs(self.data_dir, mode=0o700, exist_ok=True)
+        if not data_dir_exists:
+            try:
+                os.chmod(self.data_dir, 0o700)
+            except OSError:
+                pass
 
         self.history_path = os.path.join(self.data_dir, "history.jsonl")
         self.audit_simple_path = os.path.join(self.data_dir, "audit-simple.jsonl")
@@ -161,5 +167,6 @@ class AuditLogger:
 
     def _append(self, path, record):
         with self._locked_file(path, blocking=True):
-            with open(path, "a", encoding="utf-8") as f:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")

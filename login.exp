@@ -34,6 +34,7 @@ set jump_mfa_used 0
 set connection_stage "direct"
 set host_key_checking "accept-new"
 set has_tty [expr {![catch {stty size}]}]
+set shell_prompt_re {[$#%>❯➜] ?$}
 
 # Argument parser
 for {set i 0} {$i < $argc} {incr i} {
@@ -127,8 +128,18 @@ proc common_ssh_options {host_key_checking} {
 }
 
 proc split_host_port {target default_port} {
+    if {[regexp {^([^@]+@)?\[(.+)\]:([0-9]+)$} $target -> user_prefix host port]} {
+        return [list "${user_prefix}${host}" $port]
+    }
+    if {[regexp {^([^@]+@)?\[(.+)\]$} $target -> user_prefix host]} {
+        return [list "${user_prefix}${host}" $default_port]
+    }
     if {[regexp {^(.+):([0-9]+)$} $target -> base port]} {
-        return [list $base $port]
+        set host_part $base
+        if {[regexp {^[^@]+@(.+)$} $base -> host_part]} {}
+        if {[string first ":" $host_part] < 0} {
+            return [list $base $port]
+        }
     }
     return [list $target $default_port]
 }
@@ -270,14 +281,11 @@ expect {
     "Connection timed out" {
         fail "\n\nConnection timed out.\n" 1
     }
-    timeout {
-        fail "\n\nConnection timed out.\n" 1
-    }
     eof {
         fail "\n\nConnection closed unexpectedly.\n" 1
     }
     # Success condition: match a shell prompt
-    -re {[$#%>] ?$} {
+    -re $shell_prompt_re {
         if {$connection_stage == "jumper"} {
             set connection_stage "target"
             set target_cmd [target_ssh_command $host $port $user $id_file]
@@ -294,7 +302,7 @@ expect {
             # Wait for the next prompt to ensure execution is complete. If the
             # command exits the SSH session, treat EOF as a clean handoff result.
             expect {
-                -re {[$#%>] ?$} {
+                -re $shell_prompt_re {
                     interact {
                         eof {
                             return
@@ -314,6 +322,17 @@ expect {
                 }
             }
         }
+    }
+    timeout {
+        if {$remote_command == "" && $connection_stage != "jumper"} {
+            cleanup
+            interact {
+                eof {
+                    return
+                }
+            }
+        }
+        fail "\n\nConnection timed out.\n" 1
     }
 }
 

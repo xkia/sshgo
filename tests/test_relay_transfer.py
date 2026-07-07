@@ -18,7 +18,8 @@ class RelayTransferTests(unittest.TestCase):
                 {
                     "type": "host",
                     "name": "jump",
-                    "host": "jump.example.com:2200",
+                    "host": "jump.example.com",
+                    "port": "2200",
                     "user": "jumpuser",
                     "password": "jump-pass",
                     "id_file": "/tmp/jump_key",
@@ -27,7 +28,8 @@ class RelayTransferTests(unittest.TestCase):
                         {
                             "type": "host",
                             "name": "target",
-                            "host": "target.internal:2222",
+                            "host": "target.internal",
+                            "port": "2222",
                             "user": "targetuser",
                             "password": "target-pass",
                             "id_file": "/tmp/target_key",
@@ -257,6 +259,55 @@ class RelayTransferTests(unittest.TestCase):
         rendered = result.stdout.strip()
         self.assertIn("'-O'", rendered)
         self.assertIn("'jumpuser@jump.example.com:/tmp/relay.txt'", rendered)
+
+    def test_relay_scp_specs_bracket_ipv6_hosts(self):
+        base_cmd = [
+            "./relay_transfer.exp",
+            "-h",
+            "2001:db8::5",
+            "-u",
+            "targetuser",
+            "-J-host",
+            "2001:db8::1",
+            "-J-user",
+            "jumpuser",
+            "-action",
+            "download",
+            "-local",
+            "local.txt",
+            "-remote",
+            "/tmp/remote.txt",
+            "-temp",
+            "/tmp/relay.txt",
+        ]
+
+        for print_target, expected in (
+            ("target-download", "'targetuser@[2001:db8::5]:/tmp/remote.txt'"),
+            ("local-to-jump", "'jumpuser@[2001:db8::1]:/tmp/relay.txt'"),
+            ("jump-to-local", "'jumpuser@[2001:db8::1]:/tmp/relay.txt'"),
+        ):
+            with self.subTest(print_target=print_target):
+                result = subprocess.run(
+                    base_cmd + ["-print-command", print_target],
+                    cwd=os.getcwd(),
+                    check=True,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+
+                self.assertIn(expected, result.stdout.strip())
+
+    def test_relay_jump_command_uses_raw_ipv6_for_ssh_target(self):
+        with open("relay_transfer.exp", "r", encoding="utf-8") as f:
+            script = f.read()
+
+        self.assertIn("set jump_target [target_string $jump_user $jump_host]", script)
+        self.assertNotIn(
+            "set jump_target [scp_target_string $jump_user $jump_host]\n"
+            "    set cmd [list ssh]",
+            script,
+        )
 
     def test_relay_local_scp_uses_jump_proxy_command(self):
         cmd = [

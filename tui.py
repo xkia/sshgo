@@ -8,6 +8,7 @@ import textwrap
 import curses.textpad as textpad
 
 from config_validation import DEFAULT_TUI_SCREEN_POLICY, TUI_SCREEN_POLICIES
+from endpoint import DEFAULT_PORT, format_endpoint
 from host_manager import HostManager
 from i18n import i18n
 import tui_forms
@@ -152,8 +153,8 @@ class Tui:
             return
 
         value = str(text)
-        if len(value) > available:
-            value = value[: max(0, available - 1)]
+        if tui_text.display_width(value) > available:
+            value = tui_text.truncate_cells(value, max(0, available - 1))
         try:
             window.addstr(y, x, value, attr)
         except curses.error:
@@ -1355,8 +1356,13 @@ class Tui:
                 else:
                     seen_key = ("history", name, host, user, port)
                     history_host = record.get("endpoint") or host
-                    if port and ":" not in history_host:
-                        history_host = f"{history_host}:{port}"
+                    if host and port and not record.get("endpoint"):
+                        history_host = format_endpoint(
+                            host,
+                            port,
+                            default_port=DEFAULT_PORT,
+                            include_default=True,
+                        )
                     child = {
                         "type": "host",
                         "name": name,

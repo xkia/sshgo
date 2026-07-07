@@ -5,9 +5,16 @@ import os
 import sys
 import getpass
 import base64
+import binascii
 import uuid
 import copy
 from datetime import datetime, timezone
+from endpoint import (
+    EndpointParseError,
+    format_endpoint,
+    normalize_port,
+    validate_host_address,
+)
 from config_store import (
     BACKUP_COUNT,
     ConfigStore,
@@ -162,10 +169,13 @@ class HostManager:
         return self._node_string_value(node, "id_file")
 
     def _target_display(self, user, host, port=DEFAULT_PORT):
-        target = self._build_target_str(user, host)
-        if port and str(port) != DEFAULT_PORT:
-            return f"{target}:{port}"
-        return target
+        endpoint = format_endpoint(
+            host,
+            port,
+            default_port=DEFAULT_PORT,
+            include_default=False,
+        )
+        return self._build_target_str(user, endpoint)
 
     def _ensure_proxy_command_allowed(self, node):
         if self._is_nested_host_node(node) and "proxy_command" in node:
@@ -207,17 +217,21 @@ class HostManager:
             )
 
     def _parse_host_port(self, node):
-        host_value = str(self._node_value(node, "host", ":"))
-        return self._split_host_port(host_value)
-
-    @staticmethod
-    def _split_host_port(host_value):
-        host_info = host_value.split(":", 1)
-        return (host_info[0], host_info[1] if len(host_info) == 2 else DEFAULT_PORT)
+        host_value = self._node_string_value(node, "host")
+        try:
+            return validate_host_address(host_value), normalize_port(node.get("port"))
+        except EndpointParseError as e:
+            raise ConfigRuntimeError(
+                i18n.get("validate_invalid_host_endpoint", host=host_value)
+            ) from e
 
     @staticmethod
     def raw_host_port(node):
-        return HostManager._split_host_port(str(node.get("host", ":")))
+        try:
+            host = validate_host_address(str(node.get("host", "")))
+        except EndpointParseError:
+            host = str(node.get("host", ""))
+        return host, normalize_port(node.get("port"))
 
     @staticmethod
     def _build_target_str(user, host):
@@ -307,7 +321,12 @@ class HostManager:
             "node_id": node.get("id"),
             "host": host,
             "port": port,
-            "endpoint": f"{host}:{port}",
+            "endpoint": format_endpoint(
+                host,
+                port,
+                default_port=DEFAULT_PORT,
+                include_default=True,
+            ),
         }
 
     def _load_from_ssh_config(self):
@@ -348,6 +367,21 @@ class HostManager:
                 sys.exit(0)
         return self.master_password
 
+    def _decode_encryption_salt_or_exit(self, salt_b64):
+        try:
+            salt = base64.b64decode(
+                str(salt_b64).encode("utf-8"),
+                altchars=b"-_",
+                validate=True,
+            )
+        except (binascii.Error, ValueError):
+            print("Error: encryption_salt is not valid URL-safe base64.")
+            sys.exit(1)
+        if not salt:
+            print("Error: encryption_salt is empty.")
+            sys.exit(1)
+        return salt
+
     def _load_and_decrypt_hosts(self):
         try:
             data = self._read_config_file()
@@ -383,7 +417,7 @@ class HostManager:
                 if not isinstance(salt_b64, str):
                     print("Error: encryption_salt is not a valid string.")
                     sys.exit(1)
-                salt = base64.urlsafe_b64decode(str(salt_b64).encode("utf-8"))
+                salt = self._decode_encryption_salt_or_exit(salt_b64)
                 password = self._get_master_password()
 
                 encrypted_fields = [
@@ -493,7 +527,14 @@ class HostManager:
             node.pop("proxy_command", None)
 
         for key, value in new_data.items():
-            if key in ("port", "auth"):
+            if key == "auth":
+                continue
+            if key == "port":
+                port = normalize_port(value)
+                if port == DEFAULT_PORT:
+                    node.pop("port", None)
+                else:
+                    node["port"] = port
                 continue
             if key in ("ssh_jump_mode", "transfer_jump_mode"):
                 if value in (None, "", "default"):
@@ -586,7 +627,20 @@ class HostManager:
 
             salt_b64 = self.config.get("encryption_salt")
             if salt_b64 and isinstance(salt_b64, str):
-                salt = base64.urlsafe_b64decode(salt_b64.encode("utf-8"))
+                try:
+                    salt = base64.b64decode(
+                        salt_b64.encode("utf-8"),
+                        altchars=b"-_",
+                        validate=True,
+                    )
+                    if not salt:
+                        raise ValueError("empty salt")
+                except (binascii.Error, ValueError):
+                    self.last_save_error = (
+                        "encryption_salt is not valid URL-safe base64. Save cancelled."
+                    )
+                    print(self.last_save_error)
+                    return False
             else:
                 salt = os.urandom(16)
                 self.config["encryption_salt"] = base64.urlsafe_b64encode(salt).decode(
@@ -921,7 +975,13 @@ class HostManager:
                 details.append(("MFA/OTP", "enabled"))
             details.append(("SSH Mode", ssh_mode))
             details.append(("Transfer", transfer_mode))
-            details.append(("Host Key", self._host_key_checking_mode()))
+            if nest_parent and ssh_mode == "shell":
+                details.append(("First Hop Host Key", self._host_key_checking_mode()))
+                details.append(("Target Host Key", "managed on jump host"))
+            else:
+                details.append(("Host Key", self._host_key_checking_mode()))
+            if nest_parent and transfer_mode == "relay":
+                details.append(("Relay Target Host Key", "managed on jump host"))
             if self._uses_target_agent_for_mode(node, ssh_mode):
                 details.append(("Agent", "enabled"))
             id_file = self._node_id_file(node)
@@ -1068,8 +1128,11 @@ class HostManager:
     def _escape_nested_proxy_command(proxy_command):
         return ConnectionPlanner._escape_nested_proxy_command(proxy_command)
 
-    def _build_tunnel_proxy_command(self, nest_parent):
-        return self._connection_planner()._build_tunnel_proxy_command(nest_parent)
+    def _build_tunnel_proxy_command(self, nest_parent, target_node=None):
+        return self._connection_planner()._build_tunnel_proxy_command(
+            nest_parent,
+            target_node,
+        )
 
     def build_ssh_command_args(self, node, remote_command=None):
         return self._connection_planner().build_ssh_command_args(

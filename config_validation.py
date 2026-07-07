@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import base64
+import binascii
 import os
 import re
 
+from endpoint import (
+    DEFAULT_PORT,
+    EndpointParseError,
+    normalize_port,
+    validate_host_address,
+)
 from i18n import i18n
 
-DEFAULT_PORT = "22"
 SSH_JUMP_MODES = frozenset({"shell", "tunnel"})
 TRANSFER_JUMP_MODES = frozenset({"tunnel", "relay"})
 DEFAULT_SSH_JUMP_MODE = "shell"
@@ -63,7 +70,7 @@ THEME_COLORS = frozenset({
 })
 ALLOWED_SAVE_KEYS = frozenset({
     "id", "type", "name", "expanded", "children",
-    "host", "user", "password", "id_file", "mfa_secret", "use_ssh_agent",
+    "host", "port", "user", "password", "id_file", "mfa_secret", "use_ssh_agent",
     "ssh_jump_mode", "transfer_jump_mode", "proxy_command",
 })
 
@@ -129,6 +136,7 @@ def validate_hosts_config(data: dict) -> list[str]:
         raw_config.get("placeholders"),
         errors,
     )
+    _validate_encryption_salt(raw_config, data.get("hosts", []), errors)
 
     default_ssh_jump_mode = config.get("default_ssh_jump_mode")
     if default_ssh_jump_mode not in SSH_JUMP_MODES:
@@ -279,10 +287,58 @@ def _validate_config_schema(config, errors):
 
 
 def _validate_port(port):
-    if not str(port).isdigit():
+    if type(port) is bool:
+        return False
+    text = str(port).strip()
+    if not text:
+        return True
+    if not text.isdigit():
+        return False
+    if len(text) > 1 and text.startswith("0"):
         return False
     value = int(port)
     return 1 <= value <= 65535
+
+
+def _decode_encryption_salt(value):
+    decoded = base64.b64decode(
+        value.encode("utf-8"),
+        altchars=b"-_",
+        validate=True,
+    )
+    if not decoded:
+        raise ValueError("empty salt")
+    return decoded
+
+
+def _nodes_have_credentials(nodes):
+    if not isinstance(nodes, list):
+        return False
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        if node.get("type") == "host" and (
+            node.get("password") or node.get("mfa_secret")
+        ):
+            return True
+        if _nodes_have_credentials(node.get("children")):
+            return True
+    return False
+
+
+def _validate_encryption_salt(config, hosts, errors):
+    salt = config.get("encryption_salt")
+    if isinstance(salt, str):
+        try:
+            _decode_encryption_salt(salt)
+        except (binascii.Error, ValueError):
+            errors.append(i18n.get("validate_invalid_encryption_salt"))
+    if (
+        config.get("encryption_enabled") is True
+        and _nodes_have_credentials(hosts)
+        and not salt
+    ):
+        errors.append(i18n.get("validate_missing_encryption_salt"))
 
 
 def _effective_nested_mode(node, field, parent_mode, config, config_field, default):
@@ -486,15 +542,17 @@ def _validate_hosts_nodes(
             )
             if not host_val:
                 errors.append(i18n.get("validate_missing_host"))
-            if ":" in str(host_val):
-                parts = str(host_val).split(":", 1)
-                if not parts[0]:
-                    errors.append(i18n.get("validate_empty_hostname"))
-                if not parts[1] or not _validate_port(parts[1]):
-                    errors.append(i18n.get("validate_invalid_port", port=parts[1]))
+            try:
+                host_part = validate_host_address(host_val)
+            except EndpointParseError:
+                errors.append(i18n.get("validate_invalid_host_endpoint", host=host_val))
             else:
-                if not str(host_val):
+                if not host_part:
                     errors.append(i18n.get("validate_empty_hostname"))
+
+            port_part = normalize_port(node.get("port"))
+            if not _validate_port(port_part):
+                errors.append(i18n.get("validate_invalid_port", port=port_part))
 
             uses_agent = (
                 bool(node.get("use_ssh_agent"))

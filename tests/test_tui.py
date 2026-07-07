@@ -19,7 +19,8 @@ class TuiTests(unittest.TestCase):
                 {
                     "type": "host",
                     "name": "jump",
-                    "host": "jump.example.com:2200",
+                    "host": "jump.example.com",
+                    "port": "2200",
                     "user": "jumpuser",
                     "password": "jump-pass",
                     "id_file": "/tmp/jump_key",
@@ -28,7 +29,8 @@ class TuiTests(unittest.TestCase):
                         {
                             "type": "host",
                             "name": "target",
-                            "host": "target.internal:2222",
+                            "host": "target.internal",
+                            "port": "2222",
                             "user": "targetuser",
                             "password": "target-pass",
                             "id_file": "/tmp/target_key",
@@ -769,7 +771,8 @@ class TuiTests(unittest.TestCase):
                 "target",
                 {
                     "name": "renamed-target",
-                    "host": "target.internal:2222",
+                    "host": "target.internal",
+                            "port": "2222",
                     "user": "targetuser",
                 },
             )
@@ -836,14 +839,15 @@ class TuiTests(unittest.TestCase):
                     {
                         "type": "host",
                         "name": "app-22",
-                        "host": "shared.internal:22",
+                        "host": "shared.internal",
                         "user": "deploy",
                         "password": "pw",
                     },
                     {
                         "type": "host",
                         "name": "app-2222",
-                        "host": "shared.internal:2222",
+                        "host": "shared.internal",
+                        "port": "2222",
                         "user": "deploy",
                         "password": "pw",
                     },
@@ -869,7 +873,8 @@ class TuiTests(unittest.TestCase):
                 "app-2222",
                 {
                     "name": "renamed-app",
-                    "host": "shared.internal:2222",
+                    "host": "shared.internal",
+                        "port": "2222",
                     "user": "deploy",
                 },
             )
@@ -968,7 +973,8 @@ class TuiTests(unittest.TestCase):
                     {
                         "type": "host",
                         "name": "templated",
-                        "host": "app.{{domain}}:2222",
+                        "host": "app.{{domain}}",
+                        "port": "2222",
                         "user": "deploy",
                         "password": "pw",
                     }
@@ -1004,7 +1010,8 @@ class TuiTests(unittest.TestCase):
 
             with open(path, "r", encoding="utf-8") as f:
                 saved = json.load(f)
-            self.assertEqual(saved["hosts"][0]["host"], "app.{{domain}}:2222")
+            self.assertEqual(saved["hosts"][0]["host"], "app.{{domain}}")
+            self.assertEqual(saved["hosts"][0]["port"], "2222")
 
     def test_tui_edit_hides_proxy_command_for_nested_target(self):
         class FakeScreen:
@@ -1034,7 +1041,7 @@ class TuiTests(unittest.TestCase):
                             {
                                 "type": "host",
                                 "name": "target",
-                                "host": "target.internal:22",
+                                "host": "target.internal",
                                 "user": "targetuser",
                                 "password": "pw",
                                 "proxy_command": "nc -x 127.0.0.1:1080 %h %p",
@@ -1123,7 +1130,8 @@ class TuiTests(unittest.TestCase):
                     {
                         "type": "host",
                         "name": "advanced",
-                        "host": "advanced.example.com:2222",
+                        "host": "advanced.example.com",
+                        "port": "2222",
                         "user": "deploy",
                         "password": "pw",
                         "proxy_command": "ssh bastion nc %h %p",

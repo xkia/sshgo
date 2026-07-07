@@ -108,6 +108,30 @@ class SftpExpectTests(unittest.TestCase):
         self.assertNotIn("# batch:", rendered)
         self.assertIn("ProxyCommand=ssh -o ProxyCommand=", rendered)
 
+    def test_sftp_exp_print_command_brackets_ipv6_target(self):
+        result = subprocess.run(
+            [
+                "./sftp_login.exp",
+                "-h",
+                "2001:db8::10",
+                "-u",
+                "targetuser",
+                "-action",
+                "interactive",
+                "-print-command",
+                "1",
+            ],
+            cwd=os.getcwd(),
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        rendered = result.stdout.strip()
+        self.assertIn("'targetuser@[2001:db8::10]'", rendered)
+        self.assertNotIn("'targetuser@2001:db8::10'", rendered)
+
     def test_sftp_ssh_wrapper_filters_batchmode_yes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             fake_ssh = os.path.join(temp_dir, "ssh")

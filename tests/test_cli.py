@@ -20,7 +20,8 @@ class CliTests(unittest.TestCase):
                 {
                     "type": "host",
                     "name": "jump",
-                    "host": "jump.example.com:2200",
+                    "host": "jump.example.com",
+                    "port": "2200",
                     "user": "jumpuser",
                     "password": "jump-pass",
                     "id_file": "/tmp/jump_key",
@@ -29,7 +30,8 @@ class CliTests(unittest.TestCase):
                         {
                             "type": "host",
                             "name": "target",
-                            "host": "target.internal:2222",
+                            "host": "target.internal",
+                            "port": "2222",
                             "user": "targetuser",
                             "password": "target-pass",
                             "id_file": "/tmp/target_key",
@@ -669,6 +671,117 @@ exit 0
             self.assertIn("[FAIL] Config validation", output)
             self.assertIn("[PASS] expect", output)
             self.assertIn("Runtime data dir", output)
+
+    def test_doctor_for_encrypted_config_skips_host_manager_decryption(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "hosts.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "config": {
+                            "import_ssh_config": False,
+                            "encryption_enabled": True,
+                            "encryption_salt": "MTIzNDU2Nzg5MDEyMzQ1Ng==",
+                        },
+                        "hosts": [
+                            {
+                                "type": "host",
+                                "name": "encrypted",
+                                "host": "example.com",
+                                "user": "deploy",
+                                "password": "ciphertext",
+                            }
+                        ],
+                    },
+                    f,
+                )
+
+            real_which = sshgo_module.shutil.which
+            real_host_manager = sshgo_module.HostManager
+            real_terminal_supports_alternate_screen = (
+                sshgo_module.Tui.terminal_supports_alternate_screen
+            )
+            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
+            sshgo_module.HostManager = lambda *args, **kwargs: self.fail(
+                "encrypted doctor should not construct HostManager"
+            )
+            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
+                lambda: True
+            )
+            try:
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = sshgo_module.run_doctor_for_path(
+                        path,
+                        data_dir=os.path.join(temp_dir, "data"),
+                    )
+            finally:
+                sshgo_module.shutil.which = real_which
+                sshgo_module.HostManager = real_host_manager
+                sshgo_module.Tui.terminal_supports_alternate_screen = (
+                    real_terminal_supports_alternate_screen
+                )
+
+            output = stdout.getvalue()
+            self.assertEqual(code, 0)
+            self.assertIn("[PASS] Config validation", output)
+            self.assertIn("[PASS] Runtime data dir", output)
+
+    def test_doctor_warns_for_broad_existing_permissions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "hosts.json")
+            data_dir = os.path.join(temp_dir, "data")
+            os.makedirs(data_dir)
+            history_path = os.path.join(data_dir, "history.jsonl")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "config": {
+                            "import_ssh_config": False,
+                            "encryption_enabled": True,
+                            "encryption_salt": "MTIzNDU2Nzg5MDEyMzQ1Ng==",
+                        },
+                        "hosts": [
+                            {
+                                "type": "host",
+                                "name": "encrypted",
+                                "host": "example.com",
+                                "user": "deploy",
+                                "password": "ciphertext",
+                            }
+                        ],
+                    },
+                    f,
+                )
+            with open(history_path, "w", encoding="utf-8") as f:
+                f.write("{}\n")
+            os.chmod(path, 0o644)
+            os.chmod(data_dir, 0o755)
+            os.chmod(history_path, 0o644)
+
+            real_which = sshgo_module.shutil.which
+            real_terminal_supports_alternate_screen = (
+                sshgo_module.Tui.terminal_supports_alternate_screen
+            )
+            sshgo_module.shutil.which = lambda name: f"/usr/bin/{name}"
+            sshgo_module.Tui.terminal_supports_alternate_screen = staticmethod(
+                lambda: True
+            )
+            try:
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    code = sshgo_module.run_doctor_for_path(path, data_dir=data_dir)
+            finally:
+                sshgo_module.shutil.which = real_which
+                sshgo_module.Tui.terminal_supports_alternate_screen = (
+                    real_terminal_supports_alternate_screen
+                )
+
+            output = stdout.getvalue()
+            self.assertEqual(code, 0)
+            self.assertIn("[WARN] Config permissions", output)
+            self.assertIn("[WARN] Runtime data dir permissions", output)
+            self.assertIn("[WARN] history.jsonl permissions", output)
 
     def test_doctor_for_path_uses_sshgo_host_manager_binding(self):
         class FakeAudit:

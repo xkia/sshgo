@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 import tempfile
 import unittest
 from contextlib import redirect_stderr
@@ -19,7 +20,8 @@ class AuditTests(unittest.TestCase):
                 {
                     "type": "host",
                     "name": "jump",
-                    "host": "jump.example.com:2200",
+                    "host": "jump.example.com",
+                    "port": "2200",
                     "user": "jumpuser",
                     "password": "jump-pass",
                     "id_file": "/tmp/jump_key",
@@ -28,7 +30,8 @@ class AuditTests(unittest.TestCase):
                         {
                             "type": "host",
                             "name": "target",
-                            "host": "target.internal:2222",
+                            "host": "target.internal",
+                            "port": "2222",
                             "user": "targetuser",
                             "password": "target-pass",
                             "id_file": "/tmp/target_key",
@@ -121,6 +124,20 @@ class AuditTests(unittest.TestCase):
             self.assertEqual(started["host"], "target.internal")
             self.assertEqual(started["port"], "2222")
             self.assertEqual(started["endpoint"], "target.internal:2222")
+
+    def test_audit_creates_private_data_dir_and_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = os.path.join(temp_dir, "data")
+            audit = AuditLogger(data_dir)
+
+            audit.record_login("demo", "example.com", "deploy", "password", "started")
+
+            dir_mode = stat.S_IMODE(os.stat(data_dir).st_mode)
+            history_mode = stat.S_IMODE(os.stat(audit.history_path).st_mode)
+            audit_mode = stat.S_IMODE(os.stat(audit.audit_simple_path).st_mode)
+            self.assertEqual(dir_mode & 0o077, 0)
+            self.assertEqual(history_mode & 0o077, 0)
+            self.assertEqual(audit_mode & 0o077, 0)
 
 
 if __name__ == "__main__":

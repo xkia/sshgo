@@ -132,7 +132,8 @@ default_transfer_jump_mode = tunnel
 {
   "type": "host",
   "name": "jump-host",
-  "host": "jump.example.com:2222",
+  "host": "jump.example.com",
+  "port": 2222,
   "user": "jump_user",
   "password": "<jump-password>",
   "ssh_jump_mode": "shell",
@@ -141,7 +142,7 @@ default_transfer_jump_mode = tunnel
     {
       "type": "host",
       "name": "target-host",
-      "host": "10.0.0.10:22",
+      "host": "10.0.0.10",
       "user": "target_user",
       "password": "<target-password>"
     }
@@ -162,7 +163,7 @@ transfer_jump_mode = relay
 {
   "type": "host",
   "name": "target-host",
-  "host": "10.0.0.10:22",
+  "host": "10.0.0.10",
   "user": "target_user",
   "password": "<target-password>",
   "ssh_jump_mode": "tunnel",

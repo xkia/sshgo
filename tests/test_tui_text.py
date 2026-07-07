@@ -10,6 +10,12 @@ class TuiTextTests(unittest.TestCase):
         self.assertEqual(tui_text.ellipsize("abcdef", 3), "abc")
         self.assertEqual(tui_text.ellipsize("abcdef", 0), "")
 
+    def test_ellipsize_respects_wide_character_cells(self):
+        self.assertEqual(tui_text.display_width("主机"), 4)
+        self.assertEqual(tui_text.ellipsize("主机abc", 5), "主...")
+        self.assertEqual(tui_text.ellipsize("abc主机", 5, tail=True), "...机")
+        self.assertEqual(tui_text.truncate_cells("主机", 3), "主")
+
     def test_insertable_text_filters_non_printable(self):
         self.assertEqual(tui_text.insertable_text_for_key("a\nb"), "ab")
         self.assertEqual(tui_text.insertable_text_for_key(65), "A")

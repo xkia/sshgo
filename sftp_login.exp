@@ -117,6 +117,24 @@ proc fail {message code} {
     exit $code
 }
 
+proc target_string {user host} {
+    if {$user == ""} {
+        return $host
+    }
+    return "$user@$host"
+}
+
+proc bracket_ipv6_host {host} {
+    if {[string first ":" $host] >= 0 && ![regexp {^\[.*\]$} $host]} {
+        return [format {[%s]} $host]
+    }
+    return $host
+}
+
+proc sftp_target_string {user host} {
+    return [target_string $user [bracket_ipv6_host $host]]
+}
+
 proc wait_exit_status {} {
     set wait_result [wait]
     if {[llength $wait_result] >= 4} {
@@ -270,7 +288,7 @@ proc build_sftp_command {batch_file} {
     } elseif {$custom_proxy_command != ""} {
         lappend cmd -o "ProxyCommand=$custom_proxy_command"
     }
-    lappend cmd "$user@$host"
+    lappend cmd [sftp_target_string $user $host]
     return $cmd
 }
 

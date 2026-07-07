@@ -8,6 +8,7 @@ import textwrap
 import argparse
 import shlex
 import shutil
+from endpoint import DEFAULT_PORT, format_endpoint
 from cli_config import (
     _default_config_path,
     _probe_config_files,
@@ -180,8 +181,13 @@ def show_history(host_manager, limit, filter_name):
     print("-" * 110)
     for r in records:
         host = r.get("endpoint") or r.get("host", "")
-        if r.get("port") and ":" not in host:
-            host = f"{host}:{r.get('port')}"
+        if r.get("host") and r.get("port") and not r.get("endpoint"):
+            host = format_endpoint(
+                r.get("host"),
+                r.get("port"),
+                default_port=DEFAULT_PORT,
+                include_default=True,
+            )
         print(
             f"{r.get('ts', ''):<22} {r.get('name', ''):<20} {host:<25} "
             f"{r.get('user', ''):<10} {r.get('auth', ''):<10} {r.get('result', '')}"

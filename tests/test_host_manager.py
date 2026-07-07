@@ -18,7 +18,8 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                 {
                     "type": "host",
                     "name": "jump",
-                    "host": "jump.example.com:2200",
+                    "host": "jump.example.com",
+                    "port": "2200",
                     "user": "jumpuser",
                     "password": "jump-pass",
                     "id_file": "/tmp/jump_key",
@@ -27,7 +28,8 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                         {
                             "type": "host",
                             "name": "target",
-                            "host": "target.internal:2222",
+                            "host": "target.internal",
+                            "port": "2222",
                             "user": "targetuser",
                             "password": "target-pass",
                             "id_file": "/tmp/target_key",
@@ -63,7 +65,8 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                 "target",
                 {
                     "name": "renamed-target",
-                    "host": "target.internal:2222",
+                    "host": "target.internal",
+                            "port": "2222",
                     "user": "targetuser",
                 },
             )
@@ -74,6 +77,21 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                 saved = json.load(f)
             saved_target = saved["hosts"][0]["children"][0]
             self.assertEqual(saved_target["id"], original_id)
+
+    def test_describe_host_clarifies_shell_jump_host_key_scope(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(temp_dir)
+            target = manager.find_host_by_alias("target")
+            target["transfer_jump_mode"] = "relay"
+
+            details = dict(manager.describe_host(target))
+
+            self.assertEqual(details["First Hop Host Key"], "accept-new")
+            self.assertEqual(details["Target Host Key"], "managed on jump host")
+            self.assertEqual(
+                details["Relay Target Host Key"],
+                "managed on jump host",
+            )
 
     def test_save_hosts_creates_backup(self):
         with tempfile.TemporaryDirectory() as temp_dir:
