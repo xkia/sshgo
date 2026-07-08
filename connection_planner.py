@@ -4,7 +4,7 @@
 import os
 import shlex
 
-from config_validation import DEFAULT_PORT
+from config_validation import DEFAULT_PORT, DEFAULT_RELAY_TRANSFER_TIMEOUT
 from connection_errors import ConfigRuntimeError
 from connection_plan import CommandPlan, secret_env_values
 from endpoint import format_proxy_jump_endpoint, host_needs_brackets
@@ -311,6 +311,14 @@ class ConnectionPlanner:
         args.extend(["-J-host", j_host, "-J-user", self.context._node_user(nest_parent)])
         args.extend(["-J-port", j_port])
         self._append_proxy_command(args, nest_parent, "-j-proxy-command")
+        relay_transfer_timeout = self.context.config.get(
+            "relay_transfer_timeout",
+            DEFAULT_RELAY_TRANSFER_TIMEOUT,
+        )
+        args.extend([
+            "-transfer-timeout",
+            str(relay_transfer_timeout),
+        ])
         args.extend(["-action", action, "-local", local_path, "-remote", remote_path])
         args.extend(["-temp", temp_path])
 

@@ -63,9 +63,9 @@ audit-full.jsonl
 {
   "ts": "2026-05-29T10:30:00Z",
   "name": "my-server",
-  "host": "10.0.1.50",
+  "host": "server.internal.example.com",
   "port": "22",
-  "endpoint": "10.0.1.50:22",
+  "endpoint": "server.internal.example.com:22",
   "user": "dev",
   "auth": "agent",
   "result": "started",

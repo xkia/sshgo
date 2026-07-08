@@ -21,7 +21,8 @@ This keeps attention on reliability for daily workflows without adding low-frequ
 ## Scope
 
 - Validate known top-level `config` fields for expected types.
-- Validate `language`, jump-mode defaults, relay temp path, placeholders, and supported theme colors.
+- Validate `language`, jump-mode defaults, terminal title options, relay temp path,
+  relay transfer timeout, placeholders, and supported theme colors.
 - Keep unknown top-level config keys tolerated for personal notes or future compatibility.
 - Make audit JSONL trim use a shared lock with append operations.
 - Make trim rewrite through a temporary file and atomic replace.
@@ -39,12 +40,13 @@ This keeps attention on reliability for daily workflows without adding low-frequ
 
 1. `validate_hosts_config()` reports invalid types for known boolean config fields.
 2. `validate_hosts_config()` reports invalid `language`, `data_dir`, `encryption_salt`, and `theme` values.
-3. Valid theme colors continue to pass validation.
-4. Unknown top-level config keys do not fail validation.
-5. Audit append and trim coordinate through the same per-file lock.
-6. Trim writes the retained records through a temp file and `os.replace()`.
-7. Existing retention limits remain unchanged.
-8. Tests cover config schema validation and audit trimming behavior.
+3. `validate_hosts_config()` reports invalid non-negative integer config values.
+4. Valid theme colors continue to pass validation.
+5. Unknown top-level config keys do not fail validation.
+6. Audit append and trim coordinate through the same per-file lock.
+7. Trim writes the retained records through a temp file and `os.replace()`.
+8. Existing retention limits remain unchanged.
+9. Tests cover config schema validation and audit trimming behavior.
 
 ## Technical Design
 
@@ -63,6 +65,7 @@ use_ssh_agent
 strict_host_key_checking
 show_recent
 recent_expanded
+terminal_title_enabled
 ```
 
 Known strings:
@@ -71,6 +74,10 @@ Known strings:
 language
 default_ssh_jump_mode
 default_transfer_jump_mode
+tui_screen_policy
+terminal_title_target
+terminal_title_format
+terminal_title_scope
 relay_temp_dir
 ```
 
@@ -79,6 +86,12 @@ Optional strings:
 ```text
 data_dir
 encryption_salt
+```
+
+Non-negative integers:
+
+```text
+relay_transfer_timeout
 ```
 
 Theme keys are limited to the existing TUI color names:

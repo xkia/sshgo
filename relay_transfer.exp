@@ -33,8 +33,9 @@ set remote_path ""
 set temp_path ""
 set print_command ""
 set jumper_proxy_command ""
+set command_timeout 30
+set transfer_timeout 1800
 set has_tty [expr {![catch {stty size}]}]
-set shell_prompt_re {[$#%>❯➜] ?$}
 
 for {set i 0} {$i < $argc} {incr i} {
     set arg [lindex $argv $i]
@@ -55,6 +56,7 @@ for {set i 0} {$i < $argc} {incr i} {
         "-host-key-checking" { set host_key_checking $value }
         "-print-command" { set print_command $value }
         "-j-proxy-command" { set jumper_proxy_command $value }
+        "-transfer-timeout" { set transfer_timeout $value }
     }
 }
 
@@ -87,7 +89,7 @@ if {[info exists env(SSHGO_JUMPER_MFA_SECRET)]} {
 
 set script_dir [file dirname [file normalize [info script]]]
 set auth_py [file join $script_dir "auth.py"]
-set timeout 30
+set timeout $command_timeout
 
 proc cleanup_tty {} {
     global has_tty
@@ -102,9 +104,106 @@ proc fail {message code} {
     exit $code
 }
 
+proc status_ok {} {
+    return "0"
+}
+
+proc status_failed {} {
+    return "1"
+}
+
+proc status_retry_protocol {} {
+    return "10"
+}
+
+proc is_ok_status {status} {
+    return [expr {$status == [status_ok]}]
+}
+
+proc is_retry_protocol_status {status} {
+    return [expr {$status == [status_retry_protocol]}]
+}
+
+proc close_spawn {{sid ""}} {
+    global spawn_id
+    if {$sid == "" && [info exists spawn_id]} {
+        set sid $spawn_id
+    }
+    if {$sid != ""} {
+        catch {close -i $sid}
+        catch {wait -i $sid}
+    }
+}
+
+proc relay_phase {message} {
+    catch {puts "\nRelay phase: $message"}
+}
+
+proc effective_transfer_timeout {} {
+    global transfer_timeout
+    if {$transfer_timeout == "0"} {
+        return -1
+    }
+    return $transfer_timeout
+}
+
+proc transfer_timeout_message {context} {
+    global transfer_timeout
+    if {$context == ""} {
+        set context "copying relay data"
+    }
+    if {$transfer_timeout == "0"} {
+        return "\nRelay transfer timed out while $context.\n"
+    }
+    return "\nRelay transfer timed out while $context after ${transfer_timeout}s.\n"
+}
+
 proc shell_quote {value} {
     set escaped [string map {"'" "'\\''"} $value]
     return "'$escaped'"
+}
+
+proc sftp_staging_path_is_safe {path} {
+    foreach unsafe [list "\n" "\r" "\"" "\\"] {
+        if {[string first $unsafe $path] >= 0} {
+            return 0
+        }
+    }
+    if {[string match "-*" $path]} {
+        return 0
+    }
+    return 1
+}
+
+proc sftp_staging_paths_are_safe {source dest} {
+    return [expr {
+        [sftp_staging_path_is_safe $source]
+        && [sftp_staging_path_is_safe $dest]
+    }]
+}
+
+proc scp_protocol_error_re {} {
+    return {(?i)(illegal option -- O|invalid option -- O|unknown option -- O|unknown option: -O|unrecognized option.*-O|unsupported option.*-O|option -O not supported)}
+}
+
+proc output_has_scp_protocol_error {output} {
+    return [regexp -nocase {(illegal option -- O|invalid option -- O|unknown option -- O|unknown option: -O|unrecognized option.*-O|unsupported option.*-O|option -O not supported)} $output]
+}
+
+proc sftp_unavailable_re {} {
+    return {(?i)(^|\r|\n).*subsystem request failed.*}
+}
+
+proc output_has_sftp_unavailable {output} {
+    return [regexp -nocase {(^|\r|\n).*subsystem request failed.*} $output]
+}
+
+proc sftp_transfer_error_re {} {
+    return {(?i)(^|\r|\n)(dest open|remote open|local open|File .* not found|Couldn't|Invalid flag|No such file|Permission denied|Failure|not a regular file|[^'\r\n]+: (No such file|Permission denied|Failure|No space left|Is a directory|Not a directory)).*}
+}
+
+proc output_has_sftp_transfer_error {output} {
+    return [regexp -nocase {(^|\r|\n)(dest open|remote open|local open|File .* not found|Couldn't|Invalid flag|No such file|Permission denied|Failure|not a regular file|[^'\r\n]+: (No such file|Permission denied|Failure|No space left|Is a directory|Not a directory)).*} $output]
 }
 
 proc shell_join {parts} {
@@ -158,64 +257,146 @@ proc auth_response {stage kind} {
     return ""
 }
 
-proc wait_exit_status {} {
-    set wait_result [wait]
-    if {[llength $wait_result] >= 4} {
+proc stage_has_auto_auth {stage} {
+    global jumper_pass target_pass jumper_mfa_secret mfa_secret
+    if {$stage == "jump"} {
+        return [expr {$jumper_pass != "" || $jumper_mfa_secret != ""}]
+    }
+    if {$stage == "target"} {
+        return [expr {$target_pass != "" || $mfa_secret != ""}]
+    }
+    return 0
+}
+
+proc relay_output_chunk_re {} {
+    return {[^\r\n]*[\r\n]}
+}
+
+proc stream_hidden_text {text output_visible_var} {
+    upvar 1 $output_visible_var output_visible
+    if {$output_visible || [string trim $text] == ""} {
+        return 0
+    }
+    if {[regexp -nocase {((password|passphrase)[: ]*|(MFA|OTP|Verification code).*:)[\r\n]*$} $text]} {
+        return 0
+    }
+    puts -nonewline $text
+    return 1
+}
+
+proc stream_hidden_output_chunk {output_visible_var} {
+    upvar 1 expect_out output_expect_out
+    upvar 1 $output_visible_var output_visible
+    stream_hidden_text $output_expect_out(0,string) output_visible
+}
+
+proc handle_auth_prompt {stage kind output_visible_var} {
+    upvar 1 $output_visible_var output_visible
+    upvar 1 expect_out auth_expect_out
+    set response [auth_response $stage $kind]
+    if {$response != ""} {
+        send -i $auth_expect_out(spawn_id) "$response\r"
+        return 1
+    }
+    if {!$output_visible} {
+        puts -nonewline $auth_expect_out(0,string)
+    }
+    interact
+    return 0
+}
+
+proc wait_exit_status {{sid ""}} {
+    global spawn_id
+    if {$sid == "" && [info exists spawn_id]} {
+        set sid $spawn_id
+    }
+    if {$sid != ""} {
+        set wait_code [catch {wait -i $sid} wait_result]
+    } else {
+        set wait_code [catch {wait} wait_result]
+    }
+    if {$wait_code == 0 && [llength $wait_result] >= 4} {
+        set os_error_flag [lindex $wait_result 2]
         set exit_status [lindex $wait_result 3]
-        if {[string is integer -strict $exit_status]} {
+        if {$os_error_flag == "0" && [string is integer -strict $exit_status]} {
             return $exit_status
         }
     }
     catch {puts stderr "Warning: unexpected process wait result: $wait_result"}
-    return 1
+    return [status_failed]
 }
 
-proc expect_auth_until_eof {stage {fatal 1}} {
+proc expect_auth_until_eof {stage {fatal 1} {timeout_message "\nRelay transfer timed out.\n"} {sid ""}} {
+    global spawn_id
+    if {$sid == "" && [info exists spawn_id]} {
+        set sid $spawn_id
+    }
+    set spawn_id $sid
+    set scp_protocol_error_re [scp_protocol_error_re]
+    set output_chunk_re [relay_output_chunk_re]
+    set output_visible 0
     expect {
         -re {Are you sure you want to continue connecting.*yes/no} {
-            send "yes\r"
+            if {!$output_visible} {
+                puts -nonewline $expect_out(0,string)
+            }
+            send -i $expect_out(spawn_id) "yes\r"
             exp_continue
         }
         -re {(?i)(password|passphrase)[: ]*$} {
-            set pass_to_send [auth_response $stage "password"]
-            if {$pass_to_send != ""} {
-                send "$pass_to_send\r"
+            if {[handle_auth_prompt $stage "password" output_visible]} {
                 exp_continue
             }
-            interact
         }
         -re {(?i)(MFA|OTP|Verification code).*:} {
-            set oath [auth_response $stage "mfa"]
-            if {$oath != ""} {
-                send "$oath\r"
+            if {[handle_auth_prompt $stage "mfa" output_visible]} {
                 exp_continue
             }
-            interact
         }
         "Permission denied" {
             if {$fatal} {
+                close_spawn $expect_out(spawn_id)
                 fail "\nAuthentication failed (Permission denied).\n" 1
             }
+            close_spawn $expect_out(spawn_id)
             puts "\nAuthentication failed (Permission denied).\n"
-            return 1
+            return [status_failed]
+        }
+        -re $scp_protocol_error_re {
+            close_spawn $expect_out(spawn_id)
+            puts "\nRelay scp protocol option is unavailable.\n"
+            return [status_retry_protocol]
         }
         -re {No such file|not found|Permission denied|Connection closed|lost connection} {
             if {$fatal} {
+                close_spawn $expect_out(spawn_id)
                 fail "\nRelay transfer failed.\n" 1
             }
+            close_spawn $expect_out(spawn_id)
             puts "\nRelay transfer failed.\n"
-            return 1
+            return [status_failed]
+        }
+        -re $output_chunk_re {
+            stream_hidden_output_chunk output_visible
+            exp_continue
         }
         timeout {
             if {$fatal} {
-                fail "\nRelay transfer timed out.\n" 1
+                close_spawn $sid
+                fail $timeout_message 1
             }
-            puts "\nRelay transfer timed out.\n"
-            return 1
+            close_spawn $sid
+            puts $timeout_message
+            return [status_failed]
         }
         eof {
-            set exit_status [wait_exit_status]
-            if {$exit_status != "0" && $fatal} {
+            set output $expect_out(buffer)
+            set exit_status [wait_exit_status $sid]
+            if {![is_ok_status $exit_status] && [output_has_scp_protocol_error $output]} {
+                puts "\nRelay scp protocol option is unavailable.\n"
+                return [status_retry_protocol]
+            }
+            if {![is_ok_status $exit_status] && $fatal} {
                 fail "\nRelay command failed with exit status $exit_status.\n" 1
             }
             return $exit_status
@@ -223,20 +404,29 @@ proc expect_auth_until_eof {stage {fatal 1}} {
     }
 }
 
-proc run_local_command {cmd stage {fatal 1}} {
+proc run_local_command {cmd stage {fatal 1} {timeout_context ""}} {
+    global timeout spawn_id
     log_user 0
     spawn {*}$cmd
     configure_utf8_channel $spawn_id
-    log_user 1
-    return [expect_auth_until_eof $stage $fatal]
+    set local_spawn_id $spawn_id
+    set timeout [effective_transfer_timeout]
+    return [expect_auth_until_eof \
+        $stage \
+        $fatal \
+        [transfer_timeout_message $timeout_context] \
+        $local_spawn_id]
 }
 
-proc run_jump_command {command expects_target_auth fatal} {
-    global jump_host jump_user jump_port jumper_id_file host_key_checking jumper_proxy_command shell_prompt_re
+proc run_jump_command {command expects_target_auth fatal {timeout_context ""}} {
+    global jump_host jump_user jump_port jumper_id_file host_key_checking jumper_proxy_command timeout command_timeout spawn_id
     set jump_target [target_string $jump_user $jump_host]
     set cmd [list ssh]
     foreach opt [common_ssh_options $host_key_checking] {
         lappend cmd $opt
+    }
+    if {$expects_target_auth} {
+        lappend cmd -tt
     }
     if {$jump_port != "" && $jump_port != "22"} {
         lappend cmd -p $jump_port
@@ -247,80 +437,118 @@ proc run_jump_command {command expects_target_auth fatal} {
     if {$jumper_proxy_command != ""} {
         lappend cmd -o "ProxyCommand=$jumper_proxy_command"
     }
+    set start_marker "__SSHGO_RELAY_COMMAND_START__"
+    set wrapped_command "printf '\\n$start_marker\\n'; $command; exit \$?"
     lappend cmd $jump_target
+    lappend cmd $wrapped_command
 
     log_user 0
     spawn {*}$cmd
     configure_utf8_channel $spawn_id
-    log_user 1
+    set jump_spawn_id $spawn_id
+    set timeout $command_timeout
 
     set stage "jump"
-    set marker "__SSHGO_RELAY_STATUS__"
-    set marker_pattern [format {%s:([0-9]+)} $marker]
+    set scp_protocol_error_re [scp_protocol_error_re]
+    set output_chunk_re [relay_output_chunk_re]
+    set command_started 0
+    set retryable_protocol_error 0
+    set output_visible 0
+    set spawn_id $jump_spawn_id
     expect {
         -re {Are you sure you want to continue connecting.*yes/no} {
-            send "yes\r"
+            if {!$output_visible} {
+                puts -nonewline $expect_out(0,string)
+            }
+            send -i $expect_out(spawn_id) "yes\r"
             exp_continue
         }
         -re {(?i)(password|passphrase)[: ]*$} {
-            set pass_to_send [auth_response $stage "password"]
-            if {$pass_to_send != ""} {
-                send "$pass_to_send\r"
+            if {[handle_auth_prompt $stage "password" output_visible]} {
                 exp_continue
             }
-            interact
         }
         -re {(?i)(MFA|OTP|Verification code).*:} {
-            set oath [auth_response $stage "mfa"]
-            if {$oath != ""} {
-                send "$oath\r"
+            if {[handle_auth_prompt $stage "mfa" output_visible]} {
                 exp_continue
             }
-            interact
         }
-        -re $marker_pattern {
-            set status $expect_out(1,string)
-            send "exit\r"
-            expect eof
-            if {$status != "0" && $fatal} {
-                fail "\nRelay command failed with exit status $status.\n" 1
-            }
-            return $status
-        }
-        -re $shell_prompt_re {
-            if {$stage == "jump"} {
-                if {$expects_target_auth} {
-                    set stage "target"
-                } else {
-                    set stage "none"
+        -re $start_marker {
+            if {$expects_target_auth} {
+                set stage "target"
+                set timeout [effective_transfer_timeout]
+                if {![stage_has_auto_auth $stage]} {
+                    log_user 1
+                    set output_visible 1
                 }
-                send "$command; printf '\\n$marker:%s\\n' \$?\r"
+            } else {
+                set stage "none"
+            }
+            set command_started 1
+            exp_continue
+        }
+        -re {([^\r\n]*Permission denied[^\r\n]*[\r\n]+)} {
+            if {$command_started && $expects_target_auth} {
+                stream_hidden_text $expect_out(1,string) output_visible
+            }
+            if {$fatal} {
+                close_spawn $expect_out(spawn_id)
+                fail "\nAuthentication failed (Permission denied).\n" 1
+            }
+            close_spawn $expect_out(spawn_id)
+            return [status_failed]
+        }
+        -re $scp_protocol_error_re {
+            set retryable_protocol_error 1
+            exp_continue
+        }
+        -re {([^\r\n]*(No such file|not found|Connection closed|lost connection)[^\r\n]*[\r\n]+)} {
+            if {$command_started && $expects_target_auth} {
+                stream_hidden_text $expect_out(1,string) output_visible
+            }
+            if {$fatal} {
+                close_spawn $expect_out(spawn_id)
+                fail "\nRelay command failed.\n" 1
+            }
+            close_spawn $expect_out(spawn_id)
+            return [status_failed]
+        }
+        -re $output_chunk_re {
+            if {$command_started && $expects_target_auth} {
+                stream_hidden_output_chunk output_visible
             }
             exp_continue
         }
-        "Permission denied" {
-            if {$fatal} {
-                fail "\nAuthentication failed (Permission denied).\n" 1
-            }
-            return 1
-        }
-        -re {No such file|not found|Connection closed|lost connection} {
-            if {$fatal} {
-                fail "\nRelay command failed.\n" 1
-            }
-            return 1
-        }
         timeout {
             if {$fatal} {
+                if {$command_started && $expects_target_auth} {
+                    close_spawn $jump_spawn_id
+                    fail [transfer_timeout_message $timeout_context] 1
+                }
+                close_spawn $jump_spawn_id
                 fail "\nRelay command timed out.\n" 1
             }
-            return 1
+            if {$command_started && $expects_target_auth} {
+                close_spawn $jump_spawn_id
+                puts [transfer_timeout_message $timeout_context]
+                return [status_failed]
+            }
+            close_spawn $jump_spawn_id
+            return [status_failed]
         }
         eof {
-            if {$fatal} {
-                fail "\nRelay command closed unexpectedly.\n" 1
+            set output $expect_out(buffer)
+            set exit_status [wait_exit_status $jump_spawn_id]
+            if {![is_ok_status $exit_status] && ($retryable_protocol_error || [output_has_scp_protocol_error $output])} {
+                return [status_retry_protocol]
             }
-            return 1
+            if {$command_started && $expects_target_auth} {
+                stream_hidden_text $output output_visible
+            }
+            if {![is_ok_status $exit_status] && $fatal} {
+                fail "\nRelay command failed with exit status $exit_status.\n" 1
+            }
+            return $exit_status
         }
     }
 }
@@ -371,14 +599,133 @@ proc build_local_scp_from_jump {source dest {legacy 0}} {
     return $cmd
 }
 
+proc build_local_sftp_to_jump {} {
+    global jump_host jump_user jump_port jumper_id_file host_key_checking jumper_proxy_command
+    set jump_target [target_string $jump_user $jump_host]
+    set cmd [list sftp]
+    foreach opt [common_ssh_options $host_key_checking] {
+        lappend cmd $opt
+    }
+    lappend cmd -o BatchMode=no
+    if {$jump_port != "" && $jump_port != "22"} {
+        lappend cmd -P $jump_port
+    }
+    if {$jumper_id_file != ""} {
+        lappend cmd -i $jumper_id_file
+    }
+    if {$jumper_proxy_command != ""} {
+        lappend cmd -o "ProxyCommand=$jumper_proxy_command"
+    }
+    lappend cmd $jump_target
+    return $cmd
+}
+
+proc sftp_put_command {source dest} {
+    return "put [shell_quote $source] [shell_quote $dest]"
+}
+
+proc sftp_get_command {source dest} {
+    return "get [shell_quote $source] [shell_quote $dest]"
+}
+
+proc run_local_sftp_transfer {cmd transfer_command stage timeout_context} {
+    global timeout command_timeout spawn_id
+    set sftp_unavailable_re [sftp_unavailable_re]
+    set sftp_transfer_error_re [sftp_transfer_error_re]
+    log_user 0
+    spawn {*}$cmd
+    configure_utf8_channel $spawn_id
+    set sftp_spawn_id $spawn_id
+    set timeout $command_timeout
+    set transfer_started 0
+    set output_visible 0
+    set spawn_id $sftp_spawn_id
+    expect {
+        -re {Are you sure you want to continue connecting.*yes/no} {
+            if {!$output_visible} {
+                puts -nonewline $expect_out(0,string)
+            }
+            send -i $expect_out(spawn_id) "yes\r"
+            exp_continue
+        }
+        -re {(?i)(password|passphrase)[: ]*$} {
+            if {[handle_auth_prompt $stage "password" output_visible]} {
+                exp_continue
+            }
+        }
+        -re {(?i)(MFA|OTP|Verification code).*:} {
+            if {[handle_auth_prompt $stage "mfa" output_visible]} {
+                exp_continue
+            }
+        }
+        "Permission denied" {
+            close_spawn $expect_out(spawn_id)
+            puts "\nAuthentication failed (Permission denied).\n"
+            return [status_failed]
+        }
+        -re $sftp_unavailable_re {
+            close_spawn $expect_out(spawn_id)
+            puts "\nRelay staging SFTP is unavailable.\n"
+            return [status_retry_protocol]
+        }
+        -re $sftp_transfer_error_re {
+            close_spawn $expect_out(spawn_id)
+            puts "\nRelay staging transfer failed.\n"
+            return [status_failed]
+        }
+        -re {sftp> ?$} {
+            set sid $expect_out(spawn_id)
+            if {!$transfer_started} {
+                set transfer_started 1
+                set timeout [effective_transfer_timeout]
+                log_user 1
+                set output_visible 1
+                send -i $sid "$transfer_command\r"
+                exp_continue
+            }
+            send -i $sid "bye\r"
+            expect -i $sid eof
+            set exit_status [wait_exit_status $sid]
+            if {![is_ok_status $exit_status]} {
+                return [status_failed]
+            }
+            return $exit_status
+        }
+        timeout {
+            close_spawn $sftp_spawn_id
+            puts [transfer_timeout_message $timeout_context]
+            return [status_failed]
+        }
+        eof {
+            set output $expect_out(buffer)
+            set exit_status [wait_exit_status $sftp_spawn_id]
+            if {[output_has_sftp_unavailable $output]} {
+                puts "\nRelay staging SFTP is unavailable.\n"
+                return [status_retry_protocol]
+            }
+            if {[output_has_sftp_transfer_error $output]} {
+                puts "\nRelay staging transfer failed.\n"
+                return [status_failed]
+            }
+            if {![is_ok_status $exit_status]} {
+                return [status_failed]
+            }
+            return $exit_status
+        }
+    }
+}
+
 proc target_scp_spec {path} {
     global host user
     return "[scp_target_string $user $host]:$path"
 }
 
-proc target_scp_command {source dest} {
+proc target_scp_command {source dest {legacy 0}} {
     global port id_file host_key_checking
     set parts [list scp]
+    if {$legacy} {
+        lappend parts -O
+    }
     foreach opt [common_ssh_options $host_key_checking] {
         lappend parts $opt
     }
@@ -394,23 +741,66 @@ proc target_scp_command {source dest} {
 
 proc cleanup_temp_path {temp_path} {
     set status [run_jump_command "rm -f [shell_quote $temp_path]" 0 0]
-    if {$status != "0"} {
+    if {![is_ok_status $status]} {
         catch {puts stderr "Warning: could not remove relay temp file: $temp_path"}
     }
     return $status
 }
 
-proc can_retry_legacy_scp {status} {
-    return [expr {$status == "10"}]
+proc should_retry_default_scp {status} {
+    return [is_retry_protocol_status $status]
 }
 
-proc run_local_scp_with_legacy_fallback {normal_cmd legacy_cmd stage} {
-    set status [run_local_command $normal_cmd $stage 0]
-    if {[can_retry_legacy_scp $status]} {
-        catch {puts stderr "Local scp failed; retrying with legacy scp protocol..."}
-        return [run_local_command $legacy_cmd $stage 0]
+proc run_local_scp_with_protocol_fallback {legacy_cmd default_cmd stage timeout_context} {
+    relay_phase "$timeout_context using legacy SCP protocol"
+    set status [run_local_command $legacy_cmd $stage 0 $timeout_context]
+    if {[should_retry_default_scp $status]} {
+        catch {puts stderr "Legacy scp failed; retrying with OpenSSH default scp protocol..."}
+        relay_phase "$timeout_context using OpenSSH default scp protocol"
+        return [run_local_command $default_cmd $stage 0 $timeout_context]
     }
     return $status
+}
+
+proc run_local_staging_transfer {sftp_cmd sftp_transfer_command sftp_source sftp_dest legacy_cmd default_cmd stage timeout_context} {
+    if {![sftp_staging_paths_are_safe $sftp_source $sftp_dest]} {
+        relay_phase "$timeout_context using SFTP staging skipped for unsafe path characters"
+        return [run_local_scp_with_protocol_fallback \
+            $legacy_cmd \
+            $default_cmd \
+            $stage \
+            $timeout_context]
+    }
+
+    relay_phase "$timeout_context using SFTP staging"
+    set status [run_local_sftp_transfer $sftp_cmd $sftp_transfer_command $stage $timeout_context]
+    if {[is_ok_status $status]} {
+        return $status
+    }
+    if {![is_retry_protocol_status $status]} {
+        return $status
+    }
+    catch {puts stderr "SFTP staging failed; retrying with relay scp protocols..."}
+    return [run_local_scp_with_protocol_fallback \
+        $legacy_cmd \
+        $default_cmd \
+        $stage \
+        $timeout_context]
+}
+
+proc run_jump_scp_with_protocol_fallback {legacy_command default_command timeout_context} {
+    relay_phase "$timeout_context using legacy SCP protocol"
+    set status [run_jump_command $legacy_command 1 0 $timeout_context]
+    if {[should_retry_default_scp $status]} {
+        catch {puts stderr "Legacy scp failed; retrying with OpenSSH default scp protocol..."}
+        relay_phase "$timeout_context using OpenSSH default scp protocol"
+        return [run_jump_command $default_command 1 0 $timeout_context]
+    }
+    return $status
+}
+
+if {![string is integer -strict $transfer_timeout] || $transfer_timeout < 0} {
+    fail "\nInvalid relay transfer timeout: $transfer_timeout\n" 1
 }
 
 if {$print_command != ""} {
@@ -418,8 +808,14 @@ if {$print_command != ""} {
         "target-upload" {
             puts [target_scp_command $temp_path [target_scp_spec $remote_path]]
         }
+        "target-upload-legacy" {
+            puts [target_scp_command $temp_path [target_scp_spec $remote_path] 1]
+        }
         "target-download" {
             puts [target_scp_command [target_scp_spec $remote_path] $temp_path]
+        }
+        "target-download-legacy" {
+            puts [target_scp_command [target_scp_spec $remote_path] $temp_path 1]
         }
         "local-to-jump" {
             puts [shell_join [build_local_scp_to_jump $local_path $temp_path]]
@@ -432,6 +828,14 @@ if {$print_command != ""} {
         }
         "jump-to-local-legacy" {
             puts [shell_join [build_local_scp_from_jump $temp_path $local_path 1]]
+        }
+        "local-staging-sftp" {
+            puts [shell_join [build_local_sftp_to_jump]]
+            puts [sftp_put_command $local_path $temp_path]
+        }
+        "jump-staging-sftp" {
+            puts [shell_join [build_local_sftp_to_jump]]
+            puts [sftp_get_command $temp_path $local_path]
         }
         default {
             puts "Error: unknown print command target."
@@ -455,35 +859,53 @@ set temp_dir [file dirname $temp_path]
 run_jump_command "mkdir -p [shell_quote $temp_dir]" 0 1
 
 if {$action == "upload"} {
-    set status [run_local_scp_with_legacy_fallback \
-        [build_local_scp_to_jump $local_path $temp_path] \
+    set status [run_local_staging_transfer \
+        [build_local_sftp_to_jump] \
+        [sftp_put_command $local_path $temp_path] \
+        $local_path \
+        $temp_path \
         [build_local_scp_to_jump $local_path $temp_path 1] \
-        "jump"]
-    if {$status != "0"} {
+        [build_local_scp_to_jump $local_path $temp_path] \
+        "jump" \
+        "copying local file to jump host"]
+    if {![is_ok_status $status]} {
         cleanup_temp_path $temp_path
         fail "\nRelay upload failed while copying to jump host.\n" 1
     }
     set remote_spec [target_scp_spec $remote_path]
-    set cmd [target_scp_command $temp_path $remote_spec]
-    set status [run_jump_command $cmd 1 0]
-    if {$status != "0"} {
+    set legacy_cmd [target_scp_command $temp_path $remote_spec 1]
+    set default_cmd [target_scp_command $temp_path $remote_spec]
+    set status [run_jump_scp_with_protocol_fallback \
+        $legacy_cmd \
+        $default_cmd \
+        "copying from jump host to target host"]
+    if {![is_ok_status $status]} {
         cleanup_temp_path $temp_path
         fail "\nRelay upload failed.\n" 1
     }
     cleanup_temp_path $temp_path
 } else {
     set remote_spec [target_scp_spec $remote_path]
-    set cmd [target_scp_command $remote_spec $temp_path]
-    set status [run_jump_command $cmd 1 0]
-    if {$status != "0"} {
+    set legacy_cmd [target_scp_command $remote_spec $temp_path 1]
+    set default_cmd [target_scp_command $remote_spec $temp_path]
+    set status [run_jump_scp_with_protocol_fallback \
+        $legacy_cmd \
+        $default_cmd \
+        "copying from target host to jump host"]
+    if {![is_ok_status $status]} {
         cleanup_temp_path $temp_path
         fail "\nRelay download failed.\n" 1
     }
-    set status [run_local_scp_with_legacy_fallback \
-        [build_local_scp_from_jump $temp_path $local_path] \
+    set status [run_local_staging_transfer \
+        [build_local_sftp_to_jump] \
+        [sftp_get_command $temp_path $local_path] \
+        $temp_path \
+        $local_path \
         [build_local_scp_from_jump $temp_path $local_path 1] \
-        "jump"]
-    if {$status != "0"} {
+        [build_local_scp_from_jump $temp_path $local_path] \
+        "jump" \
+        "copying from jump host to local path"]
+    if {![is_ok_status $status]} {
         cleanup_temp_path $temp_path
         fail "\nRelay download failed while copying from jump host.\n" 1
     }

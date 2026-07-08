@@ -178,7 +178,7 @@ sshgo automatically manages an internal `id` field for saved host and group node
         {
           "type": "host",
           "name": "web-1",
-          "host": "192.168.1.100",
+          "host": "web-1.example.com",
           "port": 22,
           "user": "deploy",
           "id_file": "~/.ssh/id_rsa"
@@ -225,6 +225,7 @@ Optional `config` fields include:
 | `default_ssh_jump_mode` | Default nested SSH mode: `shell` or `tunnel`. |
 | `default_transfer_jump_mode` | Default nested transfer mode: `tunnel` or `relay`. |
 | `relay_temp_dir` | Absolute temporary directory on the jump host for relay transfers. |
+| `relay_transfer_timeout` | Expect timeout in seconds for relay file-copy phases; `0` disables this transfer timeout. |
 | `placeholders` | String placeholders usable as `{{name}}` in selected connection fields. |
 | `theme` | Optional TUI colors: `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, `default`. |
 
@@ -265,7 +266,7 @@ Placeholders are expanded after JSONC parsing and only in `host`, `user`, `id_fi
 
 To configure a jump host, place target hosts inside a host's `children` array. Nested SSH defaults to `ssh_jump_mode: "shell"`, which logs in to the parent first and starts target SSH from that shell. Set `ssh_jump_mode: "tunnel"` to use OpenSSH forwarding instead.
 
-File transfer defaults to `transfer_jump_mode: "tunnel"`, which is true local SFTP and requires TCP forwarding on the jump host. Set `transfer_jump_mode: "relay"` only when forwarding is disabled and temporary jump-host storage is acceptable; relay supports upload/download shortcuts but not a live `sftp>` prompt.
+File transfer defaults to `transfer_jump_mode: "tunnel"`, which is true local SFTP and requires TCP forwarding on the jump host. Use `transfer_jump_mode: "relay"` only when forwarding is disabled and temporary jump-host storage is acceptable. Relay supports upload/download shortcuts, prints transfer phases, uses `relay_transfer_timeout` for file-copy phases, and does not provide a live target `sftp>` prompt.
 
 ```json
 {
@@ -278,7 +279,7 @@ File transfer defaults to `transfer_jump_mode: "tunnel"`, which is true local SF
         {
             "type": "host",
             "name": "Internal API Server",
-            "host": "10.0.1.50",
+            "host": "api.internal.example.com",
             "user": "api_user",
             "password": "...",
             "ssh_jump_mode": "shell",

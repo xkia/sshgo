@@ -24,6 +24,7 @@ DEFAULT_TERMINAL_TITLE_TARGET = "tab"
 DEFAULT_TERMINAL_TITLE_FORMAT = "alias_host"
 DEFAULT_TERMINAL_TITLE_SCOPE = "auto"
 DEFAULT_RELAY_TEMP_DIR = "/tmp"
+DEFAULT_RELAY_TRANSFER_TIMEOUT = 1800
 TUI_SCREEN_POLICIES = frozenset({"isolated", "private"})
 TERMINAL_TITLE_TARGETS = frozenset({"tab", "window", "both"})
 TERMINAL_TITLE_FORMATS = frozenset({"alias", "host", "alias_host"})
@@ -88,6 +89,7 @@ CONFIG_STRING_FIELDS = frozenset({
     "relay_temp_dir",
 })
 CONFIG_OPTIONAL_STRING_FIELDS = frozenset({"data_dir", "encryption_salt"})
+CONFIG_NON_NEGATIVE_INT_FIELDS = frozenset({"relay_transfer_timeout"})
 THEME_FIELDS = frozenset({"highlight_fg", "highlight_bg", "prefix_color"})
 THEME_COLORS = frozenset({
     "black",
@@ -126,6 +128,7 @@ DEFAULT_CONFIG = {
     "terminal_title_format": DEFAULT_TERMINAL_TITLE_FORMAT,
     "terminal_title_scope": DEFAULT_TERMINAL_TITLE_SCOPE,
     "relay_temp_dir": DEFAULT_RELAY_TEMP_DIR,
+    "relay_transfer_timeout": DEFAULT_RELAY_TRANSFER_TIMEOUT,
     "placeholders": {},
 }
 
@@ -233,6 +236,17 @@ def _validate_config_schema(config, errors):
                     "validate_invalid_config_type",
                     field=field,
                     expected=i18n.get("validate_type_optional_string"),
+                )
+            )
+
+    for field in sorted(CONFIG_NON_NEGATIVE_INT_FIELDS):
+        value = config.get(field)
+        if field in config and (type(value) is not int or value < 0):
+            errors.append(
+                i18n.get(
+                    "validate_invalid_config_type",
+                    field=field,
+                    expected=i18n.get("validate_type_non_negative_int"),
                 )
             )
 

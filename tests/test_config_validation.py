@@ -64,6 +64,38 @@ class ConfigValidationExtractionTests(unittest.TestCase):
 
         self.assertNotIn("site", second["placeholders"])
 
+    def test_relay_transfer_timeout_must_be_non_negative_integer(self):
+        for value in (-1, "30", True, None):
+            with self.subTest(value=value):
+                errors = config_validation.validate_hosts_config(
+                    {
+                        "config": {
+                            "relay_transfer_timeout": value,
+                        },
+                        "hosts": [],
+                    }
+                )
+                joined = "\n".join(errors)
+
+                self.assertIn(
+                    "config.relay_transfer_timeout must be a non-negative integer",
+                    joined,
+                )
+
+    def test_relay_transfer_timeout_accepts_zero_and_positive_values(self):
+        for value in (0, 1, 1800):
+            with self.subTest(value=value):
+                errors = config_validation.validate_hosts_config(
+                    {
+                        "config": {
+                            "relay_transfer_timeout": value,
+                        },
+                        "hosts": [],
+                    }
+                )
+
+                self.assertEqual(errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -64,7 +64,8 @@ transfer_jump_mode: tunnel | relay
   "config": {
     "default_ssh_jump_mode": "shell",
     "default_transfer_jump_mode": "tunnel",
-    "relay_temp_dir": "/tmp"
+    "relay_temp_dir": "/tmp",
+    "relay_transfer_timeout": 1800
   }
 }
 ```
@@ -81,6 +82,7 @@ transfer_jump_mode: tunnel | relay
 default_ssh_jump_mode = shell
 default_transfer_jump_mode = tunnel
 relay_temp_dir = /tmp
+relay_transfer_timeout = 1800
 ```
 
 ## 模式矩阵
@@ -145,20 +147,33 @@ upload:   local -> jump temporary path -> target path -> cleanup
 download: target path -> jump temporary path -> local path -> cleanup
 ```
 
-当前 backend 使用 OpenSSH `scp`。配置名仍是 `relay`，避免把用户配置绑定到
-具体实现。
+`relay` 的实现细节不能进入用户配置。当前行为边界是：local <-> jump staging
+优先使用交互式 SFTP；SFTP 不适用或不可用时使用 scp；scp 只在协议选项不兼容时
+切换协议。
 
 关键边界：
 
 - 只支持普通文件，不支持目录。
 - 文件会复制两次，跳板机必须有足够临时空间。
 - 文件内容可能短暂存在于跳板机磁盘。
-- 所有路径必须 shell quote。
+- 远端 shell/scp 命令必须 quote 路径；SFTP staging 只用于可安全写入 SFTP
+  命令流的路径。
 - 中间阶段失败后必须尽力清理临时文件。
 - cleanup 失败只能警告，不能覆盖原始传输错误。
 - 不自动切换到 `tunnel` 或其他模式。
-- 本机到跳板机的 `scp` 只有在协议不兼容退出码时才重试 legacy scp
-  protocol；认证、host key、网络等错误不触发该 fallback。
+- local <-> jump staging 仅在 SFTP 子系统不可用时回退 scp。
+- scp 复制阶段仅在协议选项不兼容时回退另一种 scp protocol。
+- 每个复制阶段都必须打印阶段提示。
+- 内部目录准备、清理和退出码采集命令不应显示给用户；用户可见输出保留阶段
+  提示、传输进度、错误和最终结果。
+
+超时策略：
+
+- 跳板登录、目录准备、临时文件清理等命令阶段使用短命令 timeout，默认 30 秒。
+- 文件复制阶段使用 `config.relay_transfer_timeout`，默认 1800 秒。
+- `relay_transfer_timeout=0` 表示不设置 Expect 文件复制阶段 timeout。
+- 该配置只控制 sshgo 的 Expect 等待时间，不改变 OpenSSH 自身的连接 timeout。
+- 非 fatal fallback 前必须关闭当前 spawned 进程。
 
 认证语义：
 
@@ -181,6 +196,7 @@ download: target path -> jump temporary path -> local path -> cleanup
 - 在非 host 节点上配置模式字段。
 - 非嵌套、无 children 的普通主机配置 `transfer_jump_mode=relay`。
 - `relay_temp_dir` 缺失或不是绝对路径。
+- `relay_transfer_timeout` 不是非负整数。
 
 保存白名单、默认 config、validation 文案和中英文 i18n 必须与这些字段保持一致。
 
@@ -224,6 +240,7 @@ audit。若后续需要终态审计，必须重新设计 Expect JSONL 写入或�
 - `tunnel` 下目标 host key 使用本机 known_hosts 策略。
 - `shell` / `relay` 下目标 host key prompt 发生在跳板机环境。
 - relay 的 jump -> target `scp` 必须继承 sshgo 的 host-key checking 配置。
+- relay 的 legacy SCP fallback 必须保留路径 quote 和清理语义。
 
 ## Acceptance Criteria
 
@@ -235,18 +252,24 @@ audit。若后续需要终态审计，必须重新设计 Expect JSONL 写入或�
 6. 非法模式值会使 `--validate` 失败。
 7. `relay` 明确报告自身是 relay transfer，而不是 SFTP。
 8. relay 成功和失败路径都会尽力清理跳板机临时文件。
-9. 任何模式下密码和 MFA secret 都不会进入 argv。
-10. README、README.zh、AGENTS.md 和本规格描述一致。
+9. relay 文件复制阶段不受短命令 timeout 限制，可由 `relay_transfer_timeout` 配置。
+10. relay local <-> jump staging 优先使用交互式 `sftp`；不适用或 SFTP 子系统
+    不可用时使用 scp。
+11. relay scp 复制只有协议选项不兼容时可回退另一种 scp protocol；认证、权限
+    和路径错误不会触发协议回退。
+12. relay 输出每个复制阶段的阶段提示。
+13. relay 不输出内部状态采集命令或状态 marker。
+14. 任何模式下密码和 MFA secret 都不会进入 argv。
+15. README、README.zh、AGENTS.md 和本规格描述一致。
 
 ## Verification
 
-使用 `AGENTS.md` 中的验证命令。Focused tests 应继续覆盖模式继承、validation、
-relay local scp 退出码读取、legacy scp fallback、target hop host-key options、
-cleanup warning、普通文件限制和复杂路径引用。
+使用 `AGENTS.md` 中的验证命令。Focused tests 应覆盖模式继承、validation、
+relay staging fallback、非协议失败不回退、scp 协议 fallback、目标 hop
+host-key options、cleanup warning、普通文件限制和复杂路径引用。
 
 ## Review Status
 
 - status: approved
 - verdict: PASS
-- notes: 已删除完成时点的真实环境验证表和第一版过程叙述；当前文档保留稳定
-  配置、行为、审计和安全边界。
+- notes: 文档保留稳定配置、行为、审计和安全边界。

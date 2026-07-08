@@ -70,8 +70,8 @@ Title body examples:
 ```text
 SSH prod | prod.example.com
 SSH prod | prod.example.com:2222
-SFTP nas | 10.0.0.8
-UPLOAD nas | 10.0.0.8
+SFTP nas | nas.example.com
+UPLOAD nas | nas.example.com
 RELAY DOWNLOAD app | app.internal
 ```
 

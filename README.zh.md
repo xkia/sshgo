@@ -178,7 +178,7 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
         {
           "type": "host",
           "name": "web-1",
-          "host": "192.168.1.100",
+          "host": "web-1.example.com",
           "port": 22,
           "user": "deploy",
           "id_file": "~/.ssh/id_rsa"
@@ -225,6 +225,7 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 | `default_ssh_jump_mode` | 嵌套 SSH 默认模式: `shell` 或 `tunnel`。 |
 | `default_transfer_jump_mode` | 嵌套传输默认模式: `tunnel` 或 `relay`。 |
 | `relay_temp_dir` | relay 传输在跳板机上的绝对临时目录。 |
+| `relay_transfer_timeout` | relay 文件复制阶段的 Expect timeout 秒数；`0` 表示禁用该传输 timeout。 |
 | `placeholders` | 可在部分连接字段中以 `{{name}}` 使用的字符串占位符。 |
 | `theme` | 可选 TUI 颜色: `black`、`red`、`green`、`yellow`、`blue`、`magenta`、`cyan`、`white`、`default`。 |
 
@@ -265,7 +266,7 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 
 要配置跳板机, 将目标主机放在另一个 host 的 `children` 数组中。嵌套 SSH 默认使用 `ssh_jump_mode: "shell"`: 先登录父主机, 再从父主机 shell 发起目标 SSH。如需使用 OpenSSH 转发, 设置 `ssh_jump_mode: "tunnel"`。
 
-文件传输默认使用 `transfer_jump_mode: "tunnel"`, 这是真正的本机 SFTP, 要求跳板机允许 TCP forwarding。当 forwarding 被禁用且接受文件经过跳板机临时目录中继时, 才设置 `transfer_jump_mode: "relay"`; relay 支持 upload/download 快捷命令, 但不支持实时 `sftp>` 提示符。
+文件传输默认使用 `transfer_jump_mode: "tunnel"`, 这是真正的本机 SFTP, 要求跳板机允许 TCP forwarding。只有在 forwarding 被禁用且接受文件经过跳板机临时目录中继时, 才使用 `transfer_jump_mode: "relay"`。relay 支持 upload/download 快捷命令, 会打印传输阶段, 文件复制阶段使用 `relay_transfer_timeout`, 但不提供到目标机的实时 `sftp>` 提示符。
 
 ```json
 {
@@ -278,7 +279,7 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
         {
             "type": "host",
             "name": "内部 API 服务器",
-            "host": "10.0.1.50",
+            "host": "api.internal.example.com",
             "user": "api_user",
             "password": "...",
             "ssh_jump_mode": "shell",
