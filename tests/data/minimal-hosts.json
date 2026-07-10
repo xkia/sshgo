@@ -1,0 +1,7 @@
+{
+  "config": {
+    "import_ssh_config": false,
+    "language": "en"
+  },
+  "hosts": []
+}

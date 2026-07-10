@@ -116,40 +116,125 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = self._write_legacy_config(temp_dir)
 
+            data_dir = os.path.join(temp_dir, "data")
             with redirect_stdout(StringIO()):
                 self._run_main_with_args(
                     ["-e", path, "--print-command", "legacy"],
-                    os.path.join(temp_dir, "data"),
+                    data_dir,
                 )
 
             self.assertNotIn("id", self._saved_host(path))
             self.assertFalse(os.path.exists(path + ".bak"))
+            self.assertFalse(os.path.exists(data_dir))
 
     def test_history_does_not_persist_node_id_migration(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = self._write_legacy_config(temp_dir)
 
+            data_dir = os.path.join(temp_dir, "data")
             with redirect_stdout(StringIO()):
                 self._run_main_with_args(
                     ["-e", path, "--history"],
-                    os.path.join(temp_dir, "data"),
+                    data_dir,
                 )
 
             self.assertNotIn("id", self._saved_host(path))
             self.assertFalse(os.path.exists(path + ".bak"))
+            self.assertFalse(os.path.exists(data_dir))
+
+    def test_history_still_reads_during_repairable_duplicate_name_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = self._write_legacy_config(temp_dir)
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            duplicate = dict(data["hosts"][0])
+            duplicate["host"] = "other.example.com"
+            data["hosts"].append(duplicate)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+
+            data_dir = os.path.join(temp_dir, "missing-data")
+            with redirect_stdout(StringIO()):
+                self._run_main_with_args(["-e", path, "--history"], data_dir)
+
+            self.assertFalse(os.path.exists(data_dir))
+
+    def test_history_reads_explicit_data_dir_when_config_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "missing-hosts.json")
+            data_dir = os.path.join(temp_dir, "data")
+            os.makedirs(data_dir)
+            with open(
+                os.path.join(data_dir, "history.jsonl"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                f.write(
+                    json.dumps(
+                        {
+                            "ts": "2026-07-10T00:00:00Z",
+                            "name": "history-only",
+                            "host": "history.example.com",
+                            "user": "deploy",
+                            "auth": "key",
+                            "result": "started",
+                        }
+                    )
+                    + "\n"
+                )
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                self._run_main_with_args(["-e", path, "--history"], data_dir)
+
+            self.assertIn("history-only", stdout.getvalue())
+            self.assertFalse(os.path.exists(path))
+
+    def test_validate_still_rejects_missing_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "missing-hosts.json")
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                with self.assertRaises(SystemExit) as cm:
+                    self._run_main_with_args(
+                        ["-e", path, "--validate"],
+                        os.path.join(temp_dir, "data"),
+                    )
+
+            self.assertEqual(cm.exception.code, 1)
+            self.assertIn(path, stdout.getvalue())
 
     def test_validate_does_not_persist_node_id_migration(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = self._write_legacy_config(temp_dir)
 
+            data_dir = os.path.join(temp_dir, "data")
             with redirect_stdout(StringIO()):
                 self._run_main_with_args(
                     ["-e", path, "--validate"],
-                    os.path.join(temp_dir, "data"),
+                    data_dir,
                 )
 
             self.assertNotIn("id", self._saved_host(path))
             self.assertFalse(os.path.exists(path + ".bak"))
+            self.assertFalse(os.path.exists(data_dir))
+
+    def test_validate_reports_bad_root_without_constructing_runtime(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "hosts.json")
+            data_dir = os.path.join(temp_dir, "data")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump([], f)
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                with self.assertRaises(SystemExit) as cm:
+                    self._run_main_with_args(["-e", path, "--validate"], data_dir)
+
+            self.assertEqual(cm.exception.code, 1)
+            self.assertIn("Root must be an object", stdout.getvalue())
+            self.assertFalse(os.path.exists(data_dir))
 
     def test_doctor_does_not_persist_node_id_migration(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -614,7 +699,7 @@ exit 0
             self.assertIn("[PASS] expect", output)
             self.assertIn("Runtime data dir", output)
 
-    def test_doctor_for_encrypted_config_skips_host_manager_decryption(self):
+    def test_doctor_rejects_removed_encryption_without_constructing_host_manager(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = os.path.join(temp_dir, "hosts.json")
             with open(path, "w", encoding="utf-8") as f:
@@ -631,7 +716,7 @@ exit 0
                                 "name": "encrypted",
                                 "host": "example.com",
                                 "user": "deploy",
-                                "password": "ciphertext",
+                                "password": "v2:ciphertext",
                             }
                         ],
                     },
@@ -644,15 +729,16 @@ exit 0
                     path,
                     data_dir=os.path.join(temp_dir, "data"),
                     host_manager_cls=lambda *args, **kwargs: self.fail(
-                        "encrypted doctor should not construct HostManager"
+                        "removed encryption should not construct HostManager"
                     ),
                     tui_cls=self._doctor_tui_cls(True),
                     which=self._which_all(),
                 )
 
             output = stdout.getvalue()
-            self.assertEqual(code, 0)
-            self.assertIn("[PASS] Config validation", output)
+            self.assertEqual(code, 1)
+            self.assertIn("[FAIL] Config validation", output)
+            self.assertIn("encryption", output.lower())
             self.assertIn("[PASS] Runtime data dir", output)
 
     def test_doctor_warns_for_broad_existing_permissions(self):
@@ -666,24 +752,27 @@ exit 0
                     {
                         "config": {
                             "import_ssh_config": False,
-                            "encryption_enabled": True,
-                            "encryption_salt": "MTIzNDU2Nzg5MDEyMzQ1Ng==",
                         },
                         "hosts": [
                             {
                                 "type": "host",
-                                "name": "encrypted",
+                                "name": "plaintext",
                                 "host": "example.com",
                                 "user": "deploy",
-                                "password": "ciphertext",
+                                "password": "pw",
                             }
                         ],
                     },
                     f,
                 )
+            backup_path = path + ".bak"
+            with open(path, "r", encoding="utf-8") as source:
+                with open(backup_path, "w", encoding="utf-8") as backup:
+                    backup.write(source.read())
             with open(history_path, "w", encoding="utf-8") as f:
                 f.write("{}\n")
             os.chmod(path, 0o644)
+            os.chmod(backup_path, 0o644)
             os.chmod(data_dir, 0o755)
             os.chmod(history_path, 0o644)
 
@@ -699,8 +788,32 @@ exit 0
             output = stdout.getvalue()
             self.assertEqual(code, 0)
             self.assertIn("[WARN] Config permissions", output)
+            self.assertIn("[WARN] Config backup [0] permissions", output)
             self.assertIn("[WARN] Runtime data dir permissions", output)
             self.assertIn("[WARN] history.jsonl permissions", output)
+
+    def test_doctor_warns_for_backup_permissions_when_config_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "missing-hosts.json")
+            backup_path = path + ".bak"
+            with open(backup_path, "w", encoding="utf-8") as f:
+                json.dump({"config": {}, "hosts": []}, f)
+            os.chmod(backup_path, 0o644)
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = cli_diagnostics.run_doctor_for_path(
+                    path,
+                    data_dir=os.path.join(temp_dir, "data"),
+                    tui_cls=self._doctor_tui_cls(True),
+                    which=self._which_all(),
+                )
+
+            self.assertEqual(code, 1)
+            self.assertIn(
+                "[WARN] Config backup [0] permissions",
+                stdout.getvalue(),
+            )
 
     def test_doctor_for_path_accepts_explicit_host_manager_dependency(self):
         class FakeAudit:

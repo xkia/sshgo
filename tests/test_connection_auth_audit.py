@@ -529,6 +529,162 @@ class ConnectionAuthAuditTests(unittest.TestCase):
         self.assertIn("%%h %%p", rendered)
         self.assertIn("-W %h:%p", rendered)
 
+    def test_login_exp_consumes_option_shaped_proxy_value(self):
+        result = subprocess.run(
+            [
+                "./login.exp",
+                "-h",
+                "target.internal",
+                "-u",
+                "targetuser",
+                "-proxy-command",
+                "-h",
+                "-print-command",
+                "1",
+            ],
+            cwd=os.getcwd(),
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        rendered = result.stdout.strip()
+        self.assertIn("'ProxyCommand=-h'", rendered)
+        self.assertIn("'targetuser@target.internal'", rendered)
+
+    def test_login_tunnel_prompts_use_only_matching_hop_password(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fake_ssh = os.path.join(temp_dir, "ssh")
+            answer_path = os.path.join(temp_dir, "answer.txt")
+            with open(fake_ssh, "w", encoding="utf-8") as f:
+                f.write(
+                    """#!/usr/bin/env python3
+import os
+import select
+import sys
+
+sys.stdout.write(os.environ["SSHGO_FAKE_PROMPT"])
+sys.stdout.flush()
+ready, _, _ = select.select([sys.stdin], [], [], 0.5)
+answer = sys.stdin.readline().strip() if ready else ""
+with open(os.environ["SSHGO_FAKE_ANSWER_PATH"], "w", encoding="utf-8") as f:
+    f.write(answer)
+"""
+                )
+            os.chmod(fake_ssh, 0o755)
+            env = os.environ.copy()
+            env["PATH"] = temp_dir + os.pathsep + env.get("PATH", "")
+            env["SSHGO_TARGET_PASS"] = "target-secret"
+            env["SSHGO_JUMPER_PASS"] = "jump-secret"
+            env["SSHGO_FAKE_ANSWER_PATH"] = answer_path
+
+            for prompt, expected, host, user, jumper, target_key, jump_key in (
+                (
+                    "jumpuser@jump.example.com's password: ",
+                    "jump-secret",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "targetuser@target.internal's password: ",
+                    "target-secret",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "password: ",
+                    "",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "deploy@10.0.0.10's password: ",
+                    "target-secret",
+                    "10.0.0.10",
+                    "deploy",
+                    "deploy@10.0.0.1:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "deploy@same.example.com's password: ",
+                    "",
+                    "same.example.com",
+                    "deploy",
+                    "deploy@same.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "Enter passphrase for key '/tmp/key-target': ",
+                    "target-secret",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "/tmp/key-target",
+                    "/tmp/key",
+                ),
+                (
+                    "Enter passphrase for key '/tmp/shared-key': ",
+                    "",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "/tmp/shared-key",
+                    "/tmp/shared-key",
+                ),
+            ):
+                with self.subTest(prompt=prompt, host=host, jumper=jumper):
+                    if os.path.exists(answer_path):
+                        os.unlink(answer_path)
+                    env["SSHGO_FAKE_PROMPT"] = prompt
+                    command = [
+                        "./login.exp",
+                        "-h",
+                        host,
+                        "-u",
+                        user,
+                        "-J",
+                        jumper,
+                        "-jump-mode",
+                        "tunnel",
+                        "-tunnel-proxy-command",
+                        f"ssh -W %h:%p {jumper}",
+                    ]
+                    if target_key:
+                        command.extend(["-i", target_key])
+                    if jump_key:
+                        command.extend(["-j-i", jump_key])
+                    result = subprocess.run(
+                        command,
+                        cwd=os.getcwd(),
+                        env=env,
+                        stdin=subprocess.DEVNULL,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=5,
+                    )
+                    answer = ""
+                    output = result.stdout + result.stderr
+                    self.assertIn(prompt.strip(), output)
+                    if expected:
+                        self.assertTrue(os.path.exists(answer_path), output)
+                    if os.path.exists(answer_path):
+                        with open(answer_path, "r", encoding="utf-8") as f:
+                            answer = f.read().strip()
+                    self.assertEqual(answer, expected)
+
     def test_login_exp_print_command_unwraps_ipv6_shell_jump_target(self):
         result = subprocess.run(
             [
@@ -556,7 +712,7 @@ class ConnectionAuthAuditTests(unittest.TestCase):
         self.assertIn("'jumpuser@2001:db8::1'", rendered)
         self.assertNotIn("jumpuser@[2001:db8::1]", rendered)
 
-    def test_nested_sftp_tunnel_does_not_pass_jump_identity_file_arg(self):
+    def test_nested_sftp_tunnel_passes_jump_identity_for_prompt_routing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
             target = manager.find_host_by_alias("target")
@@ -566,7 +722,7 @@ class ConnectionAuthAuditTests(unittest.TestCase):
             )
             args = plan.args
 
-        self.assertNotIn("-j-i", args)
+        self.assertEqual(args[args.index("-j-i") + 1], "/tmp/jump_key")
         self.assertEqual(args[args.index("-i") + 1], "/tmp/target_key")
         tunnel_proxy = args[args.index("-tunnel-proxy-command") + 1]
         self.assertIn("-i /tmp/jump_key", tunnel_proxy)

@@ -303,6 +303,40 @@ exit 0
         self.assertIn(temp_path, rendered)
         self.assertIn(f"'targetuser@target.example.com:{remote_path}'", rendered)
 
+    def test_relay_transfer_consumes_option_shaped_path_value(self):
+        cmd = [
+            "./relay_transfer.exp",
+            "-h",
+            "target.example.com",
+            "-u",
+            "targetuser",
+            "-J-host",
+            "jump.example.com",
+            "-J-user",
+            "jumpuser",
+            "-action",
+            "upload",
+            "-local",
+            "-h",
+            "-remote",
+            "/tmp/remote.txt",
+            "-temp",
+            "/tmp/relay.txt",
+            "-print-command",
+            "local-to-jump",
+        ]
+        result = subprocess.run(
+            cmd,
+            cwd=os.getcwd(),
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertIn("'-h'", result.stdout)
+        self.assertIn("'jumpuser@jump.example.com:/tmp/relay.txt'", result.stdout)
+
     def test_relay_transfer_reports_cleanup_warning_without_masking_failure(self):
         with open("relay_transfer.exp", "r", encoding="utf-8") as f:
             script = f.read()

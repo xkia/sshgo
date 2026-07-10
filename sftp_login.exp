@@ -19,11 +19,11 @@ set user ""
 set port "22"
 set jumper ""
 set id_file ""
+set jumper_id_file ""
 set jumper_pass ""
 set target_pass ""
 set mfa_secret ""
 set jumper_mfa_secret ""
-set jump_mfa_used 0
 set host_key_checking "accept-new"
 set action ""
 set local_path ""
@@ -36,17 +36,26 @@ set batch_path ""
 set stale_batch_seconds 86400
 set interactive_prompt_seen 0
 set interactive_user_handoff_started 0
+set python_executable "python3"
 
 # Argument parser
-for {set i 0} {$i < $argc} {incr i} {
+set i 0
+while {$i < $argc} {
     set arg [lindex $argv $i]
-    set value [lindex $argv [expr $i+1]]
+    incr i
+    if {$i >= $argc} {
+        puts "Error: missing value for $arg"
+        exit 1
+    }
+    set value [lindex $argv $i]
+    incr i
     switch -exact -- $arg {
         "-h"        { set host $value }
         "-u"        { set user $value }
         "-P"        { set port $value }
         "-J"        { set jumper $value }
         "-i"        { set id_file $value }
+        "-j-i"      { set jumper_id_file $value }
         "-action"   { set action $value }
         "-local"    { set local_path $value }
         "-remote"   { set remote_path $value }
@@ -54,6 +63,10 @@ for {set i 0} {$i < $argc} {incr i} {
         "-proxy-command" { set custom_proxy_command $value }
         "-tunnel-proxy-command" { set tunnel_proxy_command $value }
         "-host-key-checking" { set host_key_checking $value }
+        default {
+            puts "Error: unknown option $arg"
+            exit 1
+        }
     }
 }
 
@@ -87,6 +100,10 @@ if {[info exists env(SSHGO_MFA_SECRET)]} {
 if {[info exists env(SSHGO_JUMPER_MFA_SECRET)]} {
     set jumper_mfa_secret $env(SSHGO_JUMPER_MFA_SECRET)
     unset env(SSHGO_JUMPER_MFA_SECRET)
+}
+if {[info exists env(SSHGO_PYTHON_EXECUTABLE)]} {
+    set python_executable $env(SSHGO_PYTHON_EXECUTABLE)
+    unset env(SSHGO_PYTHON_EXECUTABLE)
 }
 
 # Get auth.py path
@@ -133,6 +150,127 @@ proc bracket_ipv6_host {host} {
 
 proc sftp_target_string {user host} {
     return [target_string $user [bracket_ipv6_host $host]]
+}
+
+proc split_host_port {target default_port} {
+    if {[regexp {^([^@]+@)?\[(.+)\]:([0-9]+)$} $target -> user_prefix host port]} {
+        return [list "${user_prefix}${host}" $port]
+    }
+    if {[regexp {^([^@]+@)?\[(.+)\]$} $target -> user_prefix host]} {
+        return [list "${user_prefix}${host}" $default_port]
+    }
+    if {[regexp {^(.+):([0-9]+)$} $target -> base port]} {
+        set host_part $base
+        if {[regexp {^[^@]+@(.+)$} $base -> host_part]} {}
+        if {[string first ":" $host_part] < 0} {
+            return [list $base $port]
+        }
+    }
+    return [list $target $default_port]
+}
+
+proc prompt_token_boundary {ch side} {
+    if {$ch == "" || $ch == " " || $ch == "\t"} {
+        return 1
+    }
+    if {$side == "before"} {
+        return [expr {[string first $ch {'"([}] >= 0}]
+    }
+    return [expr {[string first $ch {'")]:}] >= 0}]
+}
+
+proc prompt_token_matches {text token} {
+    if {$token == ""} {
+        return 0
+    }
+
+    set haystack [string tolower $text]
+    set needle [string tolower $token]
+    set haystack_length [string length $haystack]
+    set needle_length [string length $needle]
+    set search_from 0
+
+    while {$search_from <= $haystack_length} {
+        set index [string first $needle $haystack $search_from]
+        if {$index < 0} {
+            return 0
+        }
+
+        set before ""
+        if {$index > 0} {
+            set before [string index $haystack [expr {$index - 1}]]
+        }
+        set after_index [expr {$index + $needle_length}]
+        set after ""
+        if {$after_index < $haystack_length} {
+            set after [string index $haystack $after_index]
+        }
+
+        if {
+            [prompt_token_boundary $before "before"]
+            && [prompt_token_boundary $after "after"]
+        } {
+            return 1
+        }
+        set search_from [expr {$index + 1}]
+    }
+    return 0
+}
+
+proc prompt_line {buffer} {
+    set normalized [string map [list "\r" "\n"] $buffer]
+    return [lindex [split $normalized "\n"] end]
+}
+
+proc prompt_auth_stage {prompt} {
+    global jumper user host id_file jumper_id_file
+    if {$jumper == ""} {
+        return "target"
+    }
+    lassign [split_host_port $jumper "22"] jumper_target _
+    set jump_match 0
+    set target_match 0
+    if {$jumper_id_file != "" && [prompt_token_matches $prompt $jumper_id_file]} {
+        set jump_match 1
+    }
+    if {$id_file != "" && [prompt_token_matches $prompt $id_file]} {
+        set target_match 1
+    }
+    if {[prompt_token_matches $prompt $jumper_target]} {
+        set jump_match 1
+    }
+    if {[prompt_token_matches $prompt "$user@$host"]} {
+        set target_match 1
+    }
+    if {$jump_match && !$target_match} {
+        return "jump"
+    }
+    if {$target_match && !$jump_match} {
+        return "target"
+    }
+    return ""
+}
+
+proc auth_response_for_prompt {kind} {
+    global expect_out jumper_pass target_pass jumper_mfa_secret mfa_secret python_executable auth_py
+    set stage [prompt_auth_stage [prompt_line $expect_out(buffer)]]
+    if {$kind == "password"} {
+        if {$stage == "jump"} {
+            return $jumper_pass
+        }
+        if {$stage == "target"} {
+            return $target_pass
+        }
+    }
+    if {$kind == "mfa"} {
+        if {$stage == "jump" && $jumper_mfa_secret != ""} {
+            return [exec $python_executable $auth_py - << $jumper_mfa_secret]
+        }
+        if {$stage == "target" && $mfa_secret != ""} {
+            return [exec $python_executable $auth_py - << $mfa_secret]
+        }
+    }
+    return ""
 }
 
 proc wait_exit_status {} {
@@ -306,15 +444,6 @@ proc ensure_ssh_wrapper_executable {} {
     }
 }
 
-# Create password queue
-set password_queue [list]
-if {$jumper_pass != ""} {
-    lappend password_queue $jumper_pass
-}
-if {$target_pass != ""} {
-    lappend password_queue $target_pass
-}
-
 # Adjust window size on WINCH signal
 trap {
     set rows [stty rows]
@@ -369,11 +498,10 @@ expect {
         send "yes\r"
         exp_continue
     }
-    -re {(?i)(password|passphrase)[: ]*$} {
-        if {[llength $password_queue] > 0} {
-            set pass_to_send [lindex $password_queue 0]
-            send "$pass_to_send\r"
-            set password_queue [lrange $password_queue 1 end]
+    -re {(?i)((password|passphrase)[: ]*|enter passphrase for key [^\r\n]*:) *$} {
+        set response [auth_response_for_prompt "password"]
+        if {$response != ""} {
+            send "$response\r"
             exp_continue
         } else {
             if {$action == "interactive"} {
@@ -384,15 +512,9 @@ expect {
         }
     }
     -re {(?i)(MFA|OTP|Verification code).*:} {
-        if {$jumper_mfa_secret != "" && $jump_mfa_used == 0} {
-            set oath [exec python3 $auth_py - << $jumper_mfa_secret]
-            send "$oath\r"
-            set jump_mfa_used 1
-            exp_continue
-        }
-        if {$mfa_secret != ""} {
-            set oath [exec python3 $auth_py - << $mfa_secret]
-            send "$oath\r"
+        set response [auth_response_for_prompt "mfa"]
+        if {$response != ""} {
+            send "$response\r"
             exp_continue
         }
         if {$action == "interactive"} {

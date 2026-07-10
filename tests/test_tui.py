@@ -131,6 +131,24 @@ class TuiTests(unittest.TestCase):
         tui._run_form_loop = form_loop
         return tui
 
+    def test_main_search_accepts_printable_unicode(self):
+        class UnicodeScreen:
+            def __init__(self):
+                self.keys = ["f", "主"]
+
+            def get_wch(self):
+                if self.keys:
+                    return self.keys.pop(0)
+                raise KeyboardInterrupt
+
+        tui = self._navigation_tui(None, screen=UnicodeScreen())
+        tui.render_screen = lambda: None
+
+        tui.run()
+
+        self.assertEqual(tui.input_mode, "search")
+        self.assertEqual(tui.search_query, "主")
+
     def test_form_reports_terminal_too_small(self):
         tui = self._tui(screen=FakeScreen(height=8, width=20))
         result = Tui._draw_form(

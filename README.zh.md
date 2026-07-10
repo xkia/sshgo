@@ -25,7 +25,7 @@
 -   **嵌套跳板机**: 通过在配置中嵌套 `host` 节点, 直观地配置跳板机.
 -   **自定义 ProxyCommand**: 普通直连主机可通过 `nc -X 5 -x {{local_socks}} %h %p` 这类本机代理命令连接.
 -   **配置占位符**: 用 `{{name}}` 复用域名、用户名、密钥路径、代理端点和 relay 目录等字符串.
--   **可选的凭证加密**: 使用主密码保护您保存的密码和 MFA 密钥. 加密可以随时开启或关闭.
+-   **用户自主管理凭证**: 密码和 MFA secret 是可选的明文配置值；请用仅所有者可读写的文件权限保护配置与备份，或改用密钥、SSH agent、手动输入。
 -   **~/.ssh/config 导入**: 自动从您现有的 `~/.ssh/config` 文件中导入主机并分组.
 -   **多语言支持**: 通过 `config.language` 使用中文或英文界面.
 -   **连接历史与审计**: TUI 中展示 Recent 分组记录最近连接, 并通过稳定节点身份关联当前配置, 审计日志以 JSONL 格式存储.
@@ -132,7 +132,6 @@ sshgo
 
 | 选项 | 用途 |
 | --- | --- |
-| `--toggle-encryption` | 为 `hosts.json` 启用或禁用主密码加密。 |
 | `--history [--limit N] [--filter name]` | 显示最近连接历史。 |
 | `--validate` | 只读验证当前配置。 |
 | `--doctor` | 检查配置、依赖、内置脚本、运行时数据、SSH agent 和 host key 模式。 |
@@ -204,9 +203,9 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 | `host` | 主机名或 IP。不要拼接 `:port`; 端口写到 `port`。 |
 | `port` | 可选 SSH 端口。默认 `22`。 |
 | `user` | SSH 用户名。 |
-| `password` | 密码认证值, 可由 sshgo 加密。 |
+| `password` | 可选的明文密码认证值。 |
 | `id_file` | 私钥路径。 |
-| `mfa_secret` | 可选 TOTP secret。 |
+| `mfa_secret` | 可选的明文 TOTP secret。 |
 | `use_ssh_agent` | 可选的单主机 SSH agent 覆盖。 |
 | `children` | 嵌套主机; 包含子节点的 host 会成为跳板机。 |
 
@@ -216,7 +215,6 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 
 | 字段 | 用途 |
 | --- | --- |
-| `encryption_enabled`, `encryption_salt` | 由 `--toggle-encryption` 管理。 |
 | `show_detail_pane`, `show_recent`, `recent_expanded` | TUI 显示状态。 |
 | `audit_full`, `data_dir` | 运行时审计行为和运行时数据目录。`SSHGO_DATA_DIR` 对单次进程优先。 |
 | `strict_host_key_checking` | `true` 使用 OpenSSH `accept-new`; `false` 使用旧的宽松模式。 |
@@ -230,6 +228,8 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 | `theme` | 可选 TUI 颜色: `black`、`red`、`green`、`yellow`、`blue`、`magenta`、`cyan`、`white`、`default`。 |
 
 运行时 history 和 audit 日志与 `hosts.json` 分离, 默认写到 `~/.sshgo/history.jsonl`、`audit-simple.jsonl` 和启用完整审计时的 `audit-full.jsonl`。配置保存时会在同目录保留小型备份轮转: `hosts.json.bak`、`.bak.1` 和 `.bak.2`。
+
+sshgo 不再提供凭证静态加密。请使用仅所有者可读写的文件权限保护 `hosts.json` 及所有轮转备份。旧版本中启用了加密或包含 `v2:` 凭证的配置会被拒绝；升级前请先用移除加密前的版本保存为明文配置。
 
 启用终端标题时, `terminal_title_target: "tab"` 在 Ghostty 中会使用兼容 window-title 的序列更新标题。如果 Ghostty shell integration 在下一个 prompt 覆盖标题, 可在 Ghostty 配置中设置 `shell-integration-features = no-title`。sshgo 不会在远程会话结束后恢复旧标题。
 

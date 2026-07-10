@@ -20,8 +20,8 @@ class SftpExpectTests(unittest.TestCase):
         self.assertIn("\"-tunnel-proxy-command\" { set tunnel_proxy_command $value }", script)
         self.assertIn("\"-print-command\" { set print_command $value }", script)
         self.assertIn("ProxyCommand=$custom_proxy_command", script)
-        self.assertNotIn("jumper_id_file", script)
-        self.assertNotIn("\"-j-i\"", script)
+        self.assertIn("set jumper_id_file \"\"", script)
+        self.assertIn("\"-j-i\"      { set jumper_id_file $value }", script)
 
     def test_sftp_exp_print_command_uses_tunnel_proxy_command(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -107,6 +107,162 @@ class SftpExpectTests(unittest.TestCase):
         self.assertNotIn("<sshgo-generated-batch-file>", rendered)
         self.assertNotIn("# batch:", rendered)
         self.assertIn("ProxyCommand=ssh -o ProxyCommand=", rendered)
+
+    def test_sftp_exp_consumes_option_shaped_path_value(self):
+        result = subprocess.run(
+            [
+                "./sftp_login.exp",
+                "-h",
+                "target.internal",
+                "-u",
+                "targetuser",
+                "-action",
+                "upload",
+                "-local",
+                "-h",
+                "-remote",
+                "/tmp/remote.txt",
+                "-print-command",
+                "1",
+            ],
+            cwd=os.getcwd(),
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertIn('# batch: put "-h" "/tmp/remote.txt"', result.stdout)
+
+    def test_sftp_tunnel_prompts_use_only_matching_hop_password(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fake_sftp = os.path.join(temp_dir, "sftp")
+            answer_path = os.path.join(temp_dir, "answer.txt")
+            with open(fake_sftp, "w", encoding="utf-8") as f:
+                f.write(
+                    """#!/usr/bin/env python3
+import os
+import select
+import sys
+
+sys.stdout.write(os.environ["SSHGO_FAKE_PROMPT"])
+sys.stdout.flush()
+ready, _, _ = select.select([sys.stdin], [], [], 0.5)
+answer = sys.stdin.readline().strip() if ready else ""
+with open(os.environ["SSHGO_FAKE_ANSWER_PATH"], "w", encoding="utf-8") as f:
+    f.write(answer)
+"""
+                )
+            os.chmod(fake_sftp, 0o755)
+            env = os.environ.copy()
+            env["PATH"] = temp_dir + os.pathsep + env.get("PATH", "")
+            env["TMPDIR"] = temp_dir
+            env["SSHGO_TARGET_PASS"] = "target-secret"
+            env["SSHGO_JUMPER_PASS"] = "jump-secret"
+            env["SSHGO_FAKE_ANSWER_PATH"] = answer_path
+
+            for prompt, expected, host, user, jumper, target_key, jump_key in (
+                (
+                    "jumpuser@jump.example.com's password: ",
+                    "jump-secret",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "targetuser@target.internal's password: ",
+                    "target-secret",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "password: ",
+                    "",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "deploy@10.0.0.10's password: ",
+                    "target-secret",
+                    "10.0.0.10",
+                    "deploy",
+                    "deploy@10.0.0.1:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "deploy@same.example.com's password: ",
+                    "",
+                    "same.example.com",
+                    "deploy",
+                    "deploy@same.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "Enter passphrase for key '/tmp/key-target': ",
+                    "target-secret",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "/tmp/key-target",
+                    "/tmp/key",
+                ),
+                (
+                    "Enter passphrase for key '/tmp/shared-key': ",
+                    "",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "/tmp/shared-key",
+                    "/tmp/shared-key",
+                ),
+            ):
+                with self.subTest(prompt=prompt, host=host, jumper=jumper):
+                    env["SSHGO_FAKE_PROMPT"] = prompt
+                    command = [
+                        "./sftp_login.exp",
+                        "-h",
+                        host,
+                        "-u",
+                        user,
+                        "-J",
+                        jumper,
+                        "-tunnel-proxy-command",
+                        f"ssh -W %h:%p {jumper}",
+                        "-action",
+                        "upload",
+                        "-local",
+                        "local.txt",
+                        "-remote",
+                        "/tmp/remote.txt",
+                    ]
+                    if target_key:
+                        command.extend(["-i", target_key])
+                    if jump_key:
+                        command.extend(["-j-i", jump_key])
+                    result = subprocess.run(
+                        command,
+                        cwd=os.getcwd(),
+                        env=env,
+                        stdin=subprocess.DEVNULL,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=5,
+                    )
+                    with open(answer_path, "r", encoding="utf-8") as f:
+                        answer = f.read().strip()
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(answer, expected)
 
     def test_sftp_exp_print_command_brackets_ipv6_target(self):
         result = subprocess.run(

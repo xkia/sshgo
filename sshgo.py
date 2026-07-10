@@ -9,6 +9,8 @@ import argparse
 import shlex
 import cli_config
 import cli_diagnostics
+from audit_logger import AuditLogger
+from config_validation import validate_hosts_config_for_load
 from endpoint import DEFAULT_PORT, format_endpoint
 from host_manager import HostManager
 from tui import Tui
@@ -106,7 +108,6 @@ def handle_interactive_sftp_command(host_alias, host_manager, print_command=Fals
 
 
 def run_tui(host_manager):
-    script_dir = os.path.dirname(os.path.realpath(__file__))
     if not host_manager.get_hosts():
         print(i18n.get("first_run_welcome"))
         try:
@@ -125,18 +126,6 @@ def run_tui(host_manager):
             print("\n" + i18n.get("operation_cancelled"))
         sys.exit(0)
 
-    for script in [
-        "login.exp",
-        "sftp_login.exp",
-        "relay_transfer.exp",
-        "sftp_ssh_wrapper.py",
-    ]:
-        script_path = os.path.join(script_dir, script)
-        try:
-            os.chmod(script_path, 0o755)
-        except FileNotFoundError:
-            pass
-
     tui = None
     try:
         tui = Tui(host_manager)
@@ -149,8 +138,8 @@ def run_tui(host_manager):
         sys.exit(128)
 
 
-def show_history(host_manager, limit, filter_name):
-    records = host_manager.audit.get_history(limit=limit, filter_name=filter_name)
+def show_history(audit_logger, limit, filter_name):
+    records = audit_logger.get_history(limit=limit, filter_name=filter_name)
     if not records:
         print("No connection history found.")
         return
@@ -171,6 +160,23 @@ def show_history(host_manager, limit, filter_name):
         )
 
 
+def _positive_int(value):
+    number = int(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
+def _print_validation_result(errors):
+    if errors:
+        print(i18n.get("validate_failed") + "：")
+        for error in errors:
+            print(f"  - {error}")
+        return 1
+    print(i18n.get("validate_ok"))
+    return 0
+
+
 def main():
     locale.setlocale(locale.LC_ALL, "")
 
@@ -189,11 +195,6 @@ def main():
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument(
-        "--toggle-encryption",
-        action="store_true",
-        help="Enable or disable password encryption",
-    )
-    parser.add_argument(
         "--audit-full",
         action="store_true",
         help="Enable full audit logging; command/path context may include sensitive arguments",
@@ -205,7 +206,7 @@ def main():
     )
     parser.add_argument(
         "--limit",
-        type=int,
+        type=_positive_int,
         default=10,
         help="Number of history records to show (default: 10)",
     )
@@ -277,6 +278,27 @@ def main():
 
     data_dir = os.getenv("SSHGO_DATA_DIR")
 
+    if args.validate:
+        _, errors = cli_config.load_config_snapshot(config_path)
+        code = _print_validation_result(errors)
+        if code:
+            sys.exit(code)
+        return
+
+    if args.history:
+        snapshot, errors = cli_config.load_config_snapshot(
+            config_path,
+            validator=validate_hosts_config_for_load,
+            allow_missing=True,
+        )
+        if errors:
+            sys.exit(_print_validation_result(errors))
+        audit = AuditLogger(
+            cli_config.runtime_data_dir_from_snapshot(snapshot, override=data_dir)
+        )
+        show_history(audit, limit=args.limit, filter_name=args.filter_name)
+        return
+
     if args.doctor:
         sys.exit(cli_diagnostics.run_doctor_for_path(config_path, data_dir=data_dir))
 
@@ -294,21 +316,6 @@ def main():
 
     if cli_config._should_persist_node_id_migration(args):
         host_manager.persist_node_id_migration_if_needed()
-
-    if args.validate:
-        errors = host_manager.validate_config()
-        if errors:
-            print(i18n.get("validate_failed") + "：")
-            for err in errors:
-                print(f"  - {err}")
-            sys.exit(1)
-        else:
-            print(i18n.get("validate_ok"))
-        return
-
-    if args.history:
-        show_history(host_manager, limit=args.limit, filter_name=args.filter_name)
-        return
 
     if args.sftp:
         if args.cmd_args:
@@ -330,9 +337,6 @@ def main():
 
     if args.print_command:
         parser.error("--print-command requires a shortcut command or --sftp")
-
-    elif args.toggle_encryption:
-        host_manager.toggle_encryption()
 
     else:
         run_tui(host_manager)

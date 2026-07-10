@@ -4,10 +4,12 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
+from unittest import mock
 
 from connection_errors import ConfigRuntimeError
 from connection_plan import CommandPlan
 from connection_planner import ConnectionPlanner
+from connection_runtime import ConnectionRuntime
 
 try:
     from fixtures import host, jump_with_target, manager_for_config
@@ -34,6 +36,18 @@ class CommandPlanTests(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_executable_check_does_not_chmod_ready_script(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "ready.exp")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\n")
+            os.chmod(path, 0o755)
+
+            with mock.patch("connection_runtime.os.chmod") as chmod:
+                ConnectionRuntime.ensure_executable(path)
+
+            chmod.assert_not_called()
 
     def test_interactive_command_plan_contains_launch_env_and_audit(self):
         with tempfile.TemporaryDirectory() as temp_dir:

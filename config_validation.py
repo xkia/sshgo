@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import base64
-import binascii
 import os
 import re
 
@@ -68,7 +66,6 @@ PLACEHOLDER_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PLACEHOLDER_NODE_FIELDS = frozenset({"host", "user", "id_file", "proxy_command"})
 LANGUAGES = frozenset({"en", "zh"})
 CONFIG_BOOL_FIELDS = frozenset({
-    "encryption_enabled",
     "import_ssh_config",
     "show_detail_pane",
     "audit_full",
@@ -88,7 +85,7 @@ CONFIG_STRING_FIELDS = frozenset({
     "terminal_title_scope",
     "relay_temp_dir",
 })
-CONFIG_OPTIONAL_STRING_FIELDS = frozenset({"data_dir", "encryption_salt"})
+CONFIG_OPTIONAL_STRING_FIELDS = frozenset({"data_dir"})
 CONFIG_NON_NEGATIVE_INT_FIELDS = frozenset({"relay_transfer_timeout"})
 THEME_FIELDS = frozenset({"highlight_fg", "highlight_bg", "prefix_color"})
 THEME_COLORS = frozenset({
@@ -102,15 +99,19 @@ THEME_COLORS = frozenset({
     "white",
     "default",
 })
-ALLOWED_SAVE_KEYS = frozenset({
-    "id", "type", "name", "expanded", "children",
+COMMON_NODE_KEYS = frozenset({"id", "type", "name", "expanded", "children"})
+HOST_ONLY_KEYS = frozenset({
     "host", "port", "user", "password", "id_file", "mfa_secret", "use_ssh_agent",
     "ssh_jump_mode", "transfer_jump_mode", "proxy_command",
 })
+HOST_STRING_FIELDS = ("host", "user", "password", "id_file", "mfa_secret")
+HOST_SAVE_KEYS = COMMON_NODE_KEYS | HOST_ONLY_KEYS
+GROUP_SAVE_KEYS = COMMON_NODE_KEYS
+ALLOWED_SAVE_KEYS = HOST_SAVE_KEYS | GROUP_SAVE_KEYS
+REMOVED_ENCRYPTION_KEYS = frozenset({"encryption_enabled", "encryption_salt"})
+REMOVED_ENCRYPTION_PREFIX = "v2:"
 
 DEFAULT_CONFIG = {
-    "encryption_enabled": False,
-    "encryption_salt": None,
     "import_ssh_config": True,
     "language": "en",
     "show_detail_pane": True,
@@ -141,9 +142,16 @@ def default_config():
 
 def merge_config(raw_config):
     config = default_config()
-    config.update(raw_config)
+    config.update(config_without_removed_encryption(raw_config))
     if isinstance(config.get("placeholders"), dict):
         config["placeholders"] = dict(config["placeholders"])
+    return config
+
+
+def config_without_removed_encryption(raw_config):
+    config = dict(raw_config) if isinstance(raw_config, dict) else {}
+    for field in REMOVED_ENCRYPTION_KEYS:
+        config.pop(field, None)
     return config
 
 
@@ -167,12 +175,11 @@ def validate_hosts_config(data: dict) -> list[str]:
     )
     config = merge_config(raw_config)
     _validate_config_schema(raw_config, errors)
+    _validate_removed_encryption_config(raw_config, errors)
     placeholders = _validate_placeholders(
         raw_config.get("placeholders"),
         errors,
     )
-    _validate_encryption_salt(raw_config, data.get("hosts", []), errors)
-
     for field, allowed_values, error_key, error_arg in CONFIG_ENUM_FIELDS:
         _validate_enum_choice(
             config.get(field),
@@ -205,6 +212,108 @@ def validate_hosts_config(data: dict) -> list[str]:
         )
 
     return errors
+
+
+def validate_hosts_config_for_load(data: dict) -> list[str]:
+    """Validate only invariants required to load a config safely for repair."""
+    errors = []
+    if not isinstance(data, dict):
+        return [i18n.get("validate_root_object")]
+
+    raw_config = data.get("config")
+    if raw_config is None:
+        errors.append(i18n.get("validate_missing_config"))
+        raw_config = {}
+    elif not isinstance(raw_config, dict):
+        errors.append(i18n.get("validate_config_not_object"))
+        raw_config = {}
+    _validate_config_schema(raw_config, errors)
+    _validate_removed_encryption_config(raw_config, errors)
+
+    hosts = data.get("hosts")
+    if hosts is None:
+        errors.append(i18n.get("validate_missing_hosts"))
+    elif not isinstance(hosts, list):
+        errors.append(i18n.get("validate_hosts_not_array"))
+    else:
+        _validate_hosts_nodes_for_load(hosts, errors)
+    return errors
+
+
+def _validate_hosts_nodes_for_load(nodes, errors, path="hosts"):
+    for index, node in enumerate(nodes):
+        node_path = f"{path}[{index}]"
+        if isinstance(node, dict) and "source" in node:
+            errors.append(
+                i18n.get("validate_unknown_field", path=node_path, field="source")
+            )
+        node_type, children = _validate_node_shape(node, node_path, errors)
+        if node_type is None or children is None:
+            continue
+        _validate_hosts_nodes_for_load(children, errors, f"{node_path}.children")
+
+
+def _validate_node_shape(node, node_path, errors):
+    if not isinstance(node, dict):
+        errors.append(i18n.get("validate_node_not_object"))
+        return None, None
+
+    node_type = node.get("type")
+    if node_type not in ("host", "group"):
+        errors.append(i18n.get("validate_invalid_type") + f": '{node_type}'")
+        return None, None
+
+    for field, expected_type, expected_key in (
+        ("name", str, "validate_type_string"),
+        ("expanded", bool, "validate_type_bool"),
+        ("source", str, "validate_type_string"),
+    ):
+        if field in node and type(node[field]) is not expected_type:
+            errors.append(
+                i18n.get(
+                    "validate_invalid_node_field_type",
+                    path=node_path,
+                    field=field,
+                    expected=i18n.get(expected_key),
+                )
+            )
+
+    if node_type == "host":
+        for field in HOST_STRING_FIELDS:
+            if field in node and not isinstance(node[field], str):
+                errors.append(
+                    i18n.get(
+                        "validate_invalid_node_field_type",
+                        path=node_path,
+                        field=field,
+                        expected=i18n.get("validate_type_string"),
+                    )
+                )
+        if "use_ssh_agent" in node and type(node["use_ssh_agent"]) is not bool:
+            errors.append(
+                i18n.get(
+                    "validate_invalid_node_field_type",
+                    path=node_path,
+                    field="use_ssh_agent",
+                    expected=i18n.get("validate_type_bool"),
+                )
+            )
+        for field in ("password", "mfa_secret"):
+            value = node.get(field)
+            if isinstance(value, str) and value.startswith(REMOVED_ENCRYPTION_PREFIX):
+                errors.append(
+                    i18n.get(
+                        "validate_encrypted_credential_removed",
+                        path=node_path,
+                        field=field,
+                    )
+                )
+
+    children = node.get("children", [])
+    if not isinstance(children, list):
+        errors.append(i18n.get("validate_children_not_array"))
+        children = None
+    return node_type, children
 
 
 def _validate_config_schema(config, errors):
@@ -254,6 +363,10 @@ def _validate_config_schema(config, errors):
     if isinstance(language, str) and language not in LANGUAGES:
         errors.append(i18n.get("validate_invalid_language", lang=language))
 
+    data_dir = config.get("data_dir")
+    if isinstance(data_dir, str) and not data_dir.strip():
+        errors.append(i18n.get("validate_invalid_data_dir"))
+
     theme = config.get("theme")
     if theme is None:
         return
@@ -302,45 +415,14 @@ def _validate_port(port):
     return 1 <= value <= 65535
 
 
-def _decode_encryption_salt(value):
-    decoded = base64.b64decode(
-        value.encode("utf-8"),
-        altchars=b"-_",
-        validate=True,
-    )
-    if not decoded:
-        raise ValueError("empty salt")
-    return decoded
-
-
-def _nodes_have_credentials(nodes):
-    if not isinstance(nodes, list):
-        return False
-    for node in nodes:
-        if not isinstance(node, dict):
-            continue
-        if node.get("type") == "host" and (
-            node.get("password") or node.get("mfa_secret")
-        ):
-            return True
-        if _nodes_have_credentials(node.get("children")):
-            return True
-    return False
-
-
-def _validate_encryption_salt(config, hosts, errors):
+def _validate_removed_encryption_config(config, errors):
+    enabled = config.get("encryption_enabled")
     salt = config.get("encryption_salt")
-    if isinstance(salt, str):
-        try:
-            _decode_encryption_salt(salt)
-        except (binascii.Error, ValueError):
-            errors.append(i18n.get("validate_invalid_encryption_salt"))
     if (
-        config.get("encryption_enabled") is True
-        and _nodes_have_credentials(hosts)
-        and not salt
+        (enabled is not None and enabled is not False)
+        or salt not in (None, "")
     ):
-        errors.append(i18n.get("validate_missing_encryption_salt"))
+        errors.append(i18n.get("validate_encryption_removed"))
 
 
 def _effective_nested_mode(node, field, parent_mode, config, config_field, default):
@@ -431,36 +513,34 @@ def _validate_hosts_nodes(
         seen_ids = set()
     for i, node in enumerate(nodes):
         node_path = f"{path}[{i}]"
-        if not isinstance(node, dict):
-            errors.append(i18n.get("validate_node_not_object"))
+        node_type, children = _validate_node_shape(node, node_path, errors)
+        if node_type is None:
             continue
 
-        unknown_fields = sorted(set(node) - ALLOWED_SAVE_KEYS)
+        allowed_fields = (
+            HOST_SAVE_KEYS
+            if node_type == "host"
+            else GROUP_SAVE_KEYS
+            if node_type == "group"
+            else ALLOWED_SAVE_KEYS
+        )
+        unknown_fields = sorted(set(node) - allowed_fields)
         for field in unknown_fields:
-            errors.append(
-                i18n.get("validate_unknown_field", path=node_path, field=field)
-            )
-
-        node_type = node.get("type")
-        if node_type not in ("host", "group"):
-            errors.append(
-                i18n.get("validate_invalid_type") + f": '{node_type}'"
-            )
-            continue
-
-        if node_type != "host":
-            for field in ("ssh_jump_mode", "transfer_jump_mode", "proxy_command"):
-                if field in node:
-                    errors.append(
-                        i18n.get("validate_mode_field_on_non_host", field=field)
-                    )
+            if node_type == "group" and field in HOST_ONLY_KEYS:
+                errors.append(
+                    i18n.get("validate_mode_field_on_non_host", field=field)
+                )
+            else:
+                errors.append(
+                    i18n.get("validate_unknown_field", path=node_path, field=field)
+                )
 
         name = node.get("name")
-        if not name:
+        if name is None or (isinstance(name, str) and not name.strip()):
             errors.append(i18n.get("validate_missing_name"))
-        elif name in seen_names:
+        elif isinstance(name, str) and name in seen_names:
             errors.append(i18n.get("validate_duplicate_name", name=name))
-        else:
+        elif isinstance(name, str):
             seen_names.add(name)
 
         node_id = node.get("id")
@@ -545,6 +625,14 @@ def _validate_hosts_nodes(
                 if not host_part:
                     errors.append(i18n.get("validate_empty_hostname"))
 
+            user_val = _resolve_placeholders_for_validation(
+                node.get("user"),
+                placeholders,
+                errors,
+            )
+            if not isinstance(user_val, str) or not user_val.strip():
+                errors.append(i18n.get("validate_missing_user"))
+
             port_part = normalize_port(node.get("port"))
             if not _validate_port(port_part):
                 errors.append(i18n.get("validate_invalid_port", port=port_part))
@@ -571,34 +659,29 @@ def _validate_hosts_nodes(
             elif not node.get("password") and not node.get("id_file") and not uses_agent:
                 errors.append(i18n.get("validate_missing_auth"))
 
-        if node_type == "group" or node.get("children"):
-            children = node.get("children")
-            if children is not None:
-                if not isinstance(children, list):
-                    errors.append(i18n.get("validate_children_not_array"))
-                else:
-                    _validate_hosts_nodes(
-                        children,
-                        errors,
-                        f"{node_path}.children",
-                        config=config,
-                        placeholders=placeholders,
-                        seen_names=seen_names,
-                        seen_ids=seen_ids,
-                        parent_is_host=node_type == "host",
-                        host_parent_depth=(
-                            host_parent_depth + 1
-                            if node_type == "host"
-                            else host_parent_depth
-                        ),
-                        parent_ssh_jump_mode=(
-                            node.get("ssh_jump_mode")
-                            if node_type == "host"
-                            else parent_ssh_jump_mode
-                        ),
-                        parent_transfer_jump_mode=(
-                            node.get("transfer_jump_mode")
-                            if node_type == "host"
-                            else parent_transfer_jump_mode
-                        ),
-                    )
+        if children is not None:
+            _validate_hosts_nodes(
+                children,
+                errors,
+                f"{node_path}.children",
+                config=config,
+                placeholders=placeholders,
+                seen_names=seen_names,
+                seen_ids=seen_ids,
+                parent_is_host=node_type == "host",
+                host_parent_depth=(
+                    host_parent_depth + 1
+                    if node_type == "host"
+                    else host_parent_depth
+                ),
+                parent_ssh_jump_mode=(
+                    node.get("ssh_jump_mode")
+                    if node_type == "host"
+                    else parent_ssh_jump_mode
+                ),
+                parent_transfer_jump_mode=(
+                    node.get("transfer_jump_mode")
+                    if node_type == "host"
+                    else parent_transfer_jump_mode
+                ),
+            )

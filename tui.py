@@ -123,12 +123,16 @@ class Tui:
     def _draw_edit_window(self, edit_win, value, cursor, input_width, password=False):
         input_width = max(1, int(input_width))
         display_value = "*" * len(value) if password else value
-        start = max(0, cursor - input_width)
-        visible_value = display_value[start : start + input_width]
+        visible_value, cursor_x = tui_text.text_viewport(
+            display_value,
+            cursor,
+            input_width,
+        )
+        padding = " " * max(0, input_width - tui_text.display_width(visible_value))
         try:
             edit_win.clear()
-            edit_win.addstr(0, 0, f"{visible_value:<{input_width}}")
-            edit_win.move(0, min(max(0, cursor - start), input_width))
+            edit_win.addstr(0, 0, visible_value + padding)
+            edit_win.move(0, min(max(0, cursor_x), input_width))
             edit_win.refresh()
         except (AttributeError, curses.error):
             pass
@@ -136,6 +140,13 @@ class Tui:
     def _read_edit_key(self, edit_win):
         try:
             reader = edit_win.get_wch if hasattr(edit_win, "get_wch") else edit_win.getch
+            return reader()
+        except (AttributeError, curses.error):
+            return None
+
+    def _read_main_key(self):
+        try:
+            reader = self.screen.get_wch if hasattr(self.screen, "get_wch") else self.screen.getch
             return reader()
         except (AttributeError, curses.error):
             return None
@@ -290,7 +301,12 @@ class Tui:
         try:
             while True:
                 self.render_screen()
-                c = self.screen.getch()
+                raw_key = self._read_main_key()
+                if raw_key is None:
+                    continue
+                c = raw_key
+                if isinstance(c, str) and len(c) == 1 and ord(c) < 128:
+                    c = ord(c)
 
                 if c in (27, ord("q")):
                     if self.input_mode == "search":
@@ -336,8 +352,11 @@ class Tui:
                     elif c == 21:  # Ctrl+U
                         self.search_query = ""
                         self.highlight_line_number = 0
-                    elif 32 <= c <= 126:
-                        self.search_query += chr(c)
+                    else:
+                        inserted = tui_text.insertable_text_for_key(raw_key)
+                        if not inserted:
+                            continue
+                        self.search_query += inserted
                         self.highlight_line_number = 0
 
         except KeyboardInterrupt:

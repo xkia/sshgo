@@ -20,6 +20,14 @@ class AuditTests(unittest.TestCase):
     def _manager(self, temp_dir):
         return manager_for_config(temp_dir, hosts=[jump_with_target()])
 
+    def test_history_reader_does_not_create_missing_data_dir(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = os.path.join(temp_dir, "missing")
+            audit = AuditLogger(data_dir)
+
+            self.assertEqual(audit.get_history(), [])
+            self.assertFalse(os.path.exists(data_dir))
+
     def test_audit_trim_is_batched(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             audit = AuditLogger(temp_dir)

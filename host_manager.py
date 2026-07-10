@@ -3,9 +3,6 @@
 
 import os
 import sys
-import getpass
-import base64
-import binascii
 import uuid
 import copy
 from datetime import datetime, timezone
@@ -29,11 +26,12 @@ from config_validation import (
     PLACEHOLDER_NAME_RE,
     PLACEHOLDER_RE,
     PLACEHOLDER_TOKEN_RE,
+    config_without_removed_encryption,
     default_config as _default_config,
     merge_config as _merge_config,
     validate_hosts_config as _validate_hosts_config,
+    validate_hosts_config_for_load as _validate_hosts_config_for_load,
 )
-from crypto import encrypt, decrypt, derive_key
 from config_parser import SshConfigParser
 from i18n import i18n
 from audit_logger import AuditLogger
@@ -55,7 +53,6 @@ class HostManager:
     def __init__(self, config_path, data_dir=None, auto_migrate=False):
         self.json_path = config_path
         self.store = ConfigStore(config_path)
-        self.master_password = None
         self.config = {}
         self.hosts = []
         self._data_dir_override = data_dir or os.getenv("SSHGO_DATA_DIR")
@@ -64,7 +61,7 @@ class HostManager:
         self._nodes_migrated = False
         self._config_fingerprint = None
         self.last_save_error = None
-        self._load_and_decrypt_hosts()
+        self._load_hosts()
         self._load_from_ssh_config()
         host_tree.rebuild_nest_parents(self.hosts)
         self._sync_runtime_state_from_config()
@@ -337,31 +334,7 @@ class HostManager:
                 }
                 self.hosts.append(config_group)
 
-    def _get_master_password(self, force_prompt=False):
-        if self.master_password is None or force_prompt:
-            try:
-                self.master_password = getpass.getpass("Enter Master Password: ")
-            except (KeyboardInterrupt, EOFError):
-                print("\nOperation cancelled.")
-                sys.exit(0)
-        return self.master_password
-
-    def _decode_encryption_salt_or_exit(self, salt_b64):
-        try:
-            salt = base64.b64decode(
-                str(salt_b64).encode("utf-8"),
-                altchars=b"-_",
-                validate=True,
-            )
-        except (binascii.Error, ValueError):
-            print("Error: encryption_salt is not valid URL-safe base64.")
-            sys.exit(1)
-        if not salt:
-            print("Error: encryption_salt is empty.")
-            sys.exit(1)
-        return salt
-
-    def _load_and_decrypt_hosts(self):
+    def _load_hosts(self):
         try:
             data = self._read_config_file()
         except FileNotFoundError:
@@ -373,7 +346,16 @@ class HostManager:
             print("Please fix the file or delete it to start over.")
             sys.exit(1)
 
-        cfg = data.get("config", {})
+        cfg = data.get("config", {}) if isinstance(data, dict) else {}
+        if isinstance(cfg, dict) and isinstance(cfg.get("language"), str):
+            i18n.set_language(cfg["language"])
+        errors = _validate_hosts_config_for_load(data)
+        if errors:
+            print(i18n.get("validate_failed") + ":", file=sys.stderr)
+            for error in errors:
+                print(f"  - {error}", file=sys.stderr)
+            sys.exit(1)
+
         merged = _merge_config(cfg)
         self.config = merged
         self.hosts = data.get("hosts", [])
@@ -382,68 +364,13 @@ class HostManager:
             self._new_node_id,
         )
 
-        if self.config.get("encryption_enabled"):
-            first_cred_node = next(
-                (
-                    n
-                    for n in host_tree.traverse_all(self.hosts)
-                    if self._node_has_credentials(n)
-                ),
-                None,
-            )
-            if first_cred_node is not None:
-                salt_b64 = self.config.get("encryption_salt")
-                if not salt_b64:
-                    print("Error: Encryption is enabled, but no salt found in config.")
-                    print(
-                        "Your hosts.json file might be corrupted or from an older version."
-                    )
-                    sys.exit(1)
-
-                if not isinstance(salt_b64, str):
-                    print("Error: encryption_salt is not a valid string.")
-                    sys.exit(1)
-                salt = self._decode_encryption_salt_or_exit(salt_b64)
-                password = self._get_master_password()
-
-                encrypted_fields = [
-                    (node, key, node.get(key))
-                    for node in host_tree.traverse_all(self.hosts)
-                    for key in ("password", "mfa_secret")
-                    if node.get(key)
-                ]
-
-                derived_key = derive_key(password, salt)
-                self._decrypt_all_nodes(self.hosts, derived_key)
-
-                for node, key, ciphertext in encrypted_fields:
-                    if ciphertext and node.get(key) == ciphertext:
-                        print("\nError: Decryption failed. Incorrect Master Password?")
-                        sys.exit(1)
-
-    def _node_has_credentials(self, node):
-        return node.get("password") or node.get("mfa_secret")
-
     def _new_node_id(self):
         return uuid.uuid4().hex
-
-    def _apply_crypto(self, nodes, key, fn):
-        for node in nodes:
-            if node.get("type") == "host":
-                if node.get("password"):
-                    node["password"] = fn(node["password"], key)
-                if node.get("mfa_secret"):
-                    node["mfa_secret"] = fn(node["mfa_secret"], key)
-            if node.get("children"):
-                self._apply_crypto(node["children"], key, fn)
-
-    def _decrypt_all_nodes(self, nodes, key):
-        self._apply_crypto(nodes, key, decrypt)
 
     def _clean_nodes_for_saving(self, nodes):
         clean_nodes = []
         for node in nodes:
-            if "ssh_config" in node.get("source", ""):
+            if host_tree.is_ssh_config_node(node):
                 continue
 
             clean_node = {k: v for k, v in node.items() if k in ALLOWED_SAVE_KEYS}
@@ -526,49 +453,20 @@ class HostManager:
         if self._config_changed_since_load():
             return self._record_save_conflict()
 
-        derived_key = b""
-        if self.config.get("encryption_enabled"):
-            password = self._get_master_password()
-            if not password:
-                self.last_save_error = "Master password cannot be empty. Save cancelled."
-                print(self.last_save_error)
-                return False
-
-            salt_b64 = self.config.get("encryption_salt")
-            if salt_b64 and isinstance(salt_b64, str):
-                try:
-                    salt = base64.b64decode(
-                        salt_b64.encode("utf-8"),
-                        altchars=b"-_",
-                        validate=True,
-                    )
-                    if not salt:
-                        raise ValueError("empty salt")
-                except (binascii.Error, ValueError):
-                    self.last_save_error = (
-                        "encryption_salt is not valid URL-safe base64. Save cancelled."
-                    )
-                    print(self.last_save_error)
-                    return False
-            else:
-                salt = os.urandom(16)
-                self.config["encryption_salt"] = base64.urlsafe_b64encode(salt).decode(
-                    "utf-8"
-                )
-
-            derived_key = derive_key(password, salt)
-
         cleaned_hosts = self._clean_nodes_for_saving(self.hosts)
-
-        if self.config.get("encryption_enabled"):
-            self._encrypt_all_nodes(cleaned_hosts, derived_key)
-
-        final_data = {"config": self.config, "hosts": cleaned_hosts}
+        cleaned_config = config_without_removed_encryption(self.config)
+        final_data = {"config": cleaned_config, "hosts": cleaned_hosts}
+        errors = _validate_hosts_config(final_data)
+        if errors:
+            self.last_save_error = i18n.get("validate_failed") + ": " + "; ".join(errors)
+            print(self.last_save_error, file=sys.stderr)
+            return False
 
         try:
             self._atomic_write_json(final_data)
         except ConfigWriteConflictError:
             return self._record_save_conflict()
+        self.config = cleaned_config
         self._nodes_migrated = False
         self._config_fingerprint = self.store.fingerprint()
         return True
@@ -589,7 +487,7 @@ class HostManager:
 
     def _reload_config_state_after_conflict(self):
         try:
-            self._load_and_decrypt_hosts()
+            self._load_hosts()
             self._load_from_ssh_config()
             host_tree.rebuild_nest_parents(self.hosts)
             self._sync_runtime_state_from_config()
@@ -621,9 +519,6 @@ class HostManager:
             index,
             validate_func=_validate_hosts_config,
         )
-
-    def _encrypt_all_nodes(self, nodes, key):
-        self._apply_crypto(nodes, key, encrypt)
 
     def find_host_by_alias(self, alias):
         result = self.resolve_host_alias(alias)
@@ -872,34 +767,6 @@ class HostManager:
             details.append(("Config Error", str(e)))
 
         return details
-
-    def toggle_encryption(self):
-        is_currently_enabled = self.config.get("encryption_enabled", False)
-        if is_currently_enabled:
-            print("Encryption is ON. This will convert config to PLAINTEXT.")
-            if input("Are you sure? (y/n): ").lower() != "y":
-                print("Aborted.")
-                return
-            self.config["encryption_enabled"] = False
-            # Remove salt when turning off encryption
-            if "encryption_salt" in self.config:
-                del self.config["encryption_salt"]
-        else:
-            print("Encryption is OFF. This will ENCRYPT the config.")
-            self.master_password = None
-            # Force prompt for a new password. A new salt will be generated on save.
-            key = self._get_master_password(force_prompt=True)
-            if not key:
-                print("Master password cannot be empty. Aborting.")
-                return
-            self.config["encryption_enabled"] = True
-            # Clear any old salt to ensure a new one is generated
-            self.config["encryption_salt"] = None
-
-        if not self._save_hosts():
-            return
-        status = "ON" if self.config["encryption_enabled"] else "OFF"
-        print(f"Success: Encryption is now {status}.")
 
     def _connection_planner(self):
         return ConnectionPlanner(self, SCRIPT_DIR)

@@ -249,34 +249,44 @@ class ValidationTests(unittest.TestCase):
 
                 self.assertIn("Invalid host endpoint", "\n".join(errors))
 
-    def test_validation_rejects_invalid_or_missing_encryption_salt(self):
-        invalid = validate_hosts_config(
+    def test_validation_rejects_removed_encryption_config_and_ciphertext(self):
+        active = validate_hosts_config(
             {
                 "config": {
-                    "encryption_salt": "not valid base64!?",
+                    "encryption_enabled": True,
+                    "encryption_salt": "legacy-salt",
                 },
                 "hosts": [],
             }
         )
-        self.assertIn("encryption_salt must be valid", "\n".join(invalid))
+        self.assertIn("encryption is no longer supported", "\n".join(active).lower())
 
-        missing = validate_hosts_config(
+        ciphertext = validate_hosts_config(
             {
-                "config": {
-                    "encryption_enabled": True,
-                },
+                "config": {},
                 "hosts": [
                     {
                         "type": "host",
                         "name": "encrypted",
                         "host": "example.com",
                         "user": "deploy",
-                        "password": "ciphertext",
+                        "password": "v2:ciphertext",
                     }
                 ],
             }
         )
-        self.assertIn("encryption_salt is required", "\n".join(missing))
+        self.assertIn("Encrypted credential", "\n".join(ciphertext))
+
+        inactive = validate_hosts_config(
+            {
+                "config": {
+                    "encryption_enabled": False,
+                    "encryption_salt": None,
+                },
+                "hosts": [],
+            }
+        )
+        self.assertEqual(inactive, [])
 
     def test_validate_config_schema_rejects_invalid_known_values(self):
         errors = validate_hosts_config(
@@ -291,7 +301,6 @@ class ValidationTests(unittest.TestCase):
                     "recent_expanded": 0,
                     "language": "jp",
                     "data_dir": 42,
-                    "encryption_salt": False,
                     "theme": {
                         "highlight_fg": "green",
                         "highlight_bg": "purple",
@@ -308,9 +317,37 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("config.show_recent must be true or false", joined)
         self.assertIn("Invalid language: jp", joined)
         self.assertIn("config.data_dir must be a string or null", joined)
-        self.assertIn("config.encryption_salt must be a string or null", joined)
         self.assertIn("Invalid theme color for highlight_bg: purple", joined)
         self.assertIn("Unknown theme field: extra", joined)
+
+    def test_validate_node_specific_fields_and_types(self):
+        errors = validate_hosts_config(
+            {
+                "config": {"data_dir": ""},
+                "hosts": [
+                    {
+                        "type": "group",
+                        "name": "bad-group",
+                        "password": "secret",
+                        "children": [],
+                    },
+                    {
+                        "type": "host",
+                        "name": "bad-host",
+                        "host": "example.com",
+                        "use_ssh_agent": "false",
+                        "children": {},
+                    },
+                ],
+            }
+        )
+
+        joined = "\n".join(errors)
+        self.assertIn("config.data_dir", joined)
+        self.assertIn("password", joined)
+        self.assertIn("Missing required field 'user'", joined)
+        self.assertIn("use_ssh_agent must be true or false", joined)
+        self.assertIn("'children' must be an array", joined)
 
     def test_validate_config_schema_allows_unknown_config_keys(self):
         errors = validate_hosts_config(

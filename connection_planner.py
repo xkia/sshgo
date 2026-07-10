@@ -364,7 +364,6 @@ class ConnectionPlanner:
                 args,
                 secrets,
                 nest_parent,
-                include_identity_file=False,
             )
 
         if not nest_parent:

@@ -73,13 +73,18 @@ def contains_hosts(node):
     return False
 
 
+def is_ssh_config_node(node):
+    source = node.get("source", "")
+    return isinstance(source, str) and "ssh_config" in source
+
+
 def ensure_node_ids(nodes, new_id, seen_ids=None):
     if seen_ids is None:
         seen_ids = set()
 
     changed = False
     for node in nodes:
-        if "ssh_config" in node.get("source", ""):
+        if is_ssh_config_node(node):
             continue
 
         node_id = node.get("id")
