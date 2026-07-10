@@ -25,7 +25,7 @@ Supports password, key-based, and MFA/TOTP authentication, nested jump hosts, cu
 -   **Nested Jump Hosts**: Intuitively configure jump hosts by nesting `host` nodes in the configuration.
 -   **Custom ProxyCommand**: Connect direct hosts through local proxy commands such as `nc -X 5 -x {{local_socks}} %h %p`.
 -   **Config Placeholders**: Reuse strings like domains, users, key paths, proxy endpoints, and relay directories with `{{name}}`.
--   **Optional Credential Encryption**: Secure your saved passwords and MFA secrets with a master password. Encryption can be toggled on or off.
+-   **User-owned Credentials**: Passwords and MFA secrets are optional plain config values; protect the config and backups with owner-only permissions, or rely on keys, SSH agent, or manual prompts.
 -   **~/.ssh/config Import**: Automatically import and group hosts from your existing `~/.ssh/config` file.
 -   **Multi-language Support**: English and Chinese UI via `config.language`.
 -   **Connection History & Audit**: Recent connections tracked in TUI with stable node identity and JSONL audit logs.
@@ -132,7 +132,6 @@ sshgo
 
 | Option | Purpose |
 | --- | --- |
-| `--toggle-encryption` | Enable or disable master password encryption for `hosts.json`. |
 | `--history [--limit N] [--filter name]` | Show recent connection history. |
 | `--validate` | Validate the selected configuration without saving. |
 | `--doctor` | Check config, dependencies, bundled scripts, runtime data, SSH agent, and host key mode. |
@@ -204,9 +203,9 @@ Common host fields:
 | `host` | Hostname or IP address. Do not append `:port`; use `port` instead. |
 | `port` | Optional SSH port. Defaults to `22`. |
 | `user` | SSH username. |
-| `password` | Password auth value, optionally encrypted by sshgo. |
+| `password` | Optional plain password auth value. |
 | `id_file` | Private key path. |
-| `mfa_secret` | Optional TOTP secret. |
+| `mfa_secret` | Optional plain TOTP secret. |
 | `use_ssh_agent` | Optional per-host override for global SSH agent use. |
 | `children` | Nested hosts; a host with children becomes a jump host. |
 
@@ -216,7 +215,6 @@ Optional `config` fields include:
 
 | Field | Purpose |
 | --- | --- |
-| `encryption_enabled`, `encryption_salt` | Managed by `--toggle-encryption`. |
 | `show_detail_pane`, `show_recent`, `recent_expanded` | TUI display state. |
 | `audit_full`, `data_dir` | Runtime audit behavior and runtime data directory. `SSHGO_DATA_DIR` overrides `data_dir` for one process. |
 | `strict_host_key_checking` | `true` uses OpenSSH `accept-new`; `false` uses the older loose mode. |
@@ -230,6 +228,8 @@ Optional `config` fields include:
 | `theme` | Optional TUI colors: `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, `default`. |
 
 Runtime history and audit logs are separate from `hosts.json` and default to `~/.sshgo/history.jsonl`, `audit-simple.jsonl`, and `audit-full.jsonl` when full audit is enabled. Config saves keep a small backup rotation beside the config file: `hosts.json.bak`, `.bak.1`, and `.bak.2`.
+
+sshgo does not encrypt credentials at rest. Protect `hosts.json` and every rotated backup with owner-only filesystem permissions. Configs from older releases with active encryption or `v2:` credentials are rejected; use a pre-removal release to save plaintext credentials before upgrading.
 
 When terminal titles are enabled, `terminal_title_target: "tab"` works in Ghostty through its window-title compatible sequence. If Ghostty shell integration rewrites the title at the next prompt, set `shell-integration-features = no-title` in Ghostty config. sshgo does not restore the previous title after the remote session exits.
 

@@ -26,11 +26,17 @@ class ConnectionRuntime:
         self.output_is_tty = output_is_tty or self._default_output_is_tty
 
     def execute(self, plan):
-        self.ensure_executable(plan.script_path)
         try:
             self.emit_terminal_title(plan)
             self.record_plan_audit(plan, plan.start_result)
-            os.execve(plan.script_path, plan.launch_args(), env_for_plan(plan))
+            self.ensure_executable(plan.script_path)
+            env = env_for_plan(plan)
+            env["SSHGO_PYTHON_EXECUTABLE"] = sys.executable
+            python_dir = os.path.dirname(sys.executable)
+            path_parts = env.get("PATH", "").split(os.pathsep)
+            if python_dir and python_dir not in path_parts:
+                env["PATH"] = os.pathsep.join([python_dir] + path_parts)
+            os.execve(plan.script_path, plan.launch_args(), env)
         except FileNotFoundError:
             self.record_plan_audit(plan, plan.missing_result)
             if plan.missing_message:
@@ -73,10 +79,11 @@ class ConnectionRuntime:
 
     @staticmethod
     def ensure_executable(script_path):
-        try:
-            os.chmod(script_path, 0o755)
-        except FileNotFoundError:
-            pass
+        if os.access(script_path, os.X_OK):
+            return
+        os.chmod(script_path, 0o755)
+        if not os.access(script_path, os.X_OK):
+            raise PermissionError(f"Script is not executable: {script_path}")
 
     def _default_output_is_tty(self):
         isatty = getattr(self.output, "isatty", None)

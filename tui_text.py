@@ -54,6 +54,22 @@ def ellipsize(value, width, tail=False):
     return _take_cells(value, width - 3) + "..."
 
 
+def text_viewport(value, cursor, width):
+    value = str(value)
+    width = max(1, int(width))
+    cursor = max(0, min(int(cursor), len(value)))
+    start = cursor
+    used = 0
+    while start > 0:
+        next_width = char_width(value[start - 1])
+        if used + next_width > width:
+            break
+        used += next_width
+        start -= 1
+    visible = _take_cells(value[start:], width)
+    return visible, display_width(value[start:cursor])
+
+
 def matches_key(key, *candidates):
     return any(key == candidate for candidate in candidates)
 

@@ -61,7 +61,7 @@ The project should avoid broad, low-frequency feature expansion unless repeated 
 - add candidate: insert the new node into a cleaned copy of the current tree
 - update candidate: replace the existing node in a cleaned copy of the current tree
 
-No validation helper should write files, assign permanent IDs, encrypt secrets, or mutate the active tree.
+No validation helper should write files, assign permanent IDs, transform secrets, or mutate the active tree.
 
 The TUI should call these helpers after form data is normalized but before `add_node()` or `update_node()`. Errors are displayed in the TUI and the save operation is cancelled.
 

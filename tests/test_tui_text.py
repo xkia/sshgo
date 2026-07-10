@@ -17,6 +17,15 @@ class TuiTextTests(unittest.TestCase):
         self.assertEqual(tui_text.ellipsize("abc主机", 5, tail=True), "...机")
         self.assertEqual(tui_text.truncate_cells("主机", 3), "主")
 
+    def test_text_viewport_uses_display_cells_for_wide_characters(self):
+        visible, cursor_x = tui_text.text_viewport("ab主机", 4, 4)
+        self.assertEqual(visible, "主机")
+        self.assertEqual(cursor_x, 4)
+
+        visible, cursor_x = tui_text.text_viewport("主机abc", 1, 4)
+        self.assertEqual(visible, "主机")
+        self.assertEqual(cursor_x, 2)
+
     def test_insertable_text_filters_non_printable(self):
         self.assertEqual(tui_text.insertable_text_for_key("a\nb"), "ab")
         self.assertEqual(tui_text.insertable_text_for_key(65), "A")

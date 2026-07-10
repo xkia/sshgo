@@ -5,12 +5,12 @@ import os
 import shutil
 import stat
 
+from cli_config import load_config_snapshot
 from config_store import ConfigStore
 from config_validation import (
     DEFAULT_TUI_SCREEN_POLICY,
     TUI_SCREEN_POLICIES,
     merge_config,
-    validate_hosts_config,
 )
 from host_manager import HostManager
 from i18n import i18n
@@ -72,14 +72,7 @@ def _doctor_terminal_screen(effective_config, tui_cls=Tui):
 
 
 def _doctor_config_snapshot(config_path):
-    try:
-        data = ConfigStore(config_path).read()
-    except FileNotFoundError:
-        return None, [i18n.get("validate_config_not_found", path=config_path)]
-    except Exception as e:
-        return None, [f"{i18n.get('validate_config_invalid')}: {e}"]
-
-    return data, validate_hosts_config(data)
+    return load_config_snapshot(config_path)
 
 
 def _doctor_raw_config(config_snapshot):
@@ -104,11 +97,6 @@ def _doctor_effective_config(config_snapshot):
     return merge_config(raw_config)
 
 
-def _config_snapshot_encrypted(config_snapshot):
-    config = _doctor_effective_config(config_snapshot or {})
-    return config.get("encryption_enabled") is True
-
-
 def run_doctor_for_path(
     config_path,
     data_dir=None,
@@ -127,7 +115,7 @@ def run_doctor_for_path(
         i18n.set_language(lang)
 
     host_manager = None
-    if not config_errors and not _config_snapshot_encrypted(data):
+    if not config_errors:
         try:
             host_manager = host_manager_cls(
                 config_path,
@@ -159,6 +147,11 @@ def run_doctor(host_manager, config_path, config_errors=None,
     if os.path.exists(config_path):
         _doctor_line("PASS", "Config path", config_path)
         _doctor_permission_warning(config_path, "Config permissions")
+        for backup in ConfigStore.list_backups_for(config_path):
+            _doctor_permission_warning(
+                backup["path"],
+                f"Config backup [{backup['index']}] permissions",
+            )
     else:
         _doctor_line("FAIL", "Config path", f"not found: {config_path}")
         failed = True

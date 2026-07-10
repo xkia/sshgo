@@ -5,6 +5,7 @@
 - status: approved
 - owner: Engineer
 - related_roadmap: docs/roadmap.md#2026-06
+- superseded_scope: credential encryption was removed by credential-ownership-and-reliability-hardening
 
 ## 背景与范围
 
@@ -12,7 +13,6 @@
 
 ### 范围
 
-- 凭证加密改为带认证的 stdlib 实现，并兼容旧密文读取
 - 密码、MFA secret 不再通过命令行参数传递给 Expect 脚本；TOTP code 在 prompt 到达时实时生成
 - SSH/SFTP 默认使用系统 `known_hosts`，并拒绝 changed host key
 - Python 仅作为连接 manager，启动 Expect 后用 `execve` 替换自身，不持有会话生命周期
@@ -21,36 +21,21 @@
 
 ### 非目标
 
-- 不引入 `cryptography` 等外部依赖
+- 不引入外部 Python 依赖
 - 不在本次把 Expect 全量替换成 Python pty
 - 不改变现有配置文件主结构
 - 不实现连接最终退出码或会话耗时记录；当前审计语义保持为启动/exec 失败记录
 
 ## 验收标准
 
-1. 旧版 XOR+Base64 密文仍可解密，保存后写为新版带前缀密文
-2. `login.exp` / `sftp_login.exp` 的进程参数中不包含密码或 MFA secret，且不预生成 TOTP code
-3. 默认 SSH/SFTP 命令不再使用 `UserKnownHostsFile=/dev/null`
-4. 配置 `strict_host_key_checking: false` 时可恢复旧的宽松行为
-5. Python 使用 `os.execve()` 启动 Expect，不在 SSH/SFTP 会话期间保留父进程
-6. TUI Recent 分组读取最近 10 条历史并去重
-7. 规格记录 Python pty 与 Expect 的取舍
+1. `login.exp` / `sftp_login.exp` 的进程参数中不包含密码或 MFA secret，且不预生成 TOTP code
+2. 默认 SSH/SFTP 命令不再使用 `UserKnownHostsFile=/dev/null`
+3. 配置 `strict_host_key_checking: false` 时可恢复旧的宽松行为
+4. Python 使用 `os.execve()` 启动 Expect，不在 SSH/SFTP 会话期间保留父进程
+5. TUI Recent 分组读取最近 10 条历史并去重
+6. 规格记录 Python pty 与 Expect 的取舍
 
 ## 技术设计
-
-### 凭证加密
-
-保持 PBKDF2-HMAC-SHA256 派生主密钥，新增 v2 密文格式：
-
-```text
-v2:<base64(nonce || ciphertext || hmac_tag)>
-```
-
-- 加密流：`HMAC-SHA256(enc_key, nonce || counter)` 生成 keystream
-- 完整性：`HMAC-SHA256(mac_key, nonce || ciphertext)`，截取完整 32 字节 tag
-- 兼容：无 `v2:` 前缀时按旧版 XOR 解密
-
-这是 stdlib 条件下的防篡改改进，不宣称等同于 AES-GCM。后续如允许依赖，应迁移到成熟 AEAD。
 
 ### 敏感参数传递
 
@@ -64,6 +49,8 @@ SSHGO_JUMPER_MFA_SECRET
 ```
 
 Expect 启动后立即读取这些变量并 `unset env(...)`，避免继续传给 `ssh` / `sftp` 子进程。
+
+凭证静态存储边界由 [credential-ownership-and-reliability-hardening.md](credential-ownership-and-reliability-hardening.md) 定义：sshgo 不加密 `password` 或 `mfa_secret`，用户负责配置和备份权限。
 
 ### 进程模型与审计
 

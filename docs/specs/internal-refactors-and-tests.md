@@ -14,7 +14,7 @@ This spec records the accepted internal module and test-suite boundaries after t
 
 ## Scope
 
-- Keep user-visible SSH, SFTP, relay, config, audit, encryption, and TUI behavior unchanged.
+- Keep user-visible SSH, SFTP, relay, config, audit, credential handoff, and TUI behavior unchanged.
 - Keep Python stdlib-only.
 - Keep `HostManager` as the public facade for CLI and TUI callers.
 - Prefer direct imports from focused modules for tests and internal code; do not keep
@@ -32,7 +32,7 @@ This spec records the accepted internal module and test-suite boundaries after t
 | Config storage | `config_store.py` | JSONC read support, atomic JSON writes, stale-write fingerprints, and backup rotation/list/restore |
 | Config validation | `config_validation.py` | Pure parsed-config validation, placeholder/jump-mode constants, and localized validation messages |
 | Host tree | `host_tree.py` | Pure traversal, lookup, replacement, parent/index lookup, runtime parent-link rebuilding, and node ID assignment helpers |
-| Host facade | `host_manager.py` | Config lifecycle, encryption/decryption, CRUD, validation delegation, alias lookup, and user-facing execute/preview methods |
+| Host facade | `host_manager.py` | Config lifecycle, CRUD, validation delegation, alias lookup, and user-facing execute/preview methods |
 | Connection errors | `connection_errors.py` | Shared runtime/config exceptions |
 | Connection plan | `connection_plan.py` | `CommandPlan`, secret environment mapping, and UTF-8 locale normalization for Expect handoff |
 | Connection planner | `connection_planner.py` | SSH, SFTP, interactive SFTP, and relay `CommandPlan` construction without importing `host_manager.py` |

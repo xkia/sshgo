@@ -529,6 +529,93 @@ class ConnectionAuthAuditTests(unittest.TestCase):
         self.assertIn("%%h %%p", rendered)
         self.assertIn("-W %h:%p", rendered)
 
+    def test_login_exp_consumes_option_shaped_proxy_value(self):
+        result = subprocess.run(
+            [
+                "./login.exp",
+                "-h",
+                "target.internal",
+                "-u",
+                "targetuser",
+                "-proxy-command",
+                "-h",
+                "-print-command",
+                "1",
+            ],
+            cwd=os.getcwd(),
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        rendered = result.stdout.strip()
+        self.assertIn("'ProxyCommand=-h'", rendered)
+        self.assertIn("'targetuser@target.internal'", rendered)
+
+    def test_login_tunnel_prompts_use_only_matching_hop_password(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fake_ssh = os.path.join(temp_dir, "ssh")
+            answer_path = os.path.join(temp_dir, "answer.txt")
+            with open(fake_ssh, "w", encoding="utf-8") as f:
+                f.write(
+                    """#!/usr/bin/env python3
+import os
+import select
+import sys
+
+sys.stdout.write(os.environ["SSHGO_FAKE_PROMPT"])
+sys.stdout.flush()
+ready, _, _ = select.select([sys.stdin], [], [], 0.5)
+answer = sys.stdin.readline().strip() if ready else ""
+with open(os.environ["SSHGO_FAKE_ANSWER_PATH"], "w", encoding="utf-8") as f:
+    f.write(answer)
+"""
+                )
+            os.chmod(fake_ssh, 0o755)
+            env = os.environ.copy()
+            env["PATH"] = temp_dir + os.pathsep + env.get("PATH", "")
+            env["SSHGO_TARGET_PASS"] = "target-secret"
+            env["SSHGO_JUMPER_PASS"] = "jump-secret"
+            env["SSHGO_FAKE_ANSWER_PATH"] = answer_path
+
+            for prompt, expected in (
+                ("jumpuser@jump.example.com's password: ", "jump-secret"),
+                ("targetuser@target.internal's password: ", "target-secret"),
+                ("password: ", ""),
+            ):
+                with self.subTest(prompt=prompt):
+                    if os.path.exists(answer_path):
+                        os.unlink(answer_path)
+                    env["SSHGO_FAKE_PROMPT"] = prompt
+                    subprocess.run(
+                        [
+                            "./login.exp",
+                            "-h",
+                            "target.internal",
+                            "-u",
+                            "targetuser",
+                            "-J",
+                            "jumpuser@jump.example.com:2200",
+                            "-jump-mode",
+                            "tunnel",
+                            "-tunnel-proxy-command",
+                            "ssh -W %h:%p jumpuser@jump.example.com",
+                        ],
+                        cwd=os.getcwd(),
+                        env=env,
+                        stdin=subprocess.DEVNULL,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=5,
+                    )
+                    answer = ""
+                    if os.path.exists(answer_path):
+                        with open(answer_path, "r", encoding="utf-8") as f:
+                            answer = f.read().strip()
+                    self.assertEqual(answer, expected)
+
     def test_login_exp_print_command_unwraps_ipv6_shell_jump_target(self):
         result = subprocess.run(
             [

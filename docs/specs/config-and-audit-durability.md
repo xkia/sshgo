@@ -39,7 +39,7 @@ This keeps attention on reliability for daily workflows without adding low-frequ
 ## Acceptance Criteria
 
 1. `validate_hosts_config()` reports invalid types for known boolean config fields.
-2. `validate_hosts_config()` reports invalid `language`, `data_dir`, `encryption_salt`, and `theme` values.
+2. `validate_hosts_config()` reports invalid `language`, `data_dir`, and `theme` values.
 3. `validate_hosts_config()` reports invalid non-negative integer config values.
 4. Valid theme colors continue to pass validation.
 5. Unknown top-level config keys do not fail validation.
@@ -57,7 +57,6 @@ Add a small validator for known `config` keys before merged defaults are used by
 Known booleans:
 
 ```text
-encryption_enabled
 import_ssh_config
 show_detail_pane
 audit_full
@@ -85,7 +84,6 @@ Optional strings:
 
 ```text
 data_dir
-encryption_salt
 ```
 
 Non-negative integers:

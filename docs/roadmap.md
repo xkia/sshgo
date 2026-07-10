@@ -32,6 +32,7 @@
 | Terminal title | done | Optional terminal tab/window titles are emitted before SSH, SFTP, transfer, and relay handoff without changing Expect supervision | [terminal-title](specs/terminal-title.md) |
 | SFTP batch mode hardening | done | Direct/tunnel SFTP transfer success is determined by OpenSSH `sftp` batch-mode exit status rather than localized output text, while password/key/MFA prompt handling remains compatible | [sftp-batch-mode-hardening](specs/sftp-batch-mode-hardening.md) |
 | Interactive SFTP session | done | `sshgo --sftp <alias>` opens a standard interactive `sftp>` prompt for direct/tunnel hosts, keeps `<alias> sftp` as a remote SSH command, and rejects relay before handoff | [interactive-sftp-session](specs/interactive-sftp-session.md) |
+| Credential ownership and reliability hardening | done | Built-in credential encryption is removed; legacy ciphertext fails safely; read-only CLI paths stay side-effect free; config schema, Expect prompt routing/argument parsing, Unicode TUI input, executable checks, and verification are hardened | [credential-ownership-and-reliability-hardening](specs/credential-ownership-and-reliability-hardening.md) |
 
 ## Future Candidates
 

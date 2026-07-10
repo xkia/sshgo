@@ -16,6 +16,7 @@
 | [host-port-schema-split.md](specs/host-port-schema-split.md) | Current host address plus optional port schema |
 | [runtime-separation.md](specs/runtime-separation.md) | Runtime data separation, history, audit, SSH agent |
 | [security-hardening.md](specs/security-hardening.md) | Secret handling, host key policy, Expect handoff |
+| [credential-ownership-and-reliability-hardening.md](specs/credential-ownership-and-reliability-hardening.md) | Plain credential ownership, legacy-encryption rejection, read-only CLI paths, schema validation, prompt routing, and Unicode/runtime hardening |
 | [jump-host-connection-modes.md](specs/jump-host-connection-modes.md) | Configurable SSH/transfer jump modes |
 | [custom-proxy-command.md](specs/custom-proxy-command.md) | Host-level custom OpenSSH ProxyCommand and placeholders |
 | [cli-safety-and-diagnostics.md](specs/cli-safety-and-diagnostics.md) | Ambiguous alias protection, command preview, doctor checks, and jump-depth validation |

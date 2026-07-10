@@ -108,6 +108,97 @@ class SftpExpectTests(unittest.TestCase):
         self.assertNotIn("# batch:", rendered)
         self.assertIn("ProxyCommand=ssh -o ProxyCommand=", rendered)
 
+    def test_sftp_exp_consumes_option_shaped_path_value(self):
+        result = subprocess.run(
+            [
+                "./sftp_login.exp",
+                "-h",
+                "target.internal",
+                "-u",
+                "targetuser",
+                "-action",
+                "upload",
+                "-local",
+                "-h",
+                "-remote",
+                "/tmp/remote.txt",
+                "-print-command",
+                "1",
+            ],
+            cwd=os.getcwd(),
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertIn('# batch: put "-h" "/tmp/remote.txt"', result.stdout)
+
+    def test_sftp_tunnel_prompts_use_only_matching_hop_password(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fake_sftp = os.path.join(temp_dir, "sftp")
+            answer_path = os.path.join(temp_dir, "answer.txt")
+            with open(fake_sftp, "w", encoding="utf-8") as f:
+                f.write(
+                    """#!/usr/bin/env python3
+import os
+import select
+import sys
+
+sys.stdout.write(os.environ["SSHGO_FAKE_PROMPT"])
+sys.stdout.flush()
+ready, _, _ = select.select([sys.stdin], [], [], 0.5)
+answer = sys.stdin.readline().strip() if ready else ""
+with open(os.environ["SSHGO_FAKE_ANSWER_PATH"], "w", encoding="utf-8") as f:
+    f.write(answer)
+"""
+                )
+            os.chmod(fake_sftp, 0o755)
+            env = os.environ.copy()
+            env["PATH"] = temp_dir + os.pathsep + env.get("PATH", "")
+            env["TMPDIR"] = temp_dir
+            env["SSHGO_TARGET_PASS"] = "target-secret"
+            env["SSHGO_JUMPER_PASS"] = "jump-secret"
+            env["SSHGO_FAKE_ANSWER_PATH"] = answer_path
+
+            for prompt, expected in (
+                ("jumpuser@jump.example.com's password: ", "jump-secret"),
+                ("targetuser@target.internal's password: ", "target-secret"),
+                ("password: ", ""),
+            ):
+                with self.subTest(prompt=prompt):
+                    env["SSHGO_FAKE_PROMPT"] = prompt
+                    result = subprocess.run(
+                        [
+                            "./sftp_login.exp",
+                            "-h",
+                            "target.internal",
+                            "-u",
+                            "targetuser",
+                            "-J",
+                            "jumpuser@jump.example.com:2200",
+                            "-tunnel-proxy-command",
+                            "ssh -W %h:%p jumpuser@jump.example.com",
+                            "-action",
+                            "upload",
+                            "-local",
+                            "local.txt",
+                            "-remote",
+                            "/tmp/remote.txt",
+                        ],
+                        cwd=os.getcwd(),
+                        env=env,
+                        stdin=subprocess.DEVNULL,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=5,
+                    )
+                    with open(answer_path, "r", encoding="utf-8") as f:
+                        answer = f.read().strip()
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(answer, expected)
+
     def test_sftp_exp_print_command_brackets_ipv6_target(self):
         result = subprocess.run(
             [

@@ -20,7 +20,10 @@
 Endpoint storage behavior in the original version of this spec was superseded
 by `docs/specs/host-port-schema-split.md`. Current host nodes store address and
 port separately, and no longer accept combined `host:port` config values. The
-remaining active scope of this spec is diagnostics, permissions, SSH config
+credential-encryption diagnostics and salt validation were superseded by
+`docs/specs/credential-ownership-and-reliability-hardening.md`: active legacy
+encryption is now rejected and no master-password path remains. The remaining
+active scope of this spec is diagnostics, permissions, SSH config
 import hardening, TUI text width, host-key wording, and Expect prompt
 compatibility.
 
@@ -32,8 +35,6 @@ A project-wide review found several compatibility and robustness gaps in otherwi
   and port were split on the first colon. Current endpoint storage is governed
   by `host-port-schema-split.md`.
 - Interactive SSH and relay shell paths depend on narrow shell prompt regexes.
-- `--doctor` may prompt for a master password on encrypted configs, making diagnostics less script-friendly.
-- Invalid encryption salt values pass validation but fail during normal load/save.
 - Config, audit, and history files can retain or inherit broad permissions.
 - `~/.ssh/config` import handles only a small subset of OpenSSH syntax.
 - TUI text truncation uses character count instead of terminal cell width.
@@ -42,8 +43,6 @@ A project-wide review found several compatibility and robustness gaps in otherwi
 ## Scope
 
 - Use the current host/port schema split for endpoint storage and formatting.
-- Make config validation reject invalid encrypted salt values.
-- Make `--doctor` remain read-only and non-interactive for valid encrypted configs.
 - Create runtime audit/history data with private permissions and warn on broad config/runtime permissions in `--doctor`.
 - Improve `~/.ssh/config` import by using `ssh -G` when available and falling back to the current parser.
 - Add display-width aware TUI ellipsizing for CJK/wide characters.
@@ -64,13 +63,11 @@ A project-wide review found several compatibility and robustness gaps in otherwi
 1. Endpoint storage and validation follow `host-port-schema-split.md`.
 2. TUI add/edit and `~/.ssh/config` import preserve IPv6 host and port as separate values.
 3. Terminal title and audit endpoint formatting bracket IPv6 when a port is shown.
-4. `--validate` reports malformed `encryption_salt` before normal startup can crash on base64 decoding.
-5. `sshgo --doctor` does not prompt for the master password solely to report local diagnostics.
-6. Runtime data directory and audit/history files are created with private permissions where the platform supports POSIX modes.
-7. `--doctor` warns when config or runtime data permissions are broader than owner-only.
-8. TUI ellipsizing respects wide characters better than raw `len()` slicing.
-9. Shell jump detail output makes clear that target host-key state is managed on the jump host.
-10. Existing unit tests, py_compile, config validation, and diff whitespace checks pass.
+4. Runtime data directory and audit/history files are created with private permissions where the platform supports POSIX modes.
+5. `--doctor` warns when config or runtime data permissions are broader than owner-only.
+6. TUI ellipsizing respects wide characters better than raw `len()` slicing.
+7. Shell jump detail output makes clear that target host-key state is managed on the jump host.
+8. Existing unit tests, py_compile, config validation, and diff whitespace checks pass.
 
 ## Technical Design
 
@@ -83,13 +80,9 @@ OpenSSH target syntax.
 
 ### Diagnostics and Permissions
 
-`--doctor` should validate the raw config snapshot and report local preflight state without constructing `HostManager` when the config is encrypted. It can derive effective config values from merged defaults and the raw snapshot.
+`--doctor` validates the raw config snapshot before constructing `HostManager` and reports local preflight state even when the snapshot is invalid. It can derive effective config values from merged defaults and the raw snapshot.
 
 Runtime data directory should be `0700` when created, and audit/history files should be `0600` when created. Existing broader files should not be destructively rewritten during doctor; doctor should warn.
-
-### Salt Validation
-
-Validation should accept `None` or valid URL-safe base64 salt bytes when `encryption_salt` is present. When encryption is enabled and credentials exist, missing or malformed salt should be reported as a config error.
 
 ### SSH Config Import
 

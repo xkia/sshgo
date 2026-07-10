@@ -28,6 +28,71 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                 saved = json.load(f)
             self.assertEqual(saved["config"]["language"], "zh")
 
+    def test_inactive_encryption_metadata_is_removed_on_save(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "hosts.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "config": {
+                            "import_ssh_config": False,
+                            "encryption_enabled": False,
+                            "encryption_salt": None,
+                        },
+                        "hosts": [],
+                    },
+                    f,
+                )
+
+            manager = HostManager(path, data_dir=os.path.join(temp_dir, "data"))
+            self.assertNotIn("encryption_enabled", manager.config)
+            self.assertTrue(manager._save_hosts())
+
+            with open(path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertNotIn("encryption_enabled", saved["config"])
+            self.assertNotIn("encryption_salt", saved["config"])
+
+    def test_active_encryption_config_fails_before_runtime_initialization(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "hosts.json")
+            data_dir = os.path.join(temp_dir, "data")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "config": {
+                            "import_ssh_config": False,
+                            "encryption_enabled": True,
+                        },
+                        "hosts": [],
+                    },
+                    f,
+                )
+
+            with redirect_stderr(StringIO()):
+                with self.assertRaises(SystemExit) as cm:
+                    HostManager(path, data_dir=data_dir)
+            self.assertEqual(cm.exception.code, 1)
+            self.assertFalse(os.path.exists(data_dir))
+
+    def test_save_refuses_invalid_node_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = manager_for_config(temp_dir, hosts=[])
+            manager.hosts.append(
+                {
+                    "type": "group",
+                    "name": "bad-group",
+                    "password": "must-not-save",
+                    "children": [],
+                }
+            )
+
+            with redirect_stderr(StringIO()):
+                self.assertFalse(manager._save_hosts())
+            with open(manager.json_path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertEqual(saved["hosts"], [])
+
     def test_node_ids_are_saved_and_preserved_on_rename(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
@@ -112,6 +177,7 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                         "name": "current",
                         "host": "current.example.com",
                         "user": "deploy",
+                        "password": "pw",
                     },
                     None,
                 )
@@ -123,6 +189,7 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                         "name": "stale",
                         "host": "stale.example.com",
                         "user": "deploy",
+                        "password": "pw",
                     },
                     None,
                 )
@@ -154,6 +221,7 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                         "name": "current",
                         "host": "current.example.com",
                         "user": "deploy",
+                        "password": "pw",
                     }
                 ],
             }
@@ -171,6 +239,7 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                         "name": "unsaved",
                         "host": "unsaved.example.com",
                         "user": "deploy",
+                        "password": "pw",
                     },
                     None,
                 )
@@ -213,6 +282,7 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                             "name": "current",
                             "host": "current.example.com",
                             "user": "deploy",
+                            "password": "pw",
                         }
                     ],
                 }
@@ -234,6 +304,7 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                             "name": "unsaved",
                             "host": "unsaved.example.com",
                             "user": "deploy",
+                            "password": "pw",
                         },
                         None,
                     )
@@ -548,6 +619,7 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                         "name": "duplicate",
                         "host": "first.example.com",
                         "user": "deploy",
+                        "password": "pw",
                     },
                     {
                         "id": "second",
@@ -555,6 +627,7 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                         "name": "duplicate",
                         "host": "second.example.com",
                         "user": "deploy",
+                        "password": "pw",
                     },
                 ],
             }
@@ -633,6 +706,7 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
                     "name": "child",
                     "host": "child.example.com",
                     "user": "deploy",
+                    "password": "pw",
                 },
                 "second",
             )

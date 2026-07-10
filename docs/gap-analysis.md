@@ -4,7 +4,7 @@
 
 - status: active
 - owner: Architect
-- last_reviewed: 2026-07-07
+- last_reviewed: 2026-07-10
 - scope: implementation risk, closed architecture gaps, optimization outcomes, and future feature candidates
 
 ## Positioning
@@ -16,6 +16,7 @@ sshgo's current design is coherent for a lightweight personal SSH manager:
 - The project stays Python-stdlib-only.
 - JSONC is the only read/write configuration format.
 - Runtime history and audit data stay outside `hosts.json`.
+- Saved passwords and MFA secrets are plain user-owned config values; sshgo does not maintain a second encryption/password system.
 
 The gaps below are not accepted implementation work by themselves. Items that change behavior should become a focused spec under `docs/specs/` before implementation.
 
@@ -45,7 +46,7 @@ Common workflows should get the highest polish:
 - Validation and diagnostics should produce actionable messages rather than generic failures.
 - Preview output should reflect the real resolved command while redacting secrets.
 
-The 2026-07 safety and polish slice has closed the immediate focus items: alias safety, validation, command preview, doctor checks, TUI save-time feedback, backup recovery, stale-write guarding, editable-only parent selection, internal module/test refactoring, TUI interaction polish, SFTP batch-mode failure handling, and the CLI-only interactive SFTP escape hatch. There is no active implementation work in this document; future behavior changes should start as a new spec.
+The 2026-07 safety and polish slice has closed the immediate focus items: alias safety, validation, command preview, doctor checks, TUI save-time feedback, backup recovery, stale-write guarding, editable-only parent selection, internal module/test refactoring, TUI interaction polish, SFTP batch-mode failure handling, the CLI-only interactive SFTP escape hatch, credential ownership, and stage-aware prompt routing. There is no active implementation work in this document; future behavior changes should start as a new spec.
 
 The documentation set should stay current-state focused. Completed cleanup logs,
 line-count audits, and superseded process plans should not remain as standalone
@@ -65,6 +66,8 @@ specs once their durable decisions have been folded into this document,
 | R7 | Config validation depth | Medium | closed | Known top-level config fields and node candidates are validated through a focused validator module; unknown top-level config keys remain allowed for compatibility. | Covered by [config-and-audit-durability](specs/config-and-audit-durability.md), [common-workflow-polish](specs/common-workflow-polish.md), and [internal-refactors-and-tests](specs/internal-refactors-and-tests.md). |
 | R8 | TUI lifecycle and rendering | Low | reduced | Shared TUI templates, in-form validation, cursor-aware field editing, editable-only parent selection, and pure text/form helper modules reduce daily friction; terminal-specific curses edge cases remain possible. | Covered by [tui-interaction-polish](specs/tui-interaction-polish.md), [internal-refactors-and-tests](specs/internal-refactors-and-tests.md), and [final-risk-hardening](specs/final-risk-hardening.md). |
 | R9 | SSH config import fidelity | Low | accepted non-goal | `~/.ssh/config` import remains intentionally shallow. | Keep the current simple import documented; full OpenSSH config compatibility is out of the current plan. |
+| R10 | Plain credential storage | Medium | accepted user boundary | `password` and `mfa_secret` plus rotated config backups are plaintext; doctor warns on broad permissions. | Users protect files with owner-only modes or use keys, SSH agent, and manual prompts. Legacy active encryption is rejected before use. |
+| R11 | Jump/target prompt routing | High | closed with manual-smoke residual | Automatic responses are selected by explicit shell stage or identifiable tunnel prompt context; ambiguous nested prompts consume no saved secret. | Covered by [credential-ownership-and-reliability-hardening](specs/credential-ownership-and-reliability-hardening.md); real server prompt variants still deserve smoke tests when this path changes. |
 
 ## Optimization Outcomes
 
@@ -79,6 +82,7 @@ specs once their durable decisions have been folded into this document,
 | TUI daily-use polish | Shared templates, safer forms, delete confirmation, and cursor-aware editing improve common add/edit flows. | [tui-interaction-polish](specs/tui-interaction-polish.md) |
 | Config doctor and recovery tools | Users can diagnose local setup and restore rotated config backups. | [cli-safety-and-diagnostics](specs/cli-safety-and-diagnostics.md), [config-backup-recovery](specs/config-backup-recovery.md) |
 | Final risk hardening | Stale config saves fail instead of silently overwriting newer edits; add-parent selection only offers persisted editable nodes. | [final-risk-hardening](specs/final-risk-hardening.md) |
+| Credential and reliability simplification | Removes custom crypto and master-password state, makes read-only CLI paths side-effect free, validates saved schemas, and isolates jump/target automatic auth. | [credential-ownership-and-reliability-hardening](specs/credential-ownership-and-reliability-hardening.md) |
 
 ## Feature Candidates And Deferred Work
 
@@ -91,11 +95,11 @@ future code or documentation compression:
 
 | Area | Current stance |
 |---|---|
-| `HostManager` facade | Keep as the product-facing coordinator for config lifecycle, CRUD, validation, encryption, alias lookup, and execute/preview entry points. |
+| `HostManager` facade | Keep as the product-facing coordinator for config lifecycle, CRUD, validation, alias lookup, and execute/preview entry points. |
 | TUI/curses code | Extract pure helpers when obvious, but do not split stateful curses lifecycle code just to reduce line count. |
 | Expect scripts | Do not split for aesthetics; change only for concrete prompt, auth, transfer, or cleanup bugs. |
 | Tests | Reduce repeated setup with fixtures, but keep SSH/SFTP/auth/audit/TUI behavior coverage. |
-| Compatibility helpers | Keep `sftp_ssh_wrapper.py`, legacy encrypted-secret reads, relay compatibility fallback, and Recent history fallback unless a focused spec accepts the breakage. |
+| Compatibility helpers | Keep `sftp_ssh_wrapper.py`, relay compatibility fallback, and Recent history fallback unless a focused spec accepts the breakage. Reject recognizable legacy encrypted credentials rather than interpreting them as live secrets. |
 | Documentation | Keep current behavior, constraints, risks, and verification entry points; delete completed process logs and one-off audit snapshots. |
 
 Deferred unless repeated real usage justifies reopening:

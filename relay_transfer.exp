@@ -36,10 +36,18 @@ set jumper_proxy_command ""
 set command_timeout 30
 set transfer_timeout 1800
 set has_tty [expr {![catch {stty size}]}]
+set python_executable "python3"
 
-for {set i 0} {$i < $argc} {incr i} {
+set i 0
+while {$i < $argc} {
     set arg [lindex $argv $i]
-    set value [lindex $argv [expr {$i + 1}]]
+    incr i
+    if {$i >= $argc} {
+        puts "Error: missing value for $arg"
+        exit 1
+    }
+    set value [lindex $argv $i]
+    incr i
     switch -exact -- $arg {
         "-h" { set host $value }
         "-u" { set user $value }
@@ -57,6 +65,10 @@ for {set i 0} {$i < $argc} {incr i} {
         "-print-command" { set print_command $value }
         "-j-proxy-command" { set jumper_proxy_command $value }
         "-transfer-timeout" { set transfer_timeout $value }
+        default {
+            puts "Error: unknown option $arg"
+            exit 1
+        }
     }
 }
 
@@ -85,6 +97,10 @@ if {[info exists env(SSHGO_MFA_SECRET)]} {
 if {[info exists env(SSHGO_JUMPER_MFA_SECRET)]} {
     set jumper_mfa_secret $env(SSHGO_JUMPER_MFA_SECRET)
     unset env(SSHGO_JUMPER_MFA_SECRET)
+}
+if {[info exists env(SSHGO_PYTHON_EXECUTABLE)]} {
+    set python_executable $env(SSHGO_PYTHON_EXECUTABLE)
+    unset env(SSHGO_PYTHON_EXECUTABLE)
 }
 
 set script_dir [file dirname [file normalize [info script]]]
@@ -240,7 +256,7 @@ proc common_ssh_options {host_key_checking} {
 }
 
 proc auth_response {stage kind} {
-    global jumper_pass target_pass jumper_mfa_secret mfa_secret auth_py
+    global jumper_pass target_pass jumper_mfa_secret mfa_secret auth_py python_executable
     if {$kind == "password"} {
         if {$stage == "jump"} {
             return $jumper_pass
@@ -249,9 +265,9 @@ proc auth_response {stage kind} {
         }
     } elseif {$kind == "mfa"} {
         if {$stage == "jump" && $jumper_mfa_secret != ""} {
-            return [exec python3 $auth_py - << $jumper_mfa_secret]
+            return [exec $python_executable $auth_py - << $jumper_mfa_secret]
         } elseif {$stage == "target" && $mfa_secret != ""} {
-            return [exec python3 $auth_py - << $mfa_secret]
+            return [exec $python_executable $auth_py - << $mfa_secret]
         }
     }
     return ""

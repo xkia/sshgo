@@ -12,7 +12,7 @@
 
 sshgo should avoid additional Python package dependencies. TOML/YAML exploration was rejected because Python's standard library has no YAML support and only provides TOML reading through `tomllib`, not TOML writing.
 
-Partial TOML support is not acceptable because users can edit hosts from the TUI and change encryption from the CLI. Any supported config format must support the full read/write lifecycle.
+Partial TOML support is not acceptable because users can edit hosts from the TUI and saves require a complete read/write lifecycle.
 
 ## Scope
 
