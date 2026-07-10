@@ -159,6 +159,52 @@ class CliTests(unittest.TestCase):
 
             self.assertFalse(os.path.exists(data_dir))
 
+    def test_history_reads_explicit_data_dir_when_config_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "missing-hosts.json")
+            data_dir = os.path.join(temp_dir, "data")
+            os.makedirs(data_dir)
+            with open(
+                os.path.join(data_dir, "history.jsonl"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                f.write(
+                    json.dumps(
+                        {
+                            "ts": "2026-07-10T00:00:00Z",
+                            "name": "history-only",
+                            "host": "history.example.com",
+                            "user": "deploy",
+                            "auth": "key",
+                            "result": "started",
+                        }
+                    )
+                    + "\n"
+                )
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                self._run_main_with_args(["-e", path, "--history"], data_dir)
+
+            self.assertIn("history-only", stdout.getvalue())
+            self.assertFalse(os.path.exists(path))
+
+    def test_validate_still_rejects_missing_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "missing-hosts.json")
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                with self.assertRaises(SystemExit) as cm:
+                    self._run_main_with_args(
+                        ["-e", path, "--validate"],
+                        os.path.join(temp_dir, "data"),
+                    )
+
+            self.assertEqual(cm.exception.code, 1)
+            self.assertIn(path, stdout.getvalue())
+
     def test_validate_does_not_persist_node_id_migration(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = self._write_legacy_config(temp_dir)
@@ -745,6 +791,29 @@ exit 0
             self.assertIn("[WARN] Config backup [0] permissions", output)
             self.assertIn("[WARN] Runtime data dir permissions", output)
             self.assertIn("[WARN] history.jsonl permissions", output)
+
+    def test_doctor_warns_for_backup_permissions_when_config_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "missing-hosts.json")
+            backup_path = path + ".bak"
+            with open(backup_path, "w", encoding="utf-8") as f:
+                json.dump({"config": {}, "hosts": []}, f)
+            os.chmod(backup_path, 0o644)
+
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                code = cli_diagnostics.run_doctor_for_path(
+                    path,
+                    data_dir=os.path.join(temp_dir, "data"),
+                    tui_cls=self._doctor_tui_cls(True),
+                    which=self._which_all(),
+                )
+
+            self.assertEqual(code, 1)
+            self.assertIn(
+                "[WARN] Config backup [0] permissions",
+                stdout.getvalue(),
+            )
 
     def test_doctor_for_path_accepts_explicit_host_manager_dependency(self):
         class FakeAudit:

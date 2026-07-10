@@ -75,6 +75,38 @@ class HostManagerPersistenceCrudTests(unittest.TestCase):
             self.assertEqual(cm.exception.code, 1)
             self.assertFalse(os.path.exists(data_dir))
 
+    def test_persisted_runtime_source_fails_with_validation_error(self):
+        for source in (None, 1, "ssh_config"):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as temp_dir:
+                path = os.path.join(temp_dir, "hosts.json")
+                data_dir = os.path.join(temp_dir, "data")
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "config": {"import_ssh_config": False},
+                            "hosts": [
+                                {
+                                    "type": "host",
+                                    "name": "bad-source",
+                                    "host": "example.com",
+                                    "user": "deploy",
+                                    "password": "pw",
+                                    "source": source,
+                                }
+                            ],
+                        },
+                        f,
+                    )
+
+                stderr = StringIO()
+                with redirect_stderr(stderr):
+                    with self.assertRaises(SystemExit) as cm:
+                        HostManager(path, data_dir=data_dir)
+
+                self.assertEqual(cm.exception.code, 1)
+                self.assertIn("source", stderr.getvalue())
+                self.assertFalse(os.path.exists(data_dir))
+
     def test_save_refuses_invalid_node_schema(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = manager_for_config(temp_dir, hosts=[])

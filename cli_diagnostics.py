@@ -147,14 +147,14 @@ def run_doctor(host_manager, config_path, config_errors=None,
     if os.path.exists(config_path):
         _doctor_line("PASS", "Config path", config_path)
         _doctor_permission_warning(config_path, "Config permissions")
-        for backup in ConfigStore.list_backups_for(config_path):
-            _doctor_permission_warning(
-                backup["path"],
-                f"Config backup [{backup['index']}] permissions",
-            )
     else:
         _doctor_line("FAIL", "Config path", f"not found: {config_path}")
         failed = True
+    for backup in ConfigStore.list_backups_for(config_path):
+        _doctor_permission_warning(
+            backup["path"],
+            f"Config backup [{backup['index']}] permissions",
+        )
 
     errors = config_errors
     if errors is None:

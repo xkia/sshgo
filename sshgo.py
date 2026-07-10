@@ -289,6 +289,7 @@ def main():
         snapshot, errors = cli_config.load_config_snapshot(
             config_path,
             validator=validate_hosts_config_for_load,
+            allow_missing=True,
         )
         if errors:
             sys.exit(_print_validation_result(errors))

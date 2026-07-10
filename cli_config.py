@@ -22,11 +22,17 @@ def _default_config_path(script_dir):
     return _probe_config_files(script_dir)
 
 
-def load_config_snapshot(config_path, validator=validate_hosts_config):
+def load_config_snapshot(
+    config_path,
+    validator=validate_hosts_config,
+    allow_missing=False,
+):
     try:
         data = ConfigStore(config_path).read()
     except FileNotFoundError:
-        return None, [i18n.get("validate_config_not_found", path=config_path)]
+        if not allow_missing:
+            return None, [i18n.get("validate_config_not_found", path=config_path)]
+        data = {"config": {}, "hosts": []}
     except Exception as e:
         return None, [f"{i18n.get('validate_config_invalid')}: {e}"]
 

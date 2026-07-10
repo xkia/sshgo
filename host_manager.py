@@ -370,7 +370,7 @@ class HostManager:
     def _clean_nodes_for_saving(self, nodes):
         clean_nodes = []
         for node in nodes:
-            if "ssh_config" in node.get("source", ""):
+            if host_tree.is_ssh_config_node(node):
                 continue
 
             clean_node = {k: v for k, v in node.items() if k in ALLOWED_SAVE_KEYS}

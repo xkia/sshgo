@@ -128,6 +128,19 @@ class HostTreeTests(unittest.TestCase):
         self.assertNotIn("id", nodes[5])
         self.assertNotIn("id", nodes[5]["children"][0])
 
+    def test_ensure_node_ids_treats_non_string_source_as_saved_node(self):
+        for source in (None, 1):
+            with self.subTest(source=source):
+                node = {
+                    "type": "host",
+                    "name": "saved",
+                    "host": "saved.example.com",
+                    "source": source,
+                }
+
+                self.assertTrue(host_tree.ensure_node_ids([node], lambda: "new-id"))
+                self.assertEqual(node["id"], "new-id")
+
     def test_rebuild_nest_parents_sets_runtime_links(self):
         nodes = self._tree()
 

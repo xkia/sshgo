@@ -243,6 +243,10 @@ def validate_hosts_config_for_load(data: dict) -> list[str]:
 def _validate_hosts_nodes_for_load(nodes, errors, path="hosts"):
     for index, node in enumerate(nodes):
         node_path = f"{path}[{index}]"
+        if isinstance(node, dict) and "source" in node:
+            errors.append(
+                i18n.get("validate_unknown_field", path=node_path, field="source")
+            )
         node_type, children = _validate_node_shape(node, node_path, errors)
         if node_type is None or children is None:
             continue
@@ -262,6 +266,7 @@ def _validate_node_shape(node, node_path, errors):
     for field, expected_type, expected_key in (
         ("name", str, "validate_type_string"),
         ("expanded", bool, "validate_type_bool"),
+        ("source", str, "validate_type_string"),
     ):
         if field in node and type(node[field]) is not expected_type:
             errors.append(

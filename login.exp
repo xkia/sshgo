@@ -150,11 +150,52 @@ proc split_host_port {target default_port} {
     return [list $target $default_port]
 }
 
-proc contains_nocase {text needle} {
-    if {$needle == ""} {
+proc prompt_token_boundary {ch side} {
+    if {$ch == "" || $ch == " " || $ch == "\t"} {
+        return 1
+    }
+    if {$side == "before"} {
+        return [expr {[string first $ch {'"([}] >= 0}]
+    }
+    return [expr {[string first $ch {'")]:}] >= 0}]
+}
+
+proc prompt_token_matches {text token} {
+    if {$token == ""} {
         return 0
     }
-    return [expr {[string first [string tolower $needle] [string tolower $text]] >= 0}]
+
+    set haystack [string tolower $text]
+    set needle [string tolower $token]
+    set haystack_length [string length $haystack]
+    set needle_length [string length $needle]
+    set search_from 0
+
+    while {$search_from <= $haystack_length} {
+        set index [string first $needle $haystack $search_from]
+        if {$index < 0} {
+            return 0
+        }
+
+        set before ""
+        if {$index > 0} {
+            set before [string index $haystack [expr {$index - 1}]]
+        }
+        set after_index [expr {$index + $needle_length}]
+        set after ""
+        if {$after_index < $haystack_length} {
+            set after [string index $haystack $after_index]
+        }
+
+        if {
+            [prompt_token_boundary $before "before"]
+            && [prompt_token_boundary $after "after"]
+        } {
+            return 1
+        }
+        set search_from [expr {$index + 1}]
+    }
+    return 0
 }
 
 proc prompt_line {buffer} {
@@ -172,16 +213,24 @@ proc prompt_auth_stage {prompt} {
     }
 
     lassign [split_host_port $jumper "22"] jumper_target _
-    if {$jumper_id_file != "" && [contains_nocase $prompt $jumper_id_file]} {
+    set jumper_match 0
+    set target_match 0
+    if {$jumper_id_file != "" && [prompt_token_matches $prompt $jumper_id_file]} {
+        set jumper_match 1
+    }
+    if {$id_file != "" && [prompt_token_matches $prompt $id_file]} {
+        set target_match 1
+    }
+    if {[prompt_token_matches $prompt $jumper_target]} {
+        set jumper_match 1
+    }
+    if {[prompt_token_matches $prompt "$user@$host"]} {
+        set target_match 1
+    }
+    if {$jumper_match && !$target_match} {
         return "jumper"
     }
-    if {$id_file != "" && [contains_nocase $prompt $id_file]} {
-        return "target"
-    }
-    if {[contains_nocase $prompt $jumper_target]} {
-        return "jumper"
-    }
-    if {[contains_nocase $prompt "$user@$host"]} {
+    if {$target_match && !$jumper_match} {
         return "target"
     }
     return ""
@@ -320,7 +369,7 @@ expect {
         send "yes\r"
         exp_continue
     }
-    -re {(?i)(password|passphrase)[: ]*$} {
+    -re {(?i)((password|passphrase)[: ]*|enter passphrase for key [^\r\n]*:) *$} {
         if {[handle_auth_prompt "password"]} {
             exp_continue
         }

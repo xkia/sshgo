@@ -89,9 +89,12 @@ TUI input, executable checks, and the maintainability of verification commands.
    for malformed root data.
 5. Normal startup reports load-unsafe structural/config-type and removed-encryption
    errors without an internal traceback or partial tree/runtime initialization, while
-   still allowing semantic repairs such as deleting or renaming duplicate nodes.
+   still allowing semantic repairs such as deleting or renaming duplicate nodes;
+   persisted runtime-only `source` metadata is rejected before traversal and must
+   not escape as a `TypeError` or change save behavior.
 6. `--history` reads the configured history path without constructing `HostManager`
-   or creating a missing runtime directory.
+   or creating a missing runtime directory. If the config file is absent, history
+   still uses `SSHGO_DATA_DIR` or the default runtime directory.
 7. Validation rejects host-only fields on groups, missing/non-string host user,
    non-string credential/path fields, non-boolean host `use_ssh_agent`, and any
    present non-list `children` value.
@@ -99,7 +102,9 @@ TUI input, executable checks, and the maintainability of verification commands.
 9. A jump-host passphrase/password/MFA prompt never receives an automatically stored
    target secret, and a target prompt never receives a jump secret.
 10. Direct and unambiguous shell-jump password/MFA automation remains functional;
-   ambiguous tunnel prompts fall back to user interaction without secret consumption.
+   tunnel prompt identities use boundary-aware unique matching, and overlapping,
+   prefix-colliding, or otherwise ambiguous prompts fall back to user interaction
+   without secret consumption.
 11. `login.exp`, `sftp_login.exp`, and `relay_transfer.exp` preserve option-shaped
    host, command, and path values and fail clearly on unknown/missing options.
 12. TUI search accepts printable Unicode, and wide-character form values render and
@@ -107,9 +112,11 @@ TUI input, executable checks, and the maintainability of verification commands.
 13. Already-executable handoff scripts are not chmodded; missing/non-executable
     scripts produce existing audit/error behavior.
 14. Doctor warns about broad permissions on the active config and every existing
-    rotated backup; new config/backup files preserve owner-only defaults.
+    rotated backup, including when the active config is missing; new config/backup
+    files preserve owner-only defaults.
 15. A single local check command runs unittest discovery, compiles all tracked Python
-    files, validates the selected config, and runs `git diff --check`.
+    files, validates a deterministic tracked config by default, and runs
+    `git diff --check`; it must pass in a clean clone without personal config.
 16. README, README.zh, AGENTS, vision, roadmap, gap analysis, docs index, and affected
     current behavior specs describe the post-encryption design.
 
@@ -137,10 +144,14 @@ Normal `HostManager` startup validates a load-safety subset before tree traversa
 a bad root, node shape, known config type, or removed-encryption value cannot fail
 with an internal traceback. It does not block repairable semantic issues such as
 duplicate names or missing auth; `--validate` and the save invariant remain strict.
+Persisted runtime-only `source` metadata is rejected before node-ID traversal, and
+tree/save helpers remain defensive if programmatic callers provide malformed metadata.
 
 History resolves only the effective language and data directory from the validated
 snapshot, then constructs a non-creating audit reader. Audit directory creation moves
-to the append path.
+to the append path. A missing snapshot is treated as the default empty config for
+history only, preserving access through `SSHGO_DATA_DIR` or `~/.sshgo`; validation
+continues to reject a missing config.
 
 ### Node Schema And Save Invariant
 
@@ -155,9 +166,11 @@ metadata, validates the final plaintext data, and aborts without writing on erro
 
 Replace positional password/MFA queues with `auth_response(stage, kind)`. Direct and
 shell-jump modes have an explicit stage. Tunnel-mode prompt classification uses known
-user/host and identity-file context. When a nested prompt cannot be classified, hand
-control to the user without sending or consuming either stored secret. Relay keeps its
-existing stage-aware implementation.
+user/host and identity-file context. Candidate tokens must match at prompt boundaries,
+and exactly one hop must match; overlapping host names, equal endpoints on different
+ports, or equal/prefix-colliding key paths are ambiguous. When a nested prompt cannot
+be classified uniquely, hand control to the user without sending or consuming either
+stored secret. Relay keeps its existing stage-aware implementation.
 
 ### Expect Arguments
 
@@ -177,10 +190,12 @@ Only attempt chmod when a script exists but is not executable. Keep executable
 checking inside the runtime OSError handling path. Remove eager TUI chmod loops.
 
 Add `scripts/check.sh` with a configurable `PYTHON` defaulting to `python3`. It uses
-Git's tracked Python file list instead of a manually duplicated compile list.
+Git's tracked Python file list instead of a manually duplicated compile list and
+validates a tracked minimal fixture rather than depending on personal `hosts.json`.
 
 Doctor enumerates the configured backup rotation and applies the same broad-mode
-warning used for the active config. Backup behavior and restore indexes stay unchanged.
+warning used for the active config even when the primary config is missing. Backup
+behavior and restore indexes stay unchanged.
 
 ### Rollback
 
@@ -195,7 +210,7 @@ when validation rejects it.
 - Focused config, HostManager, CLI, command-plan, Expect, TUI text, and TUI tests.
 - Full unittest discovery.
 - Compile every tracked Python file.
-- `python3 sshgo.py --validate`.
+- `python3 sshgo.py -e tests/data/minimal-hosts.json --validate`.
 - Direct Expect preview tests for option-shaped values.
 - `git diff --check`.
 - Manual TUI smoke when an interactive terminal is available.
@@ -203,7 +218,9 @@ when validation rejects it.
 ## Review Status
 
 - status: reviewed
-- verdict: PASS
-- notes: The design explicitly supersedes the previous encryption behavior, preserves
-  stdlib/Expect/execve constraints, fails safely on legacy ciphertext, and adds
-  testable migration, rollback, permission, and read-only-path requirements.
+- verdict: PASS_WITH_RISKS
+- notes: Post-implementation remediation review found no remaining code findings.
+  Boundary-aware unique prompt routing, missing-config history, persisted runtime
+  metadata rejection, backup permission coverage, and clean-clone verification are
+  covered by automated tests. Real SSH/SFTP server prompt variants remain a manual
+  smoke-test residual.

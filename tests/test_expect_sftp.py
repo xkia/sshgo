@@ -20,8 +20,8 @@ class SftpExpectTests(unittest.TestCase):
         self.assertIn("\"-tunnel-proxy-command\" { set tunnel_proxy_command $value }", script)
         self.assertIn("\"-print-command\" { set print_command $value }", script)
         self.assertIn("ProxyCommand=$custom_proxy_command", script)
-        self.assertNotIn("jumper_id_file", script)
-        self.assertNotIn("\"-j-i\"", script)
+        self.assertIn("set jumper_id_file \"\"", script)
+        self.assertIn("\"-j-i\"      { set jumper_id_file $value }", script)
 
     def test_sftp_exp_print_command_uses_tunnel_proxy_command(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -161,31 +161,96 @@ with open(os.environ["SSHGO_FAKE_ANSWER_PATH"], "w", encoding="utf-8") as f:
             env["SSHGO_JUMPER_PASS"] = "jump-secret"
             env["SSHGO_FAKE_ANSWER_PATH"] = answer_path
 
-            for prompt, expected in (
-                ("jumpuser@jump.example.com's password: ", "jump-secret"),
-                ("targetuser@target.internal's password: ", "target-secret"),
-                ("password: ", ""),
+            for prompt, expected, host, user, jumper, target_key, jump_key in (
+                (
+                    "jumpuser@jump.example.com's password: ",
+                    "jump-secret",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "targetuser@target.internal's password: ",
+                    "target-secret",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "password: ",
+                    "",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "deploy@10.0.0.10's password: ",
+                    "target-secret",
+                    "10.0.0.10",
+                    "deploy",
+                    "deploy@10.0.0.1:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "deploy@same.example.com's password: ",
+                    "",
+                    "same.example.com",
+                    "deploy",
+                    "deploy@same.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "Enter passphrase for key '/tmp/key-target': ",
+                    "target-secret",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "/tmp/key-target",
+                    "/tmp/key",
+                ),
+                (
+                    "Enter passphrase for key '/tmp/shared-key': ",
+                    "",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "/tmp/shared-key",
+                    "/tmp/shared-key",
+                ),
             ):
-                with self.subTest(prompt=prompt):
+                with self.subTest(prompt=prompt, host=host, jumper=jumper):
                     env["SSHGO_FAKE_PROMPT"] = prompt
+                    command = [
+                        "./sftp_login.exp",
+                        "-h",
+                        host,
+                        "-u",
+                        user,
+                        "-J",
+                        jumper,
+                        "-tunnel-proxy-command",
+                        f"ssh -W %h:%p {jumper}",
+                        "-action",
+                        "upload",
+                        "-local",
+                        "local.txt",
+                        "-remote",
+                        "/tmp/remote.txt",
+                    ]
+                    if target_key:
+                        command.extend(["-i", target_key])
+                    if jump_key:
+                        command.extend(["-j-i", jump_key])
                     result = subprocess.run(
-                        [
-                            "./sftp_login.exp",
-                            "-h",
-                            "target.internal",
-                            "-u",
-                            "targetuser",
-                            "-J",
-                            "jumpuser@jump.example.com:2200",
-                            "-tunnel-proxy-command",
-                            "ssh -W %h:%p jumpuser@jump.example.com",
-                            "-action",
-                            "upload",
-                            "-local",
-                            "local.txt",
-                            "-remote",
-                            "/tmp/remote.txt",
-                        ],
+                        command,
                         cwd=os.getcwd(),
                         env=env,
                         stdin=subprocess.DEVNULL,

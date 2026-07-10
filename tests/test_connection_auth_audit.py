@@ -579,29 +579,94 @@ with open(os.environ["SSHGO_FAKE_ANSWER_PATH"], "w", encoding="utf-8") as f:
             env["SSHGO_JUMPER_PASS"] = "jump-secret"
             env["SSHGO_FAKE_ANSWER_PATH"] = answer_path
 
-            for prompt, expected in (
-                ("jumpuser@jump.example.com's password: ", "jump-secret"),
-                ("targetuser@target.internal's password: ", "target-secret"),
-                ("password: ", ""),
+            for prompt, expected, host, user, jumper, target_key, jump_key in (
+                (
+                    "jumpuser@jump.example.com's password: ",
+                    "jump-secret",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "targetuser@target.internal's password: ",
+                    "target-secret",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "password: ",
+                    "",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "deploy@10.0.0.10's password: ",
+                    "target-secret",
+                    "10.0.0.10",
+                    "deploy",
+                    "deploy@10.0.0.1:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "deploy@same.example.com's password: ",
+                    "",
+                    "same.example.com",
+                    "deploy",
+                    "deploy@same.example.com:2200",
+                    "",
+                    "",
+                ),
+                (
+                    "Enter passphrase for key '/tmp/key-target': ",
+                    "target-secret",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "/tmp/key-target",
+                    "/tmp/key",
+                ),
+                (
+                    "Enter passphrase for key '/tmp/shared-key': ",
+                    "",
+                    "target.internal",
+                    "targetuser",
+                    "jumpuser@jump.example.com:2200",
+                    "/tmp/shared-key",
+                    "/tmp/shared-key",
+                ),
             ):
-                with self.subTest(prompt=prompt):
+                with self.subTest(prompt=prompt, host=host, jumper=jumper):
                     if os.path.exists(answer_path):
                         os.unlink(answer_path)
                     env["SSHGO_FAKE_PROMPT"] = prompt
-                    subprocess.run(
-                        [
-                            "./login.exp",
-                            "-h",
-                            "target.internal",
-                            "-u",
-                            "targetuser",
-                            "-J",
-                            "jumpuser@jump.example.com:2200",
-                            "-jump-mode",
-                            "tunnel",
-                            "-tunnel-proxy-command",
-                            "ssh -W %h:%p jumpuser@jump.example.com",
-                        ],
+                    command = [
+                        "./login.exp",
+                        "-h",
+                        host,
+                        "-u",
+                        user,
+                        "-J",
+                        jumper,
+                        "-jump-mode",
+                        "tunnel",
+                        "-tunnel-proxy-command",
+                        f"ssh -W %h:%p {jumper}",
+                    ]
+                    if target_key:
+                        command.extend(["-i", target_key])
+                    if jump_key:
+                        command.extend(["-j-i", jump_key])
+                    result = subprocess.run(
+                        command,
                         cwd=os.getcwd(),
                         env=env,
                         stdin=subprocess.DEVNULL,
@@ -611,6 +676,10 @@ with open(os.environ["SSHGO_FAKE_ANSWER_PATH"], "w", encoding="utf-8") as f:
                         timeout=5,
                     )
                     answer = ""
+                    output = result.stdout + result.stderr
+                    self.assertIn(prompt.strip(), output)
+                    if expected:
+                        self.assertTrue(os.path.exists(answer_path), output)
                     if os.path.exists(answer_path):
                         with open(answer_path, "r", encoding="utf-8") as f:
                             answer = f.read().strip()
@@ -643,7 +712,7 @@ with open(os.environ["SSHGO_FAKE_ANSWER_PATH"], "w", encoding="utf-8") as f:
         self.assertIn("'jumpuser@2001:db8::1'", rendered)
         self.assertNotIn("jumpuser@[2001:db8::1]", rendered)
 
-    def test_nested_sftp_tunnel_does_not_pass_jump_identity_file_arg(self):
+    def test_nested_sftp_tunnel_passes_jump_identity_for_prompt_routing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = self._manager(temp_dir)
             target = manager.find_host_by_alias("target")
@@ -653,7 +722,7 @@ with open(os.environ["SSHGO_FAKE_ANSWER_PATH"], "w", encoding="utf-8") as f:
             )
             args = plan.args
 
-        self.assertNotIn("-j-i", args)
+        self.assertEqual(args[args.index("-j-i") + 1], "/tmp/jump_key")
         self.assertEqual(args[args.index("-i") + 1], "/tmp/target_key")
         tunnel_proxy = args[args.index("-tunnel-proxy-command") + 1]
         self.assertIn("-i /tmp/jump_key", tunnel_proxy)
