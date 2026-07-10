@@ -103,12 +103,13 @@ This file provides repository guidance for coding agents and maintainers working
 
 ### Documentation Layers
 
-- `docs/vision.md`: product goals and non-goals.
-- `docs/roadmap.md`: completed milestones and exit criteria.
-- `docs/gap-analysis.md`: current risks, closed gaps, optimization outcomes, and future candidate boundaries.
-- `docs/specs/*.md`: accepted behavior and implementation boundaries.
-- `docs/specs/jump-host-connection-modes.md`: configurable SSH/transfer jump modes (`shell`, `tunnel`, `relay`).
-- `docs/specs/custom-proxy-command.md`: host-level custom `proxy_command`, parent jump-host proxy, and `config.placeholders` behavior.
+- `docs/README.md`: product boundaries, documentation index, and maintenance rules.
+- `docs/roadmap.md`: delivered baseline, residual risks, and deferred candidates.
+- `docs/specs/configuration-and-data.md`: config, credentials, persistence, runtime data, audit, and Recent contracts.
+- `docs/specs/connections-and-transfers.md`: SSH/SFTP/relay, auth, proxy, host-key, and terminal-title contracts.
+- `docs/specs/cli-and-tui.md`: CLI safety, diagnostics, and TUI interaction contracts.
+- `docs/specs/architecture-and-reliability.md`: stable implementation and reliability boundaries.
+- `docs/specs/documentation-structure.md`: documentation ownership and consolidation rules.
 - Verification commands live in this file; avoid adding separate per-spec test-plan status files.
 
 ## Development Notes
@@ -121,7 +122,7 @@ This file provides repository guidance for coding agents and maintainers working
 - **Relay timeout**: `config.relay_transfer_timeout` defaults to `1800` seconds and applies only to relay file-copy phases; `0` disables the Expect transfer timeout. Relay login, directory preparation, and cleanup still use short command timeouts.
 - **Terminal titles**: `config.terminal_title_enabled=false` by default. When enabled, `ConnectionRuntime` calls `terminal_title.emit_terminal_title()` immediately before audit start and `execve` for SSH, interactive SFTP, SFTP transfer, or relay transfer. Title output uses best-effort OSC sequences only, never includes secrets or transfer paths, and is not restored after the remote session exits.
 - **Audit logging**: JSONL files in `~/.sshgo/`. History and audit-simple are always written for SSH and SFTP starts, including `sftp_interactive_started`; audit-full requires `--audit-full` flag. New records include `node_id`, `port`, and `endpoint`. Because of the execve handoff, final duration, exit code, and commands typed inside `sftp>` are not available in current audit records.
-- **Config saves**: `ConfigStore` writes JSON atomically and keeps best-effort backups at `hosts.json.bak`, `hosts.json.bak.1`, and `hosts.json.bak.2`; `HostManager` delegates save/backup operations to it. `HostManager` saves pass the loaded file fingerprint so a stale instance fails instead of silently overwriting a newer save. This is conflict detection, not automatic merge.
+- **Config saves**: `ConfigStore` writes JSON atomically and rotates backups at `hosts.json.bak`, `hosts.json.bak.1`, and `hosts.json.bak.2`; `HostManager` delegates save/backup operations to it. `HostManager` saves pass the loaded file fingerprint so a stale instance fails instead of silently overwriting a newer save. This is conflict detection, not automatic merge.
 - **Plain credentials**: Saved `password` and `mfa_secret` values are plaintext in `hosts.json` and rotated backups. Protect all of them with owner-only permissions; `--doctor` warns about broad modes. Use a pre-removal release to disable active legacy encryption before upgrading.
 - **SSH agent scope**: Global `config.use_ssh_agent` applies to direct hosts and tunnel-mode targets. In `ssh_jump_mode=shell` and `transfer_jump_mode=relay`, target authentication happens from the jump-host environment, so target hosts must use `password`, `id_file`, or explicit `use_ssh_agent=true`.
 - **Placeholders**: `config.placeholders` is resolved after JSONC parsing only for `host`, `user`, `id_file`, `proxy_command`, and `relay_temp_dir`; do not apply it to secrets or identity fields. `proxy_command` is executed locally by OpenSSH and must be treated as trusted user configuration.

@@ -1,41 +1,52 @@
 # sshgo Roadmap
 
-## 2026-05
+## Metadata
 
-| Milestone | Status | Exit Criteria | Related Spec/Doc |
+- status: current baseline complete
+- last_reviewed: 2026-07-10
+- active_work: none
+
+## Delivered Baseline
+
+| Area | Status | Current outcome | Owner spec |
 |---|---|---|---|
-| Runtime data separation | done | History and audit data are stored outside `hosts.json`; `--history` reads JSONL history; SSH agent config is supported | [runtime-separation](specs/runtime-separation.md) |
+| Configuration and data | done | JSONC-only config, strict saved-node schema, stable IDs, atomic conflict-aware saves, three rotated backups, restore commands, runtime JSONL logs, and Recent resolution | [configuration-and-data.md](specs/configuration-and-data.md) |
+| Connections and transfers | done with manual-smoke residual | Independent jump/target auth, strict host keys, shell/tunnel SSH, tunnel/relay transfer, custom proxies, batch SFTP, interactive SFTP, and optional terminal titles | [connections-and-transfers.md](specs/connections-and-transfers.md) |
+| CLI and TUI | done | Ambiguity-safe aliases, safe previews, local diagnostics, save-time validation, wide-text editing, resolved details, and explicit terminal screen policy | [cli-and-tui.md](specs/cli-and-tui.md) |
+| Architecture and reliability | done | Focused stdlib modules, Expect handoff, start-oriented audit, defensive validation, executable checks, and one repository verification command | [architecture-and-reliability.md](specs/architecture-and-reliability.md) |
+| Documentation consolidation | done | Current behavior is owned by four domain specs; completed process records remain available through Git history | [documentation-structure.md](specs/documentation-structure.md) |
 
-## 2026-06
+## Residual Risks
 
-| Milestone | Status | Exit Criteria | Related Spec/Doc |
-|---|---|---|---|
-| Security hardening | done with residual risks | Secrets are not passed in argv; prompt-time MFA is used; host key checking is strict by default; Python hands off with `execve` | [security-hardening](specs/security-hardening.md) |
-| JSONC-only configuration | done | `hosts.json` is the only supported config format; JSONC comments/trailing commas parse; saves write JSON | [config-format-jsonc](specs/config-format-jsonc.md) |
-| Connection auth and audit hardening | done | Target and jump auth are independent; SFTP is audited; config saves are atomic; audit trimming is batched | [connection-auth-audit-hardening](specs/connection-auth-audit-hardening.md) |
-| Jump host connection modes | done | SSH supports `shell` and `tunnel`; transfer supports `tunnel` and `relay`; mode inheritance, validation, and real SSH/SFTP/relay chain verification are complete | [jump-host-connection-modes](specs/jump-host-connection-modes.md) |
-| Node identity and Recent hardening | done | Saved nodes have stable IDs; Recent resolves renamed nodes; audit records include node identity; config backups are rotated | [node-identity-recent-hardening](specs/node-identity-recent-hardening.md) |
+| Area | Status | Boundary |
+|---|---|---|
+| Real prompt variants | accepted manual-smoke risk | Fake-process coverage exercises password, passphrase, MFA, host-key, and ambiguous hop routing; real SSH/SFTP environments should be smoke-tested when these paths change. |
+| Plain credentials | accepted user boundary | `password` and `mfa_secret` are plaintext in config and backups. Users protect file permissions or use keys, agent, and manual prompts. |
+| Final session results | deferred by architecture | Python uses `execve` and cannot record final exit status, duration, or commands typed in interactive sessions. |
+| SSH config import | accepted non-goal | Import is intentionally partial; it is not a complete OpenSSH configuration implementation. |
+| Terminal behavior | accepted platform variance | Curses alternate-screen and OSC title behavior can vary by terminal; `--doctor` reports actionable local state. |
+| Concurrent edits | reduced | File fingerprints prevent ordinary stale overwrites but do not provide automatic merge or multi-writer collaboration. |
 
-## 2026-07
+## Scope Filter
 
-| Milestone | Status | Exit Criteria | Related Spec/Doc |
-|---|---|---|---|
-| Custom ProxyCommand support | done | Direct SSH, remote-command, and direct SFTP paths can use a host-level OpenSSH ProxyCommand; global placeholders resolve in allowed connection fields without changing existing jump-host modes | [custom-proxy-command](specs/custom-proxy-command.md) |
-| CLI safety and diagnostics | done | Alias ambiguity is protected; unsupported deep jump-host nesting is rejected; command preview and doctor checks are available | [cli-safety-and-diagnostics](specs/cli-safety-and-diagnostics.md) |
-| Common workflow polish | done | TUI saves validate before writing; detail pane shows resolved connection state; fragile SFTP paths fail before handoff | [common-workflow-polish](specs/common-workflow-polish.md) |
-| Config and audit durability | done | Known top-level config fields are validated; audit JSONL trim uses lock coordination and atomic replacement | [config-and-audit-durability](specs/config-and-audit-durability.md) |
-| Config backup recovery | done | Users can list and explicitly restore rotated config backups, even when the active config is malformed | [config-backup-recovery](specs/config-backup-recovery.md) |
-| Final risk hardening | done | Stale config writers fail instead of overwriting newer saves; TUI add-parent selection only offers saved editable nodes | [final-risk-hardening](specs/final-risk-hardening.md) |
-| Internal refactors and tests | done | Config storage/validation, host-tree helpers, connection planning/runtime, CLI helpers, TUI helpers, and focused tests are isolated behind stable compatibility boundaries | [internal-refactors-and-tests](specs/internal-refactors-and-tests.md) |
-| TUI interaction polish | done | Main list, forms, messages, details, add/edit/delete flows, and text/password editing use shared interaction patterns without adding dependencies | [tui-interaction-polish](specs/tui-interaction-polish.md) |
-| Terminal screen policy | done | TUI output is isolated by default, optional private mode can clear scrollback, and doctor reports terminal alternate-screen support | [terminal-screen-policy](specs/terminal-screen-policy.md) |
-| Terminal title | done | Optional terminal tab/window titles are emitted before SSH, SFTP, transfer, and relay handoff without changing Expect supervision | [terminal-title](specs/terminal-title.md) |
-| SFTP batch mode hardening | done | Direct/tunnel SFTP transfer success is determined by OpenSSH `sftp` batch-mode exit status rather than localized output text, while password/key/MFA prompt handling remains compatible | [sftp-batch-mode-hardening](specs/sftp-batch-mode-hardening.md) |
-| Interactive SFTP session | done | `sshgo --sftp <alias>` opens a standard interactive `sftp>` prompt for direct/tunnel hosts, keeps `<alias> sftp` as a remote SSH command, and rejects relay before handoff | [interactive-sftp-session](specs/interactive-sftp-session.md) |
-| Credential ownership and reliability hardening | done | Built-in credential encryption is removed; legacy ciphertext fails safely; read-only CLI paths stay side-effect free; config schema, Expect prompt routing/argument parsing, Unicode TUI input, executable checks, and verification are hardened | [credential-ownership-and-reliability-hardening](specs/credential-ownership-and-reliability-hardening.md) |
+New work should satisfy at least one condition:
 
-## Future Candidates
+- prevent connecting to, editing, or transferring through the wrong target;
+- make an existing common workflow easier to diagnose;
+- catch invalid config before SSH/SFTP handoff; or
+- reduce code risk without expanding low-frequency feature surface.
 
-No active future candidates are currently scheduled.
+## Deferred Candidates
 
-Future-candidate boundaries and deferred/non-goal items are maintained in [gap-analysis.md](gap-analysis.md) so roadmap state has a single source of truth. New work should first pass those personal-tool scope filters, then get a focused spec under `docs/specs/`.
+No candidate is currently scheduled.
+
+| Candidate | Reopen only if |
+|---|---|
+| Batch multi-host commands | Repeated use shows shell loops or aliases are insufficient. |
+| Connection health checks | Connection failures make a network probe materially useful. |
+| Directory transfer | Single-file upload/download no longer covers common workflows. |
+| Full OpenSSH config compatibility | Shallow import blocks important daily hosts and justifies the maintenance cost. |
+| Final-result audit events | A replacement for the current `execve` supervision boundary is accepted. |
+| Tags, favorites, or richer organization | Groups and Recent no longer cover common navigation. |
+
+Accepted behavior changes require a focused spec before implementation.
