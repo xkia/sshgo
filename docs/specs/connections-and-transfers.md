@@ -107,10 +107,14 @@ target SSH, and then interacts with the target. This supports parents that disab
 TCP forwarding. `tunnel` keeps the target OpenSSH process local and is preferred when
 local agent, keys, or known-hosts state must apply.
 
-Interactive SSH recognizes common shell prompt glyphs. After target authentication,
-a prompt-detection timeout without an initial command hands control to the user
-instead of declaring the session failed. Initial-command execution still requires a
-recognized prompt so sshgo knows when to send the command.
+Interactive SSH recognizes common shell prompt glyphs plus the bracketed-paste enable
+sequence that zsh and readline emit immediately before reading input. Rich prompts
+(for example Starship, where right-side text and cursor escapes follow the glyph) are
+detected through that sequence instead of waiting for the prompt-detection timeout.
+After target authentication, a prompt-detection timeout without an initial command
+hands control to the user instead of declaring the session failed, and that fallback
+ends with success once the interactive session closes. Initial-command execution
+still requires a recognized prompt so sshgo knows when to send the command.
 
 An initial positional command is sent after login and the session remains
 interactive. It is not a non-interactive command runner and does not return the

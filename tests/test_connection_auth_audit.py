@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
@@ -684,6 +685,80 @@ with open(os.environ["SSHGO_FAKE_ANSWER_PATH"], "w", encoding="utf-8") as f:
                         with open(answer_path, "r", encoding="utf-8") as f:
                             answer = f.read().strip()
                     self.assertEqual(answer, expected)
+
+    def test_login_exp_hands_over_rich_prompt_without_waiting_for_timeout(self):
+        # Starship-style prompts put right-side text and cursor escapes after the
+        # prompt glyph, so the buffer never ends with the glyph itself. The bracketed
+        # paste sequence that zsh/readline emit before reading input is the readiness
+        # signal that keeps such sessions from stalling until the Expect timeout.
+        rich_prompt = (
+            "\x1b[1;36m~\x1b[0m \r\n"
+            "\x1b[1;32m➜\x1b[0m  \x1b[K\x1b[69C 11:24 \x1b[76D\x1b[?2004h"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fake_ssh = os.path.join(temp_dir, "ssh")
+            answer_path = os.path.join(temp_dir, "answer.txt")
+            with open(fake_ssh, "w", encoding="utf-8") as f:
+                f.write(
+                    '''#!/usr/bin/env python3
+import os
+import select
+import sys
+
+prompt = os.environ["SSHGO_FAKE_PROMPT"]
+idle = float(os.environ.get("SSHGO_FAKE_IDLE", "1.5"))
+sys.stdout.write(prompt)
+sys.stdout.flush()
+while True:
+    ready, _, _ = select.select([sys.stdin], [], [], idle)
+    if not ready:
+        break
+    line = sys.stdin.readline()
+    if line == "":
+        break
+    with open(os.environ["SSHGO_FAKE_ANSWER_PATH"], "a", encoding="utf-8") as f:
+        f.write(line.strip() + "\\n")
+    sys.stdout.write(line)
+    sys.stdout.write("command-output\\r\\n")
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+'''
+                )
+            os.chmod(fake_ssh, 0o755)
+            env = os.environ.copy()
+            env["PATH"] = temp_dir + os.pathsep + env.get("PATH", "")
+            env["SSHGO_FAKE_PROMPT"] = rich_prompt
+            env["SSHGO_FAKE_ANSWER_PATH"] = answer_path
+
+            for extra_args, expected_answer in (
+                ([], ""),
+                (["-c", "echo hi"], "echo hi"),
+            ):
+                with self.subTest(extra_args=extra_args):
+                    if os.path.exists(answer_path):
+                        os.unlink(answer_path)
+                    started = time.monotonic()
+                    result = subprocess.run(
+                        ["./login.exp", "-h", "target.internal", "-u", "targetuser"]
+                        + extra_args,
+                        cwd=os.getcwd(),
+                        env=env,
+                        stdin=subprocess.DEVNULL,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=12,
+                    )
+                    elapsed = time.monotonic() - started
+                    output = result.stdout + result.stderr
+                    self.assertLess(elapsed, 8, output)
+                    self.assertEqual(result.returncode, 0, output)
+                    self.assertNotIn("Connection timed out", output)
+                    answer = ""
+                    if os.path.exists(answer_path):
+                        with open(answer_path, "r", encoding="utf-8") as f:
+                            answer = f.read().strip()
+                    self.assertEqual(answer, expected_answer)
 
     def test_login_exp_print_command_unwraps_ipv6_shell_jump_target(self):
         result = subprocess.run(

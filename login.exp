@@ -35,6 +35,12 @@ set host_key_checking "accept-new"
 set python_executable "python3"
 set has_tty [expr {![catch {stty size}]}]
 set shell_prompt_re {[$#%>❯➜] ?$}
+# zsh and readline emit the bracketed-paste enable sequence immediately before
+# reading input, so it also marks a ready shell. Rich prompts such as Starship put
+# right-side text and cursor escapes after the glyph, which leaves the glyph out of
+# the buffer tail and keeps the prompt pattern above from ever matching.
+set bracketed_paste_re {\x1b\[\?2004h}
+set shell_ready_re "(?:$shell_prompt_re|$bracketed_paste_re)"
 
 # Argument parser
 set i 0
@@ -391,8 +397,8 @@ expect {
     eof {
         fail "\n\nConnection closed unexpectedly.\n" 1
     }
-    # Success condition: match a shell prompt
-    -re $shell_prompt_re {
+    # Success condition: prompt glyph or line-editor readiness
+    -re $shell_ready_re {
         if {$connection_stage == "jumper"} {
             set connection_stage "target"
             set target_cmd [target_ssh_command $host $port $user $id_file]
@@ -409,7 +415,7 @@ expect {
             # Wait for the next prompt to ensure execution is complete. If the
             # command exits the SSH session, treat EOF as a clean handoff result.
             expect {
-                -re $shell_prompt_re {
+                -re $shell_ready_re {
                     interact {
                         eof {
                             return
@@ -438,6 +444,7 @@ expect {
                     return
                 }
             }
+            exit 0
         }
         fail "\n\nConnection timed out.\n" 1
     }
