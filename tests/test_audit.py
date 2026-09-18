@@ -32,7 +32,6 @@ class AuditTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             audit = AuditLogger(temp_dir)
             audit.HISTORY_MAX = 3
-            audit.AUDIT_SIMPLE_MAX = 3
             audit.TRIM_BATCH = 2
 
             for i in range(5):
@@ -112,14 +111,17 @@ class AuditTests(unittest.TestCase):
             data_dir = os.path.join(temp_dir, "data")
             audit = AuditLogger(data_dir)
 
-            audit.record_login("demo", "example.com", "deploy", "password", "started")
+            audit.record_login(
+                "demo", "example.com", "deploy", "password", "started",
+                full_mode=True,
+            )
 
             dir_mode = stat.S_IMODE(os.stat(data_dir).st_mode)
             history_mode = stat.S_IMODE(os.stat(audit.history_path).st_mode)
-            audit_mode = stat.S_IMODE(os.stat(audit.audit_simple_path).st_mode)
+            full_mode = stat.S_IMODE(os.stat(audit.audit_full_path).st_mode)
             self.assertEqual(dir_mode & 0o077, 0)
             self.assertEqual(history_mode & 0o077, 0)
-            self.assertEqual(audit_mode & 0o077, 0)
+            self.assertEqual(full_mode & 0o077, 0)
 
 
 if __name__ == "__main__":

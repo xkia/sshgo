@@ -28,7 +28,7 @@ Supports password, key-based, and MFA/TOTP authentication, nested jump hosts, cu
 -   **User-owned Credentials**: Passwords and MFA secrets are optional plain config values; protect the config and backups with owner-only permissions, or rely on keys, SSH agent, or manual prompts.
 -   **~/.ssh/config Import**: Automatically import and group hosts from your existing `~/.ssh/config` file.
 -   **Multi-language Support**: English and Chinese UI via `config.language`.
--   **Connection History & Audit**: Recent connections tracked in TUI with stable node identity and JSONL audit logs.
+-   **Connection History & Audit**: Every SSH/SFTP start and exec failure is logged with stable node identity; the TUI Recent group lists the most recent distinct hosts, and `--audit-full` adds launch-context records.
 -   **Config Validation**: Validate duplicate names/IDs, invalid ports, unknown fields, and malformed configuration via `--validate`.
 -   **Host Detail Preview**: Optional detail preview pane in the TUI.
 
@@ -227,7 +227,7 @@ Optional `config` fields include:
 | `placeholders` | String placeholders usable as `{{name}}` in selected connection fields. |
 | `theme` | Optional TUI colors: `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, `default`. |
 
-Runtime history and audit logs are separate from `hosts.json` and default to `~/.sshgo/history.jsonl`, `audit-simple.jsonl`, and `audit-full.jsonl` when full audit is enabled. Config saves keep a small backup rotation beside the config file: `hosts.json.bak`, `.bak.1`, and `.bak.2`.
+Runtime logs are separate from `hosts.json`. Every SSH/SFTP start and exec failure is appended to `~/.sshgo/history.jsonl`, which also feeds the TUI Recent group; `--audit-full` adds `~/.sshgo/audit-full.jsonl` with launch context such as the remote command and transfer paths. Config saves keep a small backup rotation beside the config file: `hosts.json.bak`, `.bak.1`, and `.bak.2`.
 
 sshgo does not encrypt credentials at rest. Protect `hosts.json` and every rotated backup with owner-only filesystem permissions. Configs from older releases with active encryption or `v2:` credentials are rejected; use a pre-removal release to save plaintext credentials before upgrading.
 

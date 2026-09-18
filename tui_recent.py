@@ -51,7 +51,12 @@ def build_recent_group(host_manager, limit=10):
     if not host_manager.config.get("show_recent", True):
         return None
 
-    recent_records = host_manager.audit.get_history(limit=limit)
+    # History stores one record per operation, so repeated use of one host can fill
+    # a small window on its own. Walk the retained history newest-first and keep the
+    # most recent distinct hosts.
+    recent_records = host_manager.audit.get_history(
+        limit=host_manager.audit.HISTORY_MAX
+    )
     if not recent_records:
         return None
 
@@ -63,6 +68,8 @@ def build_recent_group(host_manager, limit=10):
             continue
         seen_keys.add(seen_key)
         children.append(child)
+        if len(children) >= limit:
+            break
 
     if not children:
         return None

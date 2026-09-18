@@ -164,7 +164,7 @@ exit 0
             self.assertEqual(captured["env"]["SSHGO_TARGET_PASS"], "target-pass")
             self.assertEqual(captured["env"]["SSHGO_JUMPER_PASS"], "jump-pass")
 
-            with open(manager.audit.audit_simple_path, "r", encoding="utf-8") as f:
+            with open(manager.audit.history_path, "r", encoding="utf-8") as f:
                 records = [json.loads(line) for line in f if line.strip()]
             self.assertTrue(
                 any(r["result"] == "relay_upload_started" for r in records)

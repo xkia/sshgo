@@ -872,7 +872,7 @@ while True:
             finally:
                 host_manager_module.SCRIPT_DIR = old_script_dir
 
-            with open(manager.audit.audit_simple_path, "r", encoding="utf-8") as f:
+            with open(manager.audit.history_path, "r", encoding="utf-8") as f:
                 records = [json.loads(line) for line in f if line.strip()]
             self.assertTrue(any(r["result"] == "sftp_started" for r in records))
             self.assertTrue(any(r["result"] == "sftp_exp_not_found" for r in records))
@@ -909,7 +909,7 @@ while True:
             self.assertEqual(captured["env"]["SSHGO_TARGET_PASS"], "target-pass")
             self.assertEqual(captured["env"]["SSHGO_JUMPER_PASS"], "jump-pass")
 
-            with open(manager.audit.audit_simple_path, "r", encoding="utf-8") as f:
+            with open(manager.audit.history_path, "r", encoding="utf-8") as f:
                 records = [json.loads(line) for line in f if line.strip()]
             self.assertTrue(
                 any(r["result"] == "sftp_interactive_started" for r in records)

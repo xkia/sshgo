@@ -4,7 +4,6 @@
 
 - slug: documentation-structure
 - status: approved
-- owner: PM/Architect
 - related_roadmap: docs/roadmap.md
 
 ## Scope
@@ -49,17 +48,8 @@ Keep the repository documentation current-state focused:
    durable behavior and constraints are folded into a current domain spec.
 3. Product goals, current status, residual risks, and deferred candidates each
    have one source of truth.
-4. All repository-local Markdown links resolve after consolidation.
-5. The maintained Markdown corpus is materially smaller without dropping current
-   behavior, safety boundaries, or verification entry points.
-6. `./scripts/check.sh` passes because this change is documentation-only and does
-   not alter accepted runtime behavior.
-
-## Review Status
-
-- status: reviewed
-- verdict: PASS
-- notes: Product boundaries and roadmap state now have single owners; 21 completed
-  specs were reduced to four domain specs plus this maintenance contract. The
-  maintained Markdown corpus is about 57% smaller, all local links resolve, and the
-  full repository check passes 296 tests.
+4. All repository-local Markdown links resolve.
+5. Durable behavior, safety boundaries, and verification entry points survive
+   consolidation; review chronology stays in Git history.
+6. A documentation-only change does not alter accepted runtime behavior, and
+   `./scripts/check.sh` still passes.

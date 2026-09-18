@@ -4,7 +4,6 @@
 
 - slug: architecture-and-reliability
 - status: approved
-- owner: Architect/Engineer
 - related_roadmap: docs/roadmap.md
 
 ## Scope
@@ -95,10 +94,3 @@ available.
    is already known to be invalid.
 4. One deterministic clean-clone verification entry point remains sufficient for
    repository-wide automated checks.
-
-## Review Status
-
-- status: reviewed
-- verdict: PASS
-- notes: Consolidates current module and reliability contracts; detailed inventories
-  remain in `AGENTS.md` to avoid duplication.

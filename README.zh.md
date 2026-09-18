@@ -28,7 +28,7 @@
 -   **用户自主管理凭证**: 密码和 MFA secret 是可选的明文配置值；请用仅所有者可读写的文件权限保护配置与备份，或改用密钥、SSH agent、手动输入。
 -   **~/.ssh/config 导入**: 自动从您现有的 `~/.ssh/config` 文件中导入主机并分组.
 -   **多语言支持**: 通过 `config.language` 使用中文或英文界面.
--   **连接历史与审计**: TUI 中展示 Recent 分组记录最近连接, 并通过稳定节点身份关联当前配置, 审计日志以 JSONL 格式存储.
+-   **连接历史与审计**: 每次 SSH/SFTP 启动和 exec 失败都会以稳定节点身份写入日志; TUI 的 Recent 分组列出最近使用的不同主机, `--audit-full` 额外记录启动上下文.
 -   **配置验证**: 通过 `--validate` 检查重复名称/ID、非法端口、未知字段和格式错误.
 -   **主机详情预览**: TUI 中可选显示主机详情预览窗口.
 
@@ -227,7 +227,7 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 | `placeholders` | 可在部分连接字段中以 `{{name}}` 使用的字符串占位符。 |
 | `theme` | 可选 TUI 颜色: `black`、`red`、`green`、`yellow`、`blue`、`magenta`、`cyan`、`white`、`default`。 |
 
-运行时 history 和 audit 日志与 `hosts.json` 分离, 默认写到 `~/.sshgo/history.jsonl`、`audit-simple.jsonl` 和启用完整审计时的 `audit-full.jsonl`。配置保存时会在同目录保留小型备份轮转: `hosts.json.bak`、`.bak.1` 和 `.bak.2`。
+运行时日志与 `hosts.json` 分离。每次 SSH/SFTP 启动和 exec 失败都会追加到 `~/.sshgo/history.jsonl`, TUI 的 Recent 分组也读取该文件; 启用 `--audit-full` 时额外写入 `~/.sshgo/audit-full.jsonl`, 记录远程命令、传输路径等启动上下文。配置保存时会在同目录保留小型备份轮转: `hosts.json.bak`、`.bak.1` 和 `.bak.2`。
 
 sshgo 不再提供凭证静态加密。请使用仅所有者可读写的文件权限保护 `hosts.json` 及所有轮转备份。旧版本中启用了加密或包含 `v2:` 凭证的配置会被拒绝；升级前请先用移除加密前的版本保存为明文配置。
 

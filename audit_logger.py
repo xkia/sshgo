@@ -15,8 +15,7 @@ except ImportError:  # pragma: no cover - non-Unix fallback
 
 
 class AuditLogger:
-    HISTORY_MAX = 1000
-    AUDIT_SIMPLE_MAX = 5000
+    HISTORY_MAX = 5000
     AUDIT_FULL_MAX = 2000
     TRIM_BATCH = 100
 
@@ -28,7 +27,6 @@ class AuditLogger:
 
         self.data_dir = os.path.expanduser(data_dir)
         self.history_path = os.path.join(self.data_dir, "history.jsonl")
-        self.audit_simple_path = os.path.join(self.data_dir, "audit-simple.jsonl")
         self.audit_full_path = os.path.join(self.data_dir, "audit-full.jsonl")
 
     def _ensure_data_dir(self):
@@ -41,9 +39,8 @@ class AuditLogger:
                 pass
 
     def record_login(self, name, host, user, auth, result,
-                     command=None, duration_ms=None, exit_code=None,
-                     jump_chain=None, full_mode=False, node_id=None,
-                     port=None, endpoint=None, extra=None):
+                     command=None, jump_chain=None, full_mode=False,
+                     node_id=None, port=None, endpoint=None, extra=None):
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         record = {
@@ -61,22 +58,15 @@ class AuditLogger:
         if endpoint:
             record["endpoint"] = endpoint
 
-        # Always write to history and audit-simple
+        # Always write to history; it covers start and exec-failure events.
         self._append(self.history_path, record)
         self._trim(self.history_path, self.HISTORY_MAX)
-
-        self._append(self.audit_simple_path, {**record, "mode": "simple"})
-        self._trim(self.audit_simple_path, self.AUDIT_SIMPLE_MAX)
 
         # Full mode writes additional fields to audit-full
         if full_mode:
             full_record = {**record, "mode": "full"}
             if command is not None:
                 full_record["command"] = command
-            if duration_ms is not None:
-                full_record["duration_ms"] = duration_ms
-            if exit_code is not None:
-                full_record["exit_code"] = exit_code
             if jump_chain:
                 full_record["jump_chain"] = jump_chain
             if extra:

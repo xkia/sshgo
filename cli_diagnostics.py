@@ -214,7 +214,7 @@ def run_doctor(host_manager, config_path, config_errors=None,
         os.unlink(probe_path)
         _doctor_line("PASS", "Runtime data dir", data_dir)
         _doctor_permission_warning(data_dir, "Runtime data dir permissions")
-        for filename in ("history.jsonl", "audit-simple.jsonl", "audit-full.jsonl"):
+        for filename in ("history.jsonl", "audit-full.jsonl"):
             audit_path = os.path.join(data_dir, filename)
             if os.path.exists(audit_path):
                 _doctor_permission_warning(audit_path, f"{filename} permissions")

@@ -162,6 +162,42 @@ class TuiRecentTests(unittest.TestCase):
         self.assertEqual(child["host"], "[2001:db8::10]:2222")
         self.assertEqual(child["source"], "history")
 
+    def test_recent_group_includes_failed_records(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = manager_for_config(temp_dir, hosts=[jump_with_target()])
+            manager.audit.record_login(
+                "target", "target.internal", "targetuser", "password",
+                "exec_failed:5",
+            )
+            manager.audit.record_login(
+                "ghost", "ghost.internal", "deploy", "password",
+                "login_exp_not_found",
+            )
+
+            recent_group = tui_recent.build_recent_group(manager)
+
+        recent_names = [child["name"] for child in recent_group.get("children", [])]
+        self.assertEqual(recent_names, ["ghost", "target"])
+
+    def test_recent_group_lists_most_recent_distinct_hosts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = manager_for_config(temp_dir, hosts=[])
+            for _ in range(4):
+                manager.audit.record_login(
+                    "app-a", "a.internal", "deploy", "password", "started"
+                )
+            manager.audit.record_login(
+                "app-b", "b.internal", "deploy", "password", "started"
+            )
+            manager.audit.record_login(
+                "app-c", "c.internal", "deploy", "password", "started"
+            )
+
+            recent_group = tui_recent.build_recent_group(manager, limit=3)
+
+        recent_names = [child["name"] for child in recent_group.get("children", [])]
+        self.assertEqual(recent_names, ["app-c", "app-b", "app-a"])
+
 
 if __name__ == "__main__":
     unittest.main()

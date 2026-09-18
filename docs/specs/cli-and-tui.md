@@ -4,14 +4,12 @@
 
 - slug: cli-and-tui
 - status: approved
-- owner: PM/Architect/Engineer
 - related_roadmap: docs/roadmap.md
 
 ## Scope
 
 This spec owns the current command-line safety, diagnostics, and curses interaction
-contracts. It replaces completed CLI safety, common-workflow, TUI polish, and
-terminal-screen implementation plans.
+contracts.
 
 ## CLI Shortcuts
 
@@ -75,10 +73,11 @@ The TUI remains keyboard-first:
 
 Main list, forms, messages, details, and footer use a shared visual shell. Wide
 terminals show list and resolved details side-by-side without overwriting rows. The
-Recent group resolves and deduplicates up to ten current/history entries and is
-hidden when Recent is disabled or empty. Printable Unicode is accepted in search and
-form fields; ellipsizing, viewports, and cursor placement use terminal cell width
-rather than raw character count.
+Recent group lists up to ten most recent distinct hosts, resolving each entry to the
+current node and falling back to a read-only history snapshot; it is hidden when
+Recent is disabled or empty. Printable Unicode is accepted in search and form fields;
+ellipsizing, viewports, and cursor placement use terminal cell width rather than raw
+character count.
 
 ## Forms And CRUD
 
@@ -145,9 +144,3 @@ cannot be repaired portably by the application.
 4. Unicode editing, resolved details, deletion safety, and screen restoration retain
    focused test coverage.
 5. Default screen behavior preserves scrollback; destructive cleanup remains opt-in.
-
-## Review Status
-
-- status: reviewed
-- verdict: PASS
-- notes: Consolidates accepted CLI and TUI behavior without changing public flows.

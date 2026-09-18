@@ -4,14 +4,12 @@
 
 - slug: connections-and-transfers
 - status: approved
-- owner: PM/Architect/Engineer
 - related_roadmap: docs/roadmap.md
 
 ## Scope
 
 This spec owns current SSH, SFTP, relay, authentication, host-key, proxy, and
-terminal-title behavior. It replaces completed connection, security, jump-mode,
-proxy, SFTP, and terminal-title implementation plans.
+terminal-title behavior.
 
 ## Process And Authentication Model
 
@@ -190,6 +188,11 @@ transfers, and relay. Relay's final transfer/cleanup result is terminal output f
 Expect. Final exit status, duration, remote command result, paths typed in `sftp>`,
 and interactive commands are unavailable after `execve`.
 
+`login.exp` does not capture the SSH child's exit status, so `sshgo <alias>`
+(including `sshgo <alias> <command>`) exits 0 on its normal paths even when the
+remote command fails; only Expect-side failures use a non-zero exit. Recording or
+propagating the real status would require new Expect work and is deferred.
+
 ## Non-goals
 
 - No Python SSH/SFTP implementation or live-session supervision.
@@ -211,12 +214,4 @@ and interactive commands are unavailable after `execve`.
 4. SFTP success follows process exit status; batch files and relay temporary files
    follow their cleanup contracts.
 5. Preview remains side-effect-free; preview, title, and audit content remain
-   secret-free.
-
-## Review Status
-
-- status: reviewed
-- verdict: PASS_WITH_RISKS
-- notes: Automated coverage exercises command construction, fake prompt routing,
-  SFTP batch lifecycle, and relay fallback. Real password/passphrase/MFA/tunnel
-  prompt variants remain a manual-smoke residual when these paths change.
+  secret-free.

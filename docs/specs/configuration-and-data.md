@@ -4,14 +4,12 @@
 
 - slug: configuration-and-data
 - status: approved
-- owner: PM/Architect/Engineer
 - related_roadmap: docs/roadmap.md
 
 ## Scope
 
 This spec owns the current configuration, credential-storage, persistence,
-runtime-data, audit, and Recent contracts. It replaces the completed format,
-schema migration, durability, backup, identity, and credential-hardening plans.
+runtime-data, audit, and Recent contracts.
 
 ## Configuration Format And Resolution
 
@@ -159,18 +157,23 @@ Files and retention limits are:
 
 | File | Limit | Purpose |
 |---|---:|---|
-| `history.jsonl` | 1000 | Recent connection history |
-| `audit-simple.jsonl` | 5000 | Default start and exec-failure events |
+| `history.jsonl` | 5000 | Connection start/exec-failure history and Recent source |
 | `audit-full.jsonl` | 2000 | Optional extended launch context |
 
-Append and trim share a per-file lock. Trim writes a temporary file and atomically
-replaces the JSONL file. Records include node identity and resolved endpoint fields;
-full audit may include command, path, jump, and mode context. Because Python hands
-off with `execve`, these are launch records, not complete session audit.
+`history.jsonl` is the latest-operation log, not a success log: SSH/SFTP starts and exec
+failures are equally valid entries, and both feed the TUI Recent group. `audit-full.jsonl`
+is written only with `--audit-full` and adds launch context. Append and trim share a
+per-file lock; trim writes a temporary file and atomically replaces the JSONL file. Records
+include node identity and resolved endpoint fields, and full audit may also include command,
+path, jump, and mode context. Because Python hands off with `execve`, these are launch
+records, not complete session audit.
 
-Recent resolves history in this order: `node_id`, legacy name/endpoint fields, then
-a read-only snapshot when the configured node no longer exists. Renamed live nodes
-therefore retain their current name while deleted hosts remain visible historically.
+Recent lists the most recent distinct hosts up to its display limit. It walks the retained
+history newest-first before deduplicating, so repeated use of one host cannot crowd out
+other recently used hosts, and it resolves each entry by `node_id`, then legacy
+name/endpoint fields, then a read-only snapshot when the configured node no longer exists.
+Renamed live nodes therefore retain their current name while deleted hosts remain visible
+historically.
 
 ## Non-goals
 
@@ -190,9 +193,3 @@ therefore retain their current name while deleted hosts remain visible historica
    owner-only permission behavior remain covered by tests.
 5. Runtime logs stay outside config, retain stable node identity, and preserve the
    documented start-oriented audit boundary.
-
-## Review Status
-
-- status: reviewed
-- verdict: PASS
-- notes: Consolidates current behavior without changing runtime contracts.
