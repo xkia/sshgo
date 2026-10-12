@@ -120,6 +120,8 @@ def draw_form_fields(
             )
         elif field_type == "toggle":
             toggle_marker = "[-]" if field.get("value") else "[+]"
+            if field.get("checkbox"):
+                toggle_marker = "[x]" if field.get("value") else "[ ]"
             safe_addstr(
                 window,
                 y,

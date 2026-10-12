@@ -250,8 +250,19 @@ def main():
         "--extra-config",
         help="Use a different configuration file or directory for this session only",
     )
+    shortcuts = parser.add_mutually_exclusive_group()
+    shortcuts.add_argument("--session-shortcuts", dest="session_shortcuts", action="store_true", default=None,
+                           help=i18n.get("shortcuts_enable_help"))
+    shortcuts.add_argument("--no-session-shortcuts", dest="session_shortcuts", action="store_false",
+                           help=i18n.get("shortcuts_disable_help"))
     parser.add_argument("cmd_args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    if args.session_shortcuts is True:
+        if args.sftp or len(args.cmd_args) > 1:
+            parser.error(i18n.get("shortcuts_cli_usage"))
+        if not args.print_command and not (sys.stdin.isatty() and sys.stdout.isatty()):
+            parser.error(i18n.get("shortcuts_tty_required"))
 
     config_path = None
 
@@ -307,6 +318,8 @@ def main():
         data_dir=data_dir,
         auto_migrate=False,
     )
+
+    host_manager.session_shortcuts_override = args.session_shortcuts
 
     lang = host_manager.config.get("language", "en")
     i18n.set_language(lang)

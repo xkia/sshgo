@@ -201,6 +201,7 @@ def run_edit_flow(tui):
             "mfa_secret": selected_node.get("mfa_secret", ""),
             "proxy_command": selected_node.get("proxy_command", ""),
             "ssh_jump_mode": selected_node.get("ssh_jump_mode", "default"),
+            "session_shortcuts_enabled": selected_node.get("session_shortcuts_enabled", False),
             "transfer_jump_mode": selected_node.get(
                 "transfer_jump_mode",
                 "default",
@@ -210,6 +211,7 @@ def run_edit_flow(tui):
             selected_node.get("proxy_command")
             or selected_node.get("ssh_jump_mode")
             or selected_node.get("transfer_jump_mode")
+            or selected_node.get("session_shortcuts_enabled")
         )
         form_fields = tui_forms.host_form_fields(
             values,

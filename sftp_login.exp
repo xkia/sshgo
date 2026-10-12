@@ -29,6 +29,7 @@ set action ""
 set local_path ""
 set remote_path ""
 set print_command ""
+set reuse_context ""
 set custom_proxy_command ""
 set tunnel_proxy_command ""
 set has_tty [expr {![catch {stty size}]}]
@@ -50,6 +51,7 @@ while {$i < $argc} {
     set value [lindex $argv $i]
     incr i
     switch -exact -- $arg {
+        "-reuse-context" { set reuse_context $value }
         "-h"        { set host $value }
         "-u"        { set user $value }
         "-P"        { set port $value }
@@ -109,6 +111,7 @@ if {[info exists env(SSHGO_PYTHON_EXECUTABLE)]} {
 # Get auth.py path
 set script_dir [file dirname [file normalize [info script]]]
 set auth_py [file join $script_dir "auth.py"]
+if {$reuse_context != ""} {source [file join $script_dir session_reuse.exp]}
 set ssh_wrapper_py [file join $script_dir "sftp_ssh_wrapper.py"]
 
 proc restore_terminal_echo {} {
@@ -252,6 +255,7 @@ proc prompt_auth_stage {prompt} {
 }
 
 proc auth_response_for_prompt {kind} {
+    if {$::reuse_context != ""} {reuse_auth_error}
     global expect_out jumper_pass target_pass jumper_mfa_secret mfa_secret python_executable auth_py
     set stage [prompt_auth_stage [prompt_line $expect_out(buffer)]]
     if {$kind == "password"} {
@@ -387,6 +391,9 @@ proc create_batch_file {} {
         }
         if {[catch {
             fconfigure $ch -encoding utf-8 -translation lf
+            # Batch mode disables the meter independently of quiet logging.
+            # Use the native SFTP command to enable it before the single copy.
+            puts $ch "progress"
             puts $ch $command
             close $ch
             file attributes $candidate -permissions 0600
@@ -403,6 +410,7 @@ proc create_batch_file {} {
 }
 
 proc build_sftp_command {batch_file} {
+    if {$::reuse_context != ""} {return [reuse_sftp_command $batch_file]}
     global host user port jumper id_file host_key_checking custom_proxy_command tunnel_proxy_command ssh_wrapper_py action
 
     if {$action == "interactive"} {
@@ -495,6 +503,7 @@ if {$action == "interactive"} {
 # Main expect loop for authentication
 expect {
     -re {Are you sure you want to continue connecting.*yes/no} {
+        if {$reuse_context != ""} {reuse_auth_error}
         send "yes\r"
         exp_continue
     }
@@ -531,6 +540,10 @@ expect {
             interact
             finish_action_with_status [wait_exit_status]
         }
+        # Batch get/put may produce no output for the entire copy. The login
+        # deadline must not abort a healthy large-file transfer after 20 seconds.
+        # OpenSSH exit status/network errors and user cancellation still apply.
+        set timeout -1
         exp_continue
     }
     -re {(?i)Operation timed out} {

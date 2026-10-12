@@ -1,0 +1,41 @@
+# Internal transport adapter. Paths originate from the private local context.
+proc reuse_python {operation value} {
+    global python_executable script_dir reuse_context
+    return [exec $python_executable [file join $script_dir session_shortcuts.py] $operation $reuse_context $value]
+}
+proc reuse_sftp_command {batch} {
+    global reuse_context env
+    set args [list]
+    foreach line [split [reuse_python sftp-command $batch] "\n"] {
+        lappend args [encoding convertfrom utf-8 [binary format H* $line]]
+    }
+    set env(SSHGO_REUSE_CONTEXT) $reuse_context
+    return $args
+}
+proc reuse_relay_init {} {
+    global reuse_data
+    set reuse_data [dict create]
+    foreach line [split [reuse_python relay-options ""] "\n"] {
+        set at [string first " " $line]
+        dict set reuse_data [string range $line 0 [expr {$at-1}]] [encoding convertfrom utf-8 [binary format H* [string range $line [expr {$at+1}] end]]]
+    }
+}
+proc reuse_args {side tool} {
+    global reuse_data
+    set args [list [dict get $reuse_data ${side}_$tool]]
+    foreach opt [split [dict get $reuse_data ${side}_options] "\n"] {lappend args $opt}
+    if {$tool == "scp"} {lappend args -S [dict get $reuse_data ${side}_ssh]}
+    return $args
+}
+
+proc reuse_auth_error {} {
+    global reuse_info
+    fail [dict get $reuse_info shortcuts_unexpected_auth] 1
+}
+# Validate before creating a batch file and keep its lifetime inside this session.
+set reuse_info [dict create]
+foreach line [split [reuse_python state ""] "\n"] {
+    set at [string first " " $line]
+    dict set reuse_info [string range $line 0 [expr {$at-1}]] [encoding convertfrom utf-8 [binary format H* [string range $line [expr {$at+1}] end]]]
+}
+set env(TMPDIR) [file dirname $reuse_context]

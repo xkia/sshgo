@@ -3,10 +3,11 @@
 
 import os
 import shlex
+from dataclasses import replace
 
 from config_validation import DEFAULT_PORT, DEFAULT_RELAY_TRANSFER_TIMEOUT
 from connection_errors import ConfigRuntimeError
-from connection_plan import CommandPlan, secret_env_values
+from connection_plan import CommandPlan, secret_env_values, relay_temp_path
 from endpoint import format_proxy_jump_endpoint, host_needs_brackets
 from i18n import i18n
 
@@ -439,7 +440,7 @@ class ConnectionPlanner:
         ssh_jump_mode = (
             self.context._effective_ssh_jump_mode(node) if nest_parent else "direct"
         )
-        return self._command_plan(
+        plan = self._command_plan(
             script_path=self._script_path("login.exp"),
             args=args,
             secrets=secrets,
@@ -457,6 +458,45 @@ class ConnectionPlanner:
             exec_failed_prefix="exec_failed",
             exec_error_message="Error executing SSH: {error}",
         )
+
+        override = getattr(self.context, "session_shortcuts_override", None)
+        from session_shortcuts import enabled
+        if enabled(self.context, node) and not remote_command:
+            from session_shortcuts import capability, snapshot
+            reason = capability(self.context, node)
+            if reason:
+                if override is True:
+                    raise ConfigRuntimeError(reason)
+                return replace(plan, notice=reason)
+            data = snapshot(self.context, node)
+            data["required"] = override is True
+            return replace(plan, session=data)
+        return plan
+
+    def build_reused_transfer_command_plan(self, data, context_path, action, local, remote):
+        """Same Expect transfer engines, with an explicit auth-free context."""
+        from session_shortcuts import UNSAFE
+        for path in (local, remote):
+            if any(c in path for c in UNSAFE):
+                raise ConfigRuntimeError(i18n.get("validate_invalid_sftp_path", label="path"))
+        target = data["target"]
+        args = ["-h", target["host"], "-u", target["user"], "-P", target["port"],
+                "-action", action, "-local", local, "-remote", remote,
+                "-reuse-context", context_path]
+        relay = data["transfer"] == "relay"
+        if relay:
+            jump = data["jump"]
+            args += ["-J-host", jump["host"], "-J-user", jump["user"],
+                     "-J-port", jump["port"], "-transfer-timeout", str(data["relay_transfer_timeout"]),
+                     "-temp", relay_temp_path(data["relay_temp_dir"], local)]
+        script = "relay_transfer.exp" if relay else "sftp_login.exp"
+        audit = dict(data["audit"], command=f"{action} {local} {remote}",
+                     extra={"transfer_jump_mode": data["transfer"], "session_shortcut": True})
+        return self._command_plan(self._script_path(script), args, {}, audit,
+                                  f"relay_{action}_started" if relay else "sftp_started",
+                                  "relay_exp_not_found" if relay else "sftp_exp_not_found",
+                                  "relay_exec_failed" if relay else "sftp_exec_failed",
+                                  exec_error_message="Error executing transfer: {error}")
 
     def build_interactive_launch_command_args(self, node, remote_command=None):
         return self.build_interactive_command_plan(

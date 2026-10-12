@@ -3,6 +3,8 @@
 
 import os
 import sys
+import uuid
+from datetime import datetime, timezone
 from dataclasses import dataclass
 
 SECRET_ENV_KEYS = {
@@ -26,6 +28,8 @@ class CommandPlan:
     exec_failed_prefix: str
     missing_message: str = ""
     exec_error_message: str = ""
+    session: object = None
+    notice: str = ""
 
     def launch_args(self):
         return [self.script_path] + list(self.args)
@@ -83,3 +87,17 @@ def ensure_utf8_locale(env):
         or "UTF8" in env.get("LC_ALL", "").upper()
     ):
         env["LC_ALL"] = utf8_locale
+
+
+def relay_temp_path(relay_dir, source_path):
+    """One naming rule for standalone and reused relay transfers."""
+    base = os.path.basename(str(source_path).rstrip(os.sep)) or "file"
+    safe_base = "".join(
+        ch if ch.isalnum() or ch in ("-", "_", ".") else "_"
+        for ch in base
+    ).strip("._")
+    if not safe_base:
+        safe_base = "file"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    filename = f"sshgo-relay-{stamp}-{uuid.uuid4().hex[:8]}-{safe_base}"
+    return os.path.join(relay_dir, filename)

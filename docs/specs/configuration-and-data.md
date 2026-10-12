@@ -4,6 +4,7 @@
 
 - slug: configuration-and-data
 - status: approved
+- last_updated: 2026-10-12
 - related_roadmap: docs/roadmap.md
 
 ## Scope
@@ -174,6 +175,35 @@ other recently used hosts, and it resolves each entry by `node_id`, then legacy
 name/endpoint fields, then a read-only snapshot when the configured node no longer exists.
 Renamed live nodes therefore retain their current name while deleted hosts remain visible
 historically.
+
+## Session Shortcut Configuration And Context
+
+`config.session_shortcuts_enabled` and host-node `session_shortcuts_enabled` are
+strict booleans, each default false. Effective enablement is global OR target-node;
+node false cannot disable global true. A jump/parent node's setting does not propagate
+to its children. Groups cannot contain this host-only field. Per-run CLI enable/disable
+overrides both and is not persisted. The same resolution applies to CLI and TUI,
+including imported and usable Recent nodes; capability does not require a saved ID.
+TUI Advanced includes a node checkbox and preserves the value on save.
+
+An enabled live login creates a random owner-only 0700 directory under `/tmp`, with
+0600 context and its private ControlPath. Shell mode prepares a separate private
+jump directory/socket. Context creation never occurs in preview. Symlinks, wrong
+ownership and broad context permissions are rejected. Runtime ownership transfers
+from Python to Expect on successful execve; Python cleans only failed handoffs.
+
+The context freezes resolved endpoints, launch cwd, language, audit identity and
+location, transfer policy, relay temp directory and timeout (including 0). It contains
+no password, MFA, key path or original proxy command. One-time jump preparation adds
+trusted tools and its predetermined socket path before initialization. Transfers do
+not reload config, resolve aliases again or persist node IDs; each relay request uses
+the existing unique temp-name rule. Editing/removing a host does not retarget a live
+session. The helper strips inherited SSHGO secret environment values before launching
+existing transfer runners. Batch files stay inside the private session directory.
+
+Shortcut transfers record the existing start/exec-failure audit events with frozen
+identity and `session_shortcut=true` extended context. Overall results appear in
+Expect output; they do not add final-result audit guarantees.
 
 ## Non-goals
 

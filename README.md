@@ -128,6 +128,63 @@ sshgo
     ```
     This opens the normal OpenSSH `sftp>` prompt using sshgo's host resolution, authentication, MFA, host-key policy, and direct/tunnel jump planning. The positional form `sshgo <host_alias> sftp` is still treated as an SSH remote command.
 
+### File shortcuts inside a remote shell
+
+```bash
+sshgo --session-shortcuts <host_alias>
+# Initialization is automatic; type commands at the remote prompt without an extra Enter.
+sget app.log                  # Download to the local launch directory
+sget app.log '~/Downloads/'    # Local ~ must be quoted against remote expansion
+sput                          # Enter a local file path, then confirm upload
+sput '~/build/app.zip'         # Upload into the current remote directory
+```
+
+Each transfer displays both endpoints and asks for local confirmation. Uploads and
+existing download destinations require `y`; Enter cancels potential overwrites.
+Esc or Ctrl+C cancels the local operation and returns to SSH. SFTP shows its native
+progress meter; completion or cancellation returns to the remote prompt without an
+extra Enter. Paths with spaces or
+Chinese characters work when shell-quoted. Only one regular file per request is
+supported; no directories, wildcards, or multi-file requests.
+
+Enable `session_shortcuts_enabled: true` globally under `config`, or on individual
+host nodes. Global true enables every supported host; with global false (the default),
+only nodes with true are enabled. Node false does not override global true, and parent
+node settings are not inherited. CLI and TUI Enter use the same rule; TUI host editing
+exposes the node checkbox under Advanced. `--session-shortcuts` and
+`--no-session-shortcuts` override both settings for one run.
+
+```json
+{
+  "config": {"session_shortcuts_enabled": false},
+  "hosts": [
+    {"type": "host", "name": "server", "host": "server.example.com",
+     "user": "alice", "session_shortcuts_enabled": true}
+  ]
+}
+```
+
+Initialization is automatic in ordinary sh/dash, bash (including 3.2) and zsh. Path
+encoding uses shell builtins, without od/tr/hexdump. Private temporary text startup
+files are removed on normal exit. No remote
+binary is installed and no user profile is modified. Functions exist in the current
+shell only. Connections use private OpenSSH masters prepared at login; transfers
+reuse them without new authentication and fail if they disappear.
+
+Supported combinations are direct/SFTP, tunnel/SFTP, shell/SFTP and shell/relay.
+Shell/SFTP uses exec channels through the jump host and needs no TCP forwarding;
+standalone transfers keep their existing behavior. Tunnel/relay is unavailable for
+this entry. Required exec/subsystem permissions and existing OpenSSH tools still
+apply. Menu-only/restricted shells and unusual startup scripts may leave shortcuts
+unavailable. The bound target and identity never follow manual `ssh`, `su`, or
+`sudo -s` changes.
+`--session-shortcuts` cannot be combined with an initial command or `--sftp`.
+
+The functions submit requests, so their shell exit status is not a transfer result.
+Read the local completion/failure message. On normal exit private masters and
+contexts are cleaned up; abrupt network loss or SIGKILL may leave resources for
+manual inspection. ControlPersist's 30-second timeout applies only when idle.
+
 ### Global Options
 
 | Option | Purpose |
@@ -138,6 +195,7 @@ sshgo
 | `--list-backups` | List rotated backups for the selected config file. |
 | `--restore-backup <index>` | Restore `hosts.json.bak`, `.bak.1`, or `.bak.2` by index. |
 | `--print-command <alias> ...` | Print the resolved SSH/SFTP/transfer handoff command without connecting. |
+| `--session-shortcuts` / `--no-session-shortcuts` | Enable/disable session file shortcuts for this run, overriding config; place before the alias. |
 | `--sftp <alias>` | Open an interactive `sftp>` prompt for direct or tunnel hosts. |
 | `--audit-full` | Enable full audit logging for this process. Records may include command/path context. |
 | `-e <path>, --extra-config <path>` | Use a different config file or directory for this process. |
@@ -223,6 +281,7 @@ Optional `config` fields include:
 | `default_ssh_jump_mode` | Default nested SSH mode: `shell` or `tunnel`. |
 | `default_transfer_jump_mode` | Default nested transfer mode: `tunnel` or `relay`. |
 | `relay_temp_dir` | Absolute temporary directory on the jump host for relay transfers. |
+| `session_shortcuts_enabled` | Default `false`; enable remote sget/sput entry for CLI/TUI SSH logins. |
 | `relay_transfer_timeout` | Expect timeout in seconds for relay file-copy phases; `0` disables this transfer timeout. |
 | `placeholders` | String placeholders usable as `{{name}}` in selected connection fields. |
 | `theme` | Optional TUI colors: `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, `default`. |

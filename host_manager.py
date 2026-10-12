@@ -5,7 +5,6 @@ import os
 import sys
 import uuid
 import copy
-from datetime import datetime, timezone
 from endpoint import (
     EndpointParseError,
     format_endpoint,
@@ -41,6 +40,7 @@ from connection_errors import (
 )
 from connection_runtime import ConnectionRuntime
 from connection_planner import ConnectionPlanner
+from connection_plan import relay_temp_path
 import host_crud
 import host_tree
 
@@ -280,16 +280,7 @@ class HostManager:
                 )
             )
         )
-        base = os.path.basename(str(source_path).rstrip(os.sep)) or "file"
-        safe_base = "".join(
-            ch if ch.isalnum() or ch in ("-", "_", ".") else "_"
-            for ch in base
-        ).strip("._")
-        if not safe_base:
-            safe_base = "file"
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-        filename = f"sshgo-relay-{stamp}-{uuid.uuid4().hex[:8]}-{safe_base}"
-        return os.path.join(relay_dir, filename)
+        return relay_temp_path(relay_dir, source_path)
 
     def _audit_identity(self, node):
         host, port = self._parse_host_port(node)
@@ -763,6 +754,9 @@ class HostManager:
                 proxy_command = self._proxy_command(node)
                 if proxy_command:
                     details.append(("ProxyCommand", proxy_command))
+            from session_shortcuts import enabled, capability
+            if enabled(self, node):
+                details.append(("sget/sput", capability(self, node) or i18n.get("shortcuts_available")))
         except (_PlaceholderResolutionError, _ConfigRuntimeError, ValueError) as e:
             details.append(("Config Error", str(e)))
 

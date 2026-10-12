@@ -4,6 +4,7 @@
 
 - slug: connections-and-transfers
 - status: approved
+- last_updated: 2026-10-12
 - related_roadmap: docs/roadmap.md
 
 ## Scope
@@ -124,8 +125,18 @@ The upload/download shortcuts transfer one regular file. Direct and tunnel flows
 OpenSSH `sftp -b` with a private temporary batch file containing exactly one quoted
 `put` or `get`. The subprocess exit status, not localized output text, determines
 success. Cleanup removes the batch file on success, failure, signal, or spawn error.
+A native `progress` command precedes the single copy command in the batch file,
+enabling OpenSSH's own terminal progress meter for standalone and session-shortcut
+SFTP. No custom polling/progress engine or newer command-line flag is required.
+Very small files may show only the final 100% line.
 Creation also prunes sshgo batch files older than the retention threshold so a crash
 does not leave temporary command files indefinitely.
+
+Authentication/prompt discovery has a 20-second Expect timeout. Once the batch
+`sftp>` command prompt is seen, Expect imposes no copy-duration/output-silence
+deadline: large batch transfers can be silent while progressing. OpenSSH errors,
+process exit status and user cancellation still apply. This is shared by standalone
+and reused-session SFTP; relay keeps its separate configured transfer timeout.
 
 OpenSSH batch mode normally forces `BatchMode=yes`, which would disable password,
 passphrase, and keyboard-interactive prompts. `sftp_ssh_wrapper.py` removes only that
@@ -161,6 +172,94 @@ not printed. Failure paths attempt cleanup; cleanup failure warns without replac
 the original transfer result. Login, directory preparation, and cleanup use short
 command timeouts. File-copy phases use `config.relay_transfer_timeout` (default
 `1800`; `0` disables the Expect transfer timeout).
+
+## Remote Shell File Shortcuts
+
+Opt-in session shortcuts automatically define temporary `sget`/`sput` functions in
+ordinary interactive sh/dash, bash and zsh. A target SSH exec request creates a private
+0700 `/tmp/sg-init-<session>` directory and 0600 text startup files. No user profile
+is modified and no remote binary is installed. The supervising shell removes its
+known files on normal exit or handled HUP/TERM; SIGKILL/network loss may leave residue.
+The functions use only shell builtins for byte-preserving UTF-8 hex encoding,
+including Bash 3.2; no `od`, `tr` or `hexdump` is required. Encoding confines the C
+locale and scratch variables to a subshell and normalizes signed Bash byte values.
+It does not start an external process per byte or change the interactive locale.
+
+Bash uses a private rcfile that sources `/etc/profile` and the first readable user
+login profile; sh/dash use a private ENV file that sources `/etc/profile`, `.profile`
+and the user's ENV file. These are interactive shells with explicitly loaded login
+profiles, not native login-shell flag semantics. Zsh uses only a temporary `.zshenv`, restores the user's ZDOTDIR before normal
+profile/rc processing, and defines functions via a one-shot precmd hook. This avoids
+redirecting system-configured history/session files into the temporary directory.
+Existing names are not overwritten. Startup scripts that exec another program,
+disable rc loading or change startup selection are outside automatic-init guarantees.
+The caller's umask is restored before user startup files run.
+
+Only the session's random READY handshake followed by a successful reused-channel
+probe enables requests. Startup information is printed before SSH starts; successful
+probing does not print over the remote prompt or consume typed input. Failures still
+produce a notice. Failed probes also show a bounded diagnostic with control
+characters escaped (at most 1024 displayed characters); successful probe output
+remains hidden. Channel errors and probe timeouts are distinguished.
+Prompt glyphs and command echo are not readiness proof.
+No target initialization program is typed into the terminal, including ForceCommand
+menus. Missing tools, name conflicts, unavailable channels and timeout disable only
+the shortcut. Input remains ordinary SSH; there is no manual init shortcut.
+
+| SSH / transfer combination | Shortcut transport |
+|---|---|
+| direct / SFTP | Existing SFTP runner through the local private target master |
+| tunnel / SFTP | Same, with the initial target connection using its planned tunnel |
+| shell / SFTP | Local SFTP through a byte-transparent exec bridge: local master A to jump, jump master B to target subsystem |
+| shell / relay | Existing relay runner with both A and B injected into staging, copying and cleanup |
+| tunnel / relay | Unavailable; no new authentication path or automatic mode change |
+
+The shell/SFTP bridge does not require jump TCP forwarding or a jump SFTP client.
+It requires exec channels on the jump, its existing `ssh`/`false`, and the target
+SFTP subsystem. Relay retains its existing staging, scoped fallback and cleanup
+policy and requires existing SCP support. Restricted/menu-only bastions are not
+promised to work. Standalone transfer/interactive SFTP modes are unchanged.
+
+Each initial connection uses a private ControlPath, ControlMaster=yes and finite
+ControlPersist=30. The foreground mux client's lifetime remains independent of an
+active transfer channel. Every later SFTP, exec, probe and cleanup command uses
+`-F /dev/null`, ControlMaster=no, ControlPersist=no, BatchMode=yes, no original
+credentials/proxy, and an absolute trusted `false` ProxyCommand. Missing or rejected
+masters therefore fail closed, including a disconnect after precheck, without new
+authentication. Tool paths come from standard system directories. Initial authentication remains the ordinary login flow. With session shortcuts,
+the initial shell-mode target also inherits the configured host-key policy; its
+known-hosts storage remains on the jump host.
+
+Manual authentication monitors both keyboard input and the SSH channel. SSH/terminal
+EOF, cancellation or a 120-second per-prompt deadline restores terminal state and
+uses normal session cleanup; remote output or partial typing does not reset the deadline.
+Asynchronous completion (for example, push MFA) returns READY, initialization failure,
+shell readiness and login-error events to the main login state machine without
+consuming them or requiring Enter. Fragmented events remain in Expect's buffer.
+
+`login.exp` owns keyboard routing, bounded terminal metadata parsing, one pending
+request and one helper. Each transfer requires local confirmation; remote output is
+not an authorization source. Session IDs prevent accidental cross-session matches,
+not malicious requests by the remote user. Old/busy requests are dropped. Frames
+are bounded to 17000 characters and paths to 4096 UTF-8 bytes. Local displays escape
+control characters. File bytes never traverse the terminal metadata parser.
+
+In shell mode, the long target launcher is written as a 0600 text file in the
+private jump directory over master A's exec channel. Only its short `/bin/sh` launch
+command enters the jump terminal, avoiding canonical/line-editor input limits.
+A wrapper launch marker separates command echo from subsequent target authentication
+and prompt matching. The launch file is removed with that session's jump resources. On target foreground exit it emits a
+session-bound closed
+frame, disables shortcuts, cancels the helper and cleans B through A; the jump shell
+remains usable. Outer EOF or HUP/TERM cancels the helper then closes private masters
+and contexts. Helpers receive TERM with a two-second grace before forced stop;
+cleanup is bounded and best effort. Ctrl+C/Esc cancels just the local operation.
+No successful copy is inferred from function return codes or partial relay phases.
+
+Normal cleanup is proactive; the 30-second ControlPersist limit is only an idle
+fallback. Network failure, lost close frames, SIGKILL or stuck remote copy channels
+cannot guarantee immediate remote cleanup. Unconfirmed known resources are reported
+for inspection, not scanned/deleted broadly. No cleanup reconnects to authenticate.
 
 ## Terminal Titles
 

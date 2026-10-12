@@ -27,6 +27,9 @@ set jumper_pass ""
 set target_pass ""
 set remote_command ""
 set print_command ""
+set session_context ""
+set session_ready_re {a^}
+set session_unavailable_re {a^}
 set custom_proxy_command ""
 set jumper_proxy_command ""
 set tunnel_proxy_command ""
@@ -54,6 +57,7 @@ while {$i < $argc} {
     set value [lindex $argv $i]
     incr i
     switch -exact -- $arg {
+        "-session-context" { set session_context $value }
         "-h"   { set host $value }
         "-u"   { set user $value }
         "-p"   { set port $value }
@@ -111,7 +115,8 @@ set script_dir [file dirname [file normalize [info script]]]
 set auth_py [file join $script_dir "auth.py"]
 
 proc cleanup {} {
-    global has_tty
+    global has_tty session_context
+    if {$session_context != ""} {catch {ss_cleanup}}
     if {$has_tty} {
         catch {stty echo}
     }
@@ -268,6 +273,7 @@ proc handle_auth_prompt {kind} {
     set stage [prompt_auth_stage [prompt_line $expect_out(buffer)]]
     set response [auth_response $stage $kind]
     if {$response == ""} {
+        if {$::session_context != ""} {ss_manual_auth; return 1}
         interact
         return 0
     }
@@ -285,21 +291,37 @@ proc shell_join {parts} {
 
 proc target_ssh_command {host port user id_file} {
     set parts [list ssh]
+    if {$::session_context != "" && $::ss_state != "disabled"} {
+        set parts [list [dict get $::ss_data remote_ssh] {*}[ss_master_options [dict get $::ss_data remote_socket]] {*}[common_ssh_options $::host_key_checking]]
+    }
     if {$port != "" && $port != "22"} {
         lappend parts -p $port
     }
     if {$id_file != ""} {
         lappend parts -i $id_file
     }
-    lappend parts "$user@$host"
+    if {$::session_context != "" && $::ss_state != "disabled"} {
+        lappend parts -tt "$user@$host" [ss_call startup [dict get $::ss_data ready_nonce]]
+    } else {lappend parts "$user@$host"}
     return [shell_join $parts]
+}
+
+if {$session_context != ""} {
+    source [file join $script_dir session_shortcuts.exp]
+    set session_ready_re "\\x1b\\]777;sshgo;ready;[dict get $ss_data ready_nonce]\\x07"
+    set session_unavailable_re "\\x1b\\]777;sshgo;unavailable;[dict get $ss_data session]\\x07"
+    trap {cleanup; exit 143} TERM
+    trap {cleanup; exit 129} HUP
 }
 
 # Adjust window size on WINCH signal
 trap {
     set rows [stty rows]
     set cols [stty columns]
-    stty rows $rows columns $cols < $spawn_out(slave,name)
+    catch {stty rows $rows columns $cols < $spawn_out(slave,name)}
+    if {$session_context != "" && [info exists ss_main_tty] && $ss_main_tty != ""} {
+        catch {stty rows $rows columns $cols < $ss_main_tty}
+    }
 } WINCH
 
 # Construct the SSH command. Nested hosts use serial login: first connect to the
@@ -340,6 +362,15 @@ if {$jumper != "" && $jump_mode == "shell"} {
     lappend cmd "$user@$host"
 }
 
+if {$session_context != ""} {
+    set cmd [linsert $cmd 1 {*}[ss_master_options [dict get $ss_data socket]]]
+    lset cmd 0 [dict get $ss_data ssh]
+    if {$connection_stage != "jumper"} {
+        set cmd [linsert $cmd 1 -tt]
+        lappend cmd [ss_call startup [dict get $ss_data ready_nonce]]
+    }
+}
+
 if {$print_command != ""} {
     puts [shell_join $cmd]
     exit 0
@@ -360,6 +391,7 @@ if {$jumper != "" && $jump_mode == "shell"} {
 } else {
     puts "Connecting to $user@$host..."
 }
+if {$session_context != ""} {puts [dict get $ss_data shortcuts_login_hint]}
 
 # Spawn the SSH process
 # Temporarily disable logging to hide the spawn command itself
@@ -371,6 +403,15 @@ log_user 1
 
 # Main expect loop
 expect {
+    -re $session_ready_re {
+        set ss_state announced
+        ss_interact; cleanup; exit 0
+    }
+    -re $session_unavailable_re {
+        set ss_state disabled
+        ss_message shortcuts_disabled
+        ss_interact; cleanup; exit 0
+    }
     -re {Are you sure you want to continue connecting.*yes/no} {
         send "yes\r"
         exp_continue
@@ -401,8 +442,15 @@ expect {
     -re $shell_ready_re {
         if {$connection_stage == "jumper"} {
             set connection_stage "target"
+            if {$session_context != ""} {ss_prepare_target}
             set target_cmd [target_ssh_command $host $port $user $id_file]
-            send "$target_cmd\r"
+            if {$session_context != ""} {
+                if {[catch {ss_wrap_target $target_cmd} wrapped]} {fail $wrapped 1}
+                set target_cmd $wrapped
+            }
+            if {$session_context != "" && $ss_state != "disabled"} {
+                ss_launch_target $target_cmd
+            } else {send "$target_cmd\r"}
             exp_continue
         }
 
@@ -429,6 +477,7 @@ expect {
             }
         } else {
             # Scenario: No initial command, go straight to interactive.
+            if {$session_context != ""} {ss_interact; cleanup; exit 0}
             interact {
                 eof {
                     return
@@ -438,6 +487,7 @@ expect {
     }
     timeout {
         if {$remote_command == "" && $connection_stage != "jumper"} {
+            if {$session_context != ""} {ss_interact; cleanup; exit 0}
             cleanup
             interact {
                 eof {

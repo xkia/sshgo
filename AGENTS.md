@@ -66,7 +66,10 @@ This file provides repository guidance for coding agents and maintainers working
 | `i18n.py` | Simple English/Chinese string localization (`I18N` class, global `i18n` instance) |
 | `login.exp` | Expect script that handles interactive SSH login (password, passphrase, prompt-time MFA generation, jump host chaining) |
 | `sftp_login.exp` | Expect script for direct/tunnel SFTP file transfer (upload/download) and CLI-only interactive SFTP sessions with same authentication logic as login.exp |
-| `sftp_ssh_wrapper.py` | Small stdlib-only ssh wrapper used by `sftp_login.exp` batch mode to remove OpenSSH `sftp -b`'s implicit `BatchMode=yes` while preserving all other ssh args |
+| `session_shortcuts.py` | Private session snapshot, fail-closed OpenSSH reuse, shell-function templates, local confirmation and cleanup; hands transfers to existing planners/runners |
+| `session_shortcuts.exp` | Optional login event loop: automatic initialization handshake, bounded request parsing, exclusive helper input, terminal restoration and master lifecycle |
+| `session_reuse.exp` | Internal context adapter for existing SFTP/relay runners; no independent transfer protocol |
+| `sftp_ssh_wrapper.py` | Small stdlib-only ssh wrapper used by `sftp_login.exp` batch mode to remove OpenSSH `sftp -b`'s implicit `BatchMode=yes` while preserving all other ssh args; also validates the subsystem-only shell-session exec bridge |
 | `relay_transfer.exp` | Expect script for relay file transfer through temporary jump-host storage with SFTP staging and scoped scp fallback |
 | `hosts.json` | Project fallback config file: `{"config": {...}, "hosts": [...]}` with `group` and `host` nodes |
 
@@ -120,6 +123,7 @@ This file provides repository guidance for coding agents and maintainers working
 - **Expect scripts**: `login.exp`, `sftp_login.exp`, and `relay_transfer.exp` must be executable (`chmod +x`). HostManager ensures this before shortcut `execve`. `sftp_ssh_wrapper.py` must also remain executable so OpenSSH `sftp -S` can launch it.
 - **MFA generation**: Expect scripts generate TOTP codes when an MFA prompt arrives by invoking `auth.py` with the secret from the transient `SSHGO_*` environment copy. Secrets are not passed in argv.
 - **Process handoff**: Shortcut connections, transfers, and interactive SFTP sessions replace Python via `os.execve()` from `ConnectionRuntime`. The Python manager records start/exec failure events only; it does not supervise the live SSH/SFTP session.
+- **Session shortcuts**: Opt-in global OR target-node `session_shortcuts_enabled` (default false), overridden by `--session-shortcuts` / `--no-session-shortcuts` before the alias, applies to CLI/TUI interactive SSH. Ordinary sh/dash/bash/zsh auto-initialize via private temporary text startup files and builtin-only path encoding (including Bash 3.2), without installing binaries or editing profiles. Existing transfer runners reuse private finite-ControlPersist masters with fail-closed options; each request needs local confirmation. Direct/SFTP, tunnel/SFTP, shell/SFTP and shell/relay are supported; tunnel/relay is not. Python still hands off with execve; Expect owns the session and temporary helper lifecycle. Normal exit cleans known startup files; abrupt failures may leave residue.
 - **Relay timeout**: `config.relay_transfer_timeout` defaults to `1800` seconds and applies only to relay file-copy phases; `0` disables the Expect transfer timeout. Relay login, directory preparation, and cleanup still use short command timeouts.
 - **Terminal titles**: `config.terminal_title_enabled=false` by default. When enabled, `ConnectionRuntime` calls `terminal_title.emit_terminal_title()` immediately before audit start and `execve` for SSH, interactive SFTP, SFTP transfer, or relay transfer. Title output uses best-effort OSC sequences only, never includes secrets or transfer paths, and is not restored after the remote session exits.
 - **Audit logging**: JSONL files in `~/.sshgo/`. History is always written for SSH and SFTP starts, including `sftp_interactive_started` and exec failures; audit-full requires the `--audit-full` flag and adds extended launch context. New records include `node_id`, `port`, and `endpoint`. Because of the execve handoff, final duration, exit code, and commands typed inside `sftp>` are not available in current audit records.
@@ -140,3 +144,18 @@ Use the smallest set that matches the change. For broad code or documentation sy
 ```
 
 For TUI smoke checks, run `./sshgo.sh` in a terminal and press `q` to confirm startup and clean exit.
+
+Session-shortcut loopback verification is opt-in and starts an isolated local sshd
+with temporary keys/config (no user hosts or credentials):
+
+```bash
+SSHGO_LIVE_TESTS=1 ~/.venv/bin/python -m unittest discover -s tests -p test_session_shortcuts_live.py
+```
+
+It requires `/usr/sbin/sshd`, an installed `sftp-server`, OpenSSH clients and Expect.
+Coverage includes real mux/SFTP/relay bytes, four-mode PTY flows, manual encrypted-key
+prompts, automatic sh/dash/bash/zsh startup, user profiles, text-file permissions/cleanup,
+menu input isolation, Chinese/space paths, confirmation/cancellation, target exit, TERM
+and missing-master no-reauth.
+Password/MFA server variants and platform-specific terminal behavior still need
+appropriate live smoke checks.

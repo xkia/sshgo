@@ -1,0 +1,335 @@
+# Local session-shortcut event handling, sourced by login.exp only when enabled.
+# File bytes never pass through this event loop: it sees terminal metadata only.
+set ss_helper [file join $script_dir session_shortcuts.py]
+set ss_state disabled
+set ss_data [dict create]
+set ss_buffer ""
+set ss_buffer_time 0
+set ss_prefix "\033\]777;sshgo;"
+set ss_busy 0
+set ss_eof 0
+set ss_target_closed 0
+set ss_last 0
+set ss_pending ""
+set ss_replay ""
+set ss_overflow 0
+set ss_main ""
+set ss_main_tty ""
+set ss_cleaning 0
+set ss_terminal ""
+set ss_helper_pid ""
+set ss_helper_spawn ""
+
+proc ss_call {operation {value ""}} {
+    global python_executable ss_helper session_context
+    return [exec $python_executable $ss_helper $operation $session_context $value]
+}
+proc ss_load {} {
+    global ss_data
+    set ss_data [dict create]
+    foreach line [split [ss_call state] "\n"] {
+        set split_at [string first " " $line]
+        if {$split_at < 1} {continue}
+        dict set ss_data [string range $line 0 [expr {$split_at-1}]] [encoding convertfrom utf-8 [binary format H* [string range $line [expr {$split_at+1}] end]]]
+    }
+}
+proc ss_message {key} {
+    global ss_data
+    if {[dict exists $ss_data $key]} {send_user "\r\n[dict get $ss_data $key]\r\n"}
+}
+proc ss_master_options {socket} {
+    return [list -o ControlMaster=yes -o "ControlPath=$socket" -o ControlPersist=30 -o ForkAfterAuthentication=no]
+}
+proc ss_prepare_target {} {
+    global ss_state ss_data
+    if {$ss_state == "disabled"} {return}
+    if {[catch {ss_call prepare; ss_load} message]} {
+        set ss_state disabled
+        send_user "\r\n$message\r\n"
+        ss_message shortcuts_disabled
+    }
+}
+proc ss_wrap_target {command} {
+    global ss_state ss_data
+    if {$ss_state == "disabled"} {return $command}
+    set command [ss_call stage-target $command]
+    # The sent text contains printf escapes, never the complete output frame.
+    set sid [dict get $ss_data session]
+    return "printf '\\033\]777;sshgo;launch;$sid\\007'; $command; printf '\\033\]777;sshgo;closed;$sid\\007'"
+}
+proc ss_launch_target {command} {
+    global spawn_id ss_data
+    # Drain the echoed wrapper before normal prompt matching. A split echo ending
+    # in %, $, # or > is not evidence that the target is authenticated and ready.
+    send -i $spawn_id -- "$command\r"
+    set timeout 10
+    set marker "\033\]777;sshgo;launch;[dict get $ss_data session]\007"
+    expect {
+        -i $spawn_id -exact $marker {}
+        -i $spawn_id eof {fail [dict get $ss_data shortcuts_launch_failed] 1}
+        timeout {fail [dict get $ss_data shortcuts_launch_failed] 1}
+    }
+}
+proc ss_output_text {text} {
+    global ss_busy ss_replay ss_overflow ss_pending
+    if {$ss_busy || $ss_pending != ""} {
+        if {[string length $ss_replay]+[string length $text] <= 65536} {
+            append ss_replay $text
+        } else {set ss_overflow 1}
+    } else {send_user -- $text}
+}
+proc ss_replay_output {} {
+    global ss_replay ss_overflow
+    if {$ss_overflow} {ss_message shortcuts_overflow}
+    send_user -- $ss_replay
+    set ss_replay ""
+    set ss_overflow 0
+}
+proc ss_handle_frame {frame} {
+    global ss_state ss_data ss_busy ss_last ss_target_closed ss_pending
+    if {$frame == "closed;[dict get $ss_data session]"} {
+        set ss_target_closed 1
+        set ss_state closed
+        return
+    }
+    if {$ss_state == "waiting" && $frame == "ready;[dict get $ss_data ready_nonce]"} {
+        set ss_state announced
+        return
+    }
+    if {$frame == "unavailable;[dict get $ss_data session]"} {
+        set ss_state disabled
+        ss_message shortcuts_disabled
+        return
+    }
+    set fields [split $frame ";"]
+    if {[llength $fields] != 6 || [lindex $fields 0] != "1" || [lindex $fields 1] != [dict get $ss_data session]} {return}
+    set ident [lindex $fields 2]
+    if {![regexp {^[1-9][0-9]{0,8}$} $ident] || $ident <= $ss_last} {return}
+    set ss_last $ident
+    if {$ss_state != "ready" || $ss_busy || $ss_pending != ""} {return}
+    set ss_pending $frame
+}
+proc ss_output {text} {
+    global ss_buffer ss_prefix ss_buffer_time ss_state
+    append ss_buffer $text
+    while {$ss_buffer != ""} {
+        set at [string first $ss_prefix $ss_buffer]
+        if {$at < 0} {
+            # Keep only a possible partial prefix; forward normal escape sequences.
+            set keep 0
+            for {set n 1} {$n < [string length $ss_prefix] && $n <= [string length $ss_buffer]} {incr n} {
+                if {[string range $ss_buffer end-[expr {$n-1}] end] == [string range $ss_prefix 0 [expr {$n-1}]]} {set keep $n}
+            }
+            set cut [expr {[string length $ss_buffer]-$keep}]
+            ss_output_text [string range $ss_buffer 0 [expr {$cut-1}]]
+            set ss_buffer [string range $ss_buffer $cut end]
+            break
+        }
+        if {$at > 0} {ss_output_text [string range $ss_buffer 0 [expr {$at-1}]]; set ss_buffer [string range $ss_buffer $at end]}
+        set end [string first "\007" $ss_buffer]
+        if {$end < 0} {
+            if {[string length $ss_buffer] > 17000} {set ss_buffer ""; set ss_state disabled; ss_message shortcuts_disabled}
+            break
+        }
+        if {$end <= 17000} {ss_handle_frame [string range $ss_buffer [string length $ss_prefix] [expr {$end-1}]]}
+        set ss_buffer [string range $ss_buffer [expr {$end+1}] end]
+    }
+    if {$ss_buffer == ""} {set ss_buffer_time 0} elseif {$ss_buffer_time == 0} {set ss_buffer_time [clock seconds]}
+}
+proc ss_helper_run {operation {value ""} {interactive 0}} {
+    global python_executable ss_helper session_context ss_main ss_busy ss_replay ss_overflow
+    global ss_eof ss_target_closed spawn_id user_spawn_id expect_out ss_helper_pid ss_helper_spawn spawn_out
+    if {$interactive} {
+        set timeout 0
+        expect {
+            -i $user_spawn_id -re {.+} {exp_continue}
+            timeout {}
+        }
+    }
+    # During startup probing, leave typed input queued for the original shell.
+    # Only an actual transfer prompt owns/discards pending keyboard input.
+    set helper_input [expr {$interactive ? $user_spawn_id : ""}]
+    set ss_busy 1
+    set saved $spawn_id
+    log_user 0
+    spawn -noecho $python_executable $ss_helper $operation $session_context $value
+    set helper $spawn_id
+    set helper_pid [exp_pid -i $helper]
+    set ss_helper_pid $helper_pid
+    set ss_helper_spawn $helper
+    configure_utf8_channel $helper
+    catch {stty rows [stty rows] columns [stty columns] < $spawn_out(slave,name)}
+    set done 0
+    set diagnostic ""
+    set timed_out 0
+    set cancel_at 0
+    set deadline [expr {[clock seconds]+15}]
+    while {!$done} {
+        if {($ss_eof || $ss_target_closed || (!$interactive && [clock seconds]>=$deadline)) && $cancel_at == 0} {
+            set timed_out [expr {!$interactive && !$ss_eof && !$ss_target_closed}]
+            catch {exec kill -TERM $helper_pid}
+            set cancel_at [clock seconds]
+        }
+        if {$cancel_at && [clock seconds]-$cancel_at>=2} {
+            ss_message shortcuts_cancel_incomplete
+            catch {exec kill -KILL $helper_pid}
+            catch {close -i $helper}
+            break
+        }
+        set timeout 1
+        expect {
+            -i $helper -re {.+} {
+                if {$interactive} {send_user -- $expect_out(0,string)} else {
+                    append diagnostic [string range $expect_out(0,string) 0 [expr {1023-[string length $diagnostic]}]]
+                }
+            }
+            -i $helper eof {set done 1}
+            -i $ss_main -re {.+} {ss_output $expect_out(0,string)}
+            -i $ss_main eof {set ss_eof 1}
+            -i $helper_input -re {(?s).} {
+                if {$interactive} {
+                    set key $expect_out(0,string)
+                    if {$key == "\033"} {set key "\003"}
+                    catch {send -i $helper -- $key}
+                    if {$key == "\003" && $cancel_at == 0} {set cancel_at [clock seconds]}
+                }
+            }
+            -i $helper_input eof {set ss_eof 1}
+            timeout {}
+        }
+    }
+    set code 1
+    if {![catch {wait -i $helper} result] && [llength $result]==4 && [lindex $result 2]==0} {set code [lindex $result 3]}
+    set spawn_id $saved
+    set ss_helper_pid ""
+    set ss_helper_spawn ""
+    set ss_busy 0
+    if {!$interactive && $code != 0 && !$ss_eof && !$ss_target_closed} {
+        if {$timed_out} {ss_message shortcuts_probe_timeout} elseif {$diagnostic != ""} {
+            ss_diagnostic $diagnostic
+        } else {ss_message shortcuts_probe_failed}
+    }
+    # Existing transfer runners restore echo/canonical mode on their way out.
+    # Reclaim the terminal before accepting the next SSH keystroke.
+    catch {stty raw -echo}
+    return $code
+}
+proc ss_diagnostic {text} {
+    set safe ""
+    foreach ch [split [string range [string trim $text "\r\n"] 0 1023] ""] {
+        scan $ch %c code
+        if {$code < 32 || ($code >= 127 && $code <= 159)} {
+            append safe [format {\x%02x} $code]
+        } else {append safe $ch}
+    }
+    send_user -- "\r\n[string range $safe 0 1023]\r\n"
+}
+proc ss_manual_auth {} {
+    global spawn_id user_spawn_id expect_out ss_terminal
+    global session_ready_re session_unavailable_re shell_ready_re
+    set saved [stty -g]
+    set ss_terminal $saved
+    stty raw -echo
+    set timeout 120
+    set failure ""
+    set code 1
+    # Leave completion events in Expect's buffer for the main login state
+    # machine. In particular, push MFA may finish without a keyboard response.
+    set completed_re "(?:$session_ready_re)|(?:$session_unavailable_re)|(?:$shell_ready_re)"
+    expect {
+            -i $spawn_id -notransfer -re $completed_re {}
+            -i $spawn_id -notransfer -re {Permission denied|Connection timed out} {}
+            -i $spawn_id -notransfer -re {(?i)Operation timed out} {}
+            -i $spawn_id eof {set failure shortcuts_auth_closed}
+            -i $user_spawn_id -re {(?s).} {
+                set key $expect_out(0,string)
+                if {$key == "\003"} {
+                    set failure shortcuts_cancelled
+                    set code 130
+                } elseif {[catch {send -i $spawn_id -- $key}]} {
+                    set failure shortcuts_auth_closed
+                } elseif {$key != "\r" && $key != "\n"} {exp_continue -continue_timer}
+            }
+            -i $user_spawn_id eof {set failure shortcuts_auth_closed}
+            timeout {set failure shortcuts_auth_timeout}
+    }
+    catch {stty $saved}
+    if {$failure != ""} {fail [dict get $::ss_data $failure] $code}
+}
+proc ss_keyboard {key} {
+    global ss_main
+    send -i $ss_main -- $key
+}
+proc ss_interact {} {
+    global ss_state ss_main spawn_id ss_eof ss_target_closed ss_pending
+    global ss_buffer ss_buffer_time user_spawn_id expect_out ss_terminal ss_main_tty spawn_out
+    set ss_main $spawn_id
+    set ss_main_tty $spawn_out(slave,name)
+    set saved [stty -g]
+    set ss_terminal $saved
+    stty raw -echo
+    log_user 0
+    set startup_deadline [expr {[clock seconds]+20}]
+    while {!$ss_eof} {
+        if {$ss_state == "announced"} {
+            if {[ss_helper_run probe] == 0 && !$ss_eof && !$ss_target_closed} {
+                set ss_state ready
+            } else {set ss_state disabled; ss_message shortcuts_disabled}
+            if {!$ss_target_closed} {ss_replay_output}
+        }
+        if {$ss_state == "waiting" && [clock seconds] >= $startup_deadline} {
+            set ss_state disabled
+            ss_message shortcuts_disabled
+        }
+        if {$ss_target_closed} {
+            set ss_target_closed 0
+            set ss_state closed
+            ss_message shortcuts_closed
+            if {[catch {ss_call target-cleanup} message]} {send_user "\r\n$message\r\n"}
+            ss_replay_output
+        }
+        if {$ss_pending != ""} {
+            set frame $ss_pending
+            set ss_pending ""
+            if {$ss_state == "ready"} {
+                set status [ss_helper_run transfer $frame 1]
+                if {$status==0} {ss_message shortcuts_done} elseif {$status==130} {ss_message shortcuts_cancelled} else {ss_message shortcuts_failed}
+            }
+            if {!$ss_target_closed} {ss_replay_output}
+        }
+        set timeout 1
+        expect {
+            -i $ss_main -re {.+} {ss_output $expect_out(0,string)}
+            -i $ss_main eof {set ss_eof 1}
+            -i $user_spawn_id -re {(?s).} {ss_keyboard $expect_out(0,string)}
+            -i $user_spawn_id eof {set ss_eof 1}
+            timeout {
+                if {$ss_buffer_time && [clock seconds]-$ss_buffer_time >= 5} {
+                    set ss_buffer ""; set ss_buffer_time 0; set ss_state disabled
+                }
+            }
+        }
+    }
+    catch {stty $saved}
+    log_user 1
+}
+proc ss_cleanup {} {
+    global ss_cleaning ss_terminal ss_helper_pid ss_helper_spawn
+    if {$ss_cleaning} {return}
+    set ss_cleaning 1
+    if {$ss_helper_pid != ""} {
+        catch {exec kill -TERM $ss_helper_pid}
+        set timeout 2
+        catch {
+            expect {
+                -i $ss_helper_spawn eof {}
+                timeout {ss_message shortcuts_cancel_incomplete; catch {exec kill -KILL $ss_helper_pid}; catch {close -i $ss_helper_spawn}}
+            }
+            wait -i $ss_helper_spawn
+        }
+    }
+    if {$ss_terminal != ""} {catch {stty $ss_terminal}}
+    if {[catch {ss_call cleanup} message]} {send_user "\r\n$message\r\n"}
+}
+ss_load
+set ss_state waiting

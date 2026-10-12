@@ -74,6 +74,7 @@ CONFIG_BOOL_FIELDS = frozenset({
     "show_recent",
     "recent_expanded",
     "terminal_title_enabled",
+    "session_shortcuts_enabled",
 })
 CONFIG_STRING_FIELDS = frozenset({
     "language",
@@ -102,7 +103,7 @@ THEME_COLORS = frozenset({
 COMMON_NODE_KEYS = frozenset({"id", "type", "name", "expanded", "children"})
 HOST_ONLY_KEYS = frozenset({
     "host", "port", "user", "password", "id_file", "mfa_secret", "use_ssh_agent",
-    "ssh_jump_mode", "transfer_jump_mode", "proxy_command",
+    "ssh_jump_mode", "transfer_jump_mode", "proxy_command", "session_shortcuts_enabled",
 })
 HOST_STRING_FIELDS = ("host", "user", "password", "id_file", "mfa_secret")
 HOST_SAVE_KEYS = COMMON_NODE_KEYS | HOST_ONLY_KEYS
@@ -125,6 +126,7 @@ DEFAULT_CONFIG = {
     "default_transfer_jump_mode": DEFAULT_TRANSFER_JUMP_MODE,
     "tui_screen_policy": DEFAULT_TUI_SCREEN_POLICY,
     "terminal_title_enabled": DEFAULT_TERMINAL_TITLE_ENABLED,
+    "session_shortcuts_enabled": False,
     "terminal_title_target": DEFAULT_TERMINAL_TITLE_TARGET,
     "terminal_title_format": DEFAULT_TERMINAL_TITLE_FORMAT,
     "terminal_title_scope": DEFAULT_TERMINAL_TITLE_SCOPE,
@@ -289,15 +291,16 @@ def _validate_node_shape(node, node_path, errors):
                         expected=i18n.get("validate_type_string"),
                     )
                 )
-        if "use_ssh_agent" in node and type(node["use_ssh_agent"]) is not bool:
-            errors.append(
-                i18n.get(
-                    "validate_invalid_node_field_type",
-                    path=node_path,
-                    field="use_ssh_agent",
-                    expected=i18n.get("validate_type_bool"),
+        for field in ("use_ssh_agent", "session_shortcuts_enabled"):
+            if field in node and type(node[field]) is not bool:
+                errors.append(
+                    i18n.get(
+                        "validate_invalid_node_field_type",
+                        path=node_path,
+                        field=field,
+                        expected=i18n.get("validate_type_bool"),
+                    )
                 )
-            )
         for field in ("password", "mfa_secret"):
             value = node.get(field)
             if isinstance(value, str) and value.startswith(REMOVED_ENCRYPTION_PREFIX):

@@ -4,6 +4,7 @@
 
 - slug: architecture-and-reliability
 - status: approved
+- last_updated: 2026-10-12
 - related_roadmap: docs/roadmap.md
 
 ## Scope
@@ -50,6 +51,23 @@ constraints. The exact module inventory and verification commands remain in
   snapshots are browseable but not persisted or selected as editable parents.
 - Every user-facing string added to runtime code is represented in both English and
   Chinese dictionaries.
+
+## Session Shortcut Extension
+
+Expect remains the live session owner. An optional local Python helper loads the
+private login snapshot, validates requests, prompts for local authorization, then
+execs the existing SFTP/relay runner through ConnectionRuntime. This is not a new
+file-transfer engine. A narrow internal Expect adapter supplies fail-closed reuse
+arguments; the existing SFTP ssh wrapper has a validated subsystem-only exec bridge
+for shell-mode sessions. Ordinary auth and standalone transfer branches are retained.
+
+Output frames carry only bounded metadata; session identifiers are not credentials.
+Initialization is an SSH exec request with temporary text startup files and a
+session-specific READY nonce; it is never inferred from a target prompt or injected
+as terminal input. Shell-mode launcher staging uses the existing authenticated exec
+channel. Channel probing follows READY before request handling is enabled. Replays, requests while busy and requests after target close cannot create
+additional helpers. Termios, spawn ownership and resize routing return to the original
+SSH after each helper. Cleanup addresses only this session's known paths and masters.
 
 ## Compatibility Constraints
 

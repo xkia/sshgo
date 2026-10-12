@@ -26,7 +26,28 @@ class ConnectionRuntime:
         self.output_is_tty = output_is_tty or self._default_output_is_tty
 
     def execute(self, plan):
+        context_path = None
         try:
+            if plan.notice:
+                print(plan.notice, file=self.error_output)
+            launch_args = plan.launch_args()
+            if plan.session:
+                from session_shortcuts import create_context
+                from i18n import i18n
+                if not (sys.stdin.isatty() and self.output_is_tty()):
+                    if plan.session.get("required"):
+                        raise ValueError(i18n.get("shortcuts_tty_required"))
+                    print(i18n.get("shortcuts_tty_required"), file=self.error_output)
+                else:
+                    try:
+                        context_path = create_context(plan.session)
+                    except (ValueError, OSError) as exc:
+                        if plan.session.get("required"):
+                            raise
+                        print(i18n.get("shortcuts_error", error=exc), file=self.error_output)
+                        print(i18n.get("shortcuts_disabled"), file=self.error_output)
+                    if context_path:
+                        launch_args += ["-session-context", context_path]
             self.emit_terminal_title(plan)
             self.record_plan_audit(plan, plan.start_result)
             self.ensure_executable(plan.script_path)
@@ -36,7 +57,7 @@ class ConnectionRuntime:
             path_parts = env.get("PATH", "").split(os.pathsep)
             if python_dir and python_dir not in path_parts:
                 env["PATH"] = os.pathsep.join([python_dir] + path_parts)
-            os.execve(plan.script_path, plan.launch_args(), env)
+            os.execve(plan.script_path, launch_args, env)
         except FileNotFoundError:
             self.record_plan_audit(plan, plan.missing_result)
             if plan.missing_message:
@@ -50,6 +71,15 @@ class ConnectionRuntime:
                     file=self.error_output,
                 )
             sys.exit(1)
+
+        except ValueError as e:
+            print(str(e), file=self.error_output)
+            sys.exit(1)
+        finally:
+            if context_path:
+                # Runs only on exec failure; live cleanup belongs to Expect.
+                import shutil
+                shutil.rmtree(os.path.dirname(context_path))
 
     def record_plan_audit(self, plan, result):
         audit = plan.audit

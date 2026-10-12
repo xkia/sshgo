@@ -3,7 +3,7 @@
 ## Metadata
 
 - status: current baseline complete
-- last_reviewed: 2026-09-18
+- last_reviewed: 2026-10-12
 - active_work: none
 
 ## Delivered Baseline
@@ -12,6 +12,7 @@
 |---|---|---|---|
 | Configuration and data | done | JSONC-only config, strict saved-node schema, stable IDs, atomic conflict-aware saves, three rotated backups, restore commands, one always-on `history.jsonl` recording every operation (starts and exec failures), optional full-audit context, and Recent resolution | [configuration-and-data.md](specs/configuration-and-data.md) |
 | Connections and transfers | done with manual-smoke residual | Independent jump/target auth, strict host keys, shell/tunnel SSH, tunnel/relay transfer, custom proxies, batch SFTP, interactive SFTP, and optional terminal titles | [connections-and-transfers.md](specs/connections-and-transfers.md) |
+| Session file shortcuts | done with live-environment residual | Global/node opt-in CLI/TUI sget/sput, automatic sh/dash/bash/zsh initialization using private temporary text files, local confirmation, private SSH reuse and existing SFTP/relay runners; 318 regular tests and 21 isolated SSH tests passed on 2026-10-12 | [connections-and-transfers.md](specs/connections-and-transfers.md) |
 | CLI and TUI | done | Ambiguity-safe aliases, safe previews, local diagnostics, save-time validation, wide-text editing, resolved details, and explicit terminal screen policy | [cli-and-tui.md](specs/cli-and-tui.md) |
 | Architecture and reliability | done | Focused stdlib modules, Expect handoff, start-oriented audit, defensive validation, executable checks, and one repository verification command | [architecture-and-reliability.md](specs/architecture-and-reliability.md) |
 | Documentation consolidation | done | Current behavior is owned by four domain specs; completed process records remain available through Git history | [documentation-structure.md](specs/documentation-structure.md) |
@@ -21,6 +22,7 @@
 | Area | Status | Boundary |
 |---|---|---|
 | Real prompt variants | accepted manual-smoke risk | Fake-process coverage exercises password, passphrase, MFA, host-key, and ambiguous hop routing; real SSH/SFTP environments should be smoke-tested when these paths change. |
+| Session shortcut deployment | loopback verified; real-environment smoke pending | Direct/SFTP, tunnel/SFTP, shell/SFTP and shell/relay upload/download and cancellation verified with isolated OpenSSH. Shell cases disable TCP forwarding. Automatic sh/dash/bash/zsh startup, prompt input without an extra Enter (including delayed probing), user profiles, private text permissions/cleanup, Chinese/space paths, native SFTP progress and prompt restoration after completion/cancellation/failure, forced-menu input isolation, manual encrypted-key authentication, missing-master no-reauth, target close and TERM tested. Real password/MFA servers, restricted bastions, other OpenSSH/terminal variants, network loss/SIGKILL and orphaned remote channels are not proven by these tests. Finite ControlPersist is only an idle fallback; unknown cleanup residue requires inspection. |
 | Plain credentials | accepted user boundary | `password` and `mfa_secret` are plaintext in config and backups. Users protect file permissions or use keys, agent, and manual prompts. Reopen only if plaintext secrets stop being acceptable; indirecting them changes a documented product boundary and needs a focused spec. |
 | Final session results | deferred, re-evaluated 2026-09-18 | Python uses `execve` and cannot record final exit status, duration, or commands typed in interactive sessions. Expect could report exit status within the current handoff, but no workflow consumes it, so the work stays deferred. Separately, `login.exp` does not propagate the SSH child's status, so `sshgo <alias> <command>` exits 0 on its normal paths. |
 | SSH config import | accepted non-goal | Import is intentionally partial; it is not a complete OpenSSH configuration implementation. |

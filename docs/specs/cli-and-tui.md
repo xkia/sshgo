@@ -4,6 +4,7 @@
 
 - slug: cli-and-tui
 - status: approved
+- last_updated: 2026-10-12
 - related_roadmap: docs/roadmap.md
 
 ## Scope
@@ -34,6 +35,45 @@ initial SSH command.
 
 Unsupported deeper-than-direct jump topology is rejected by config validation and
 again by runtime planning.
+
+## Session Shortcut Interaction
+
+`--session-shortcuts` and `--no-session-shortcuts` are mutually exclusive per-run
+overrides of global OR target-node `session_shortcuts_enabled` (both default false);
+options precede the alias. Without an alias they apply to TUI Enter via the same planner. Explicit enable
+requires interactive stdin/stdout and rejects initial commands, upload/download and
+`--sftp`. Read-only `--print-command` creates no context or socket. With config/node
+enable, noninteractive launches and unavailable combinations retain ordinary SSH
+with a notice. TUI details report planned availability, not a proven live capability.
+
+Supported target shells initialize automatically through private text startup files.
+One informational line is printed before SSH starts. The READY handshake and channel
+probe complete silently, leaving the remote prompt intact; no extra Enter or Ctrl+]
+sequence is needed. Input typed during the startup probe remains queued for the shell.
+Only actual transfer prompts take exclusive keyboard input and drain pending keys. Initialization never sends a script to a foreground menu/editor.
+The endpoint and authenticated identity are frozen at login and do not follow manual
+nested SSH, `su` or another shell. Local relative paths and default downloads use the
+cwd where this session launched sshgo, never the wrapper/script installation directory.
+
+- `sget <remote-file> [local-destination]` uses remote PWD for relative source paths;
+  local paths resolve against the local launch directory, with local tilde expansion.
+  Default local destination is the source basename. An existing local directory gets
+  that basename appended.
+- `sput [local-file] [remote-destination]` prompts locally when source is omitted.
+  It uploads one existing regular file to remote PWD by default. An explicit trailing
+  slash destination appends the local basename; other destinations are literal.
+- Each request shows both endpoints. New downloads accept Enter/y; existing local
+  destinations and uploads (remote existence unknown) require `y`, default cancel.
+  Quote local `~` arguments to prevent remote shell expansion.
+- NUL, CR/LF, double quotes, backslash and wildcard syntax are rejected, consistent
+  with the restricted batch adapter. No directory, multi-file or shell execution
+  request is accepted. Shell functions return request emission status only.
+- During the local operation, keyboard input is exclusive to its helper; stale
+  pending input is drained before confirmation. Remote logs are drained into a
+  bounded buffer starting immediately after the request frame. The transfer result
+  (or cancellation/failure) is printed before replaying that output and the remote
+  prompt, so no extra Enter is needed. Overflow is reported before replay. Esc/Ctrl+C cancels
+  this operation, then terminal mode and input return to SSH.
 
 ## Read-only And Recovery Commands
 

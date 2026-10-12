@@ -396,6 +396,7 @@ exit 255
         remote_path="/tmp/remote.txt",
         target_pass=None,
         mfa_secret=None,
+        process_timeout=5,
     ):
         with tempfile.TemporaryDirectory() as temp_dir:
             fake_sftp = os.path.join(temp_dir, "sftp")
@@ -489,6 +490,11 @@ fi
 if [ "$mode" = "success_without_prompt" ]; then
     exit 0
 fi
+if [ "$mode" = "slow_batch" ]; then
+    printf 'sftp> get "remote.txt" "local.txt"\n'
+    sleep 22
+    exit 0
+fi
 if [ "$has_batch" = "0" ]; then
     printf 'sftp> '
 fi
@@ -524,7 +530,7 @@ exit 0
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=5,
+                timeout=process_timeout,
             )
             metadata = {}
             if os.path.exists(meta_path):
@@ -536,6 +542,14 @@ exit 0
                 )
             result.sftp_meta = metadata
             return result
+
+    def test_batch_copy_can_be_silent_longer_than_login_timeout(self):
+        result = self._run_sftp_with_fake_binary(
+            "slow_batch", action="download", process_timeout=30,
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("Connection timed out", result.stdout + result.stderr)
+        self.assertFalse(result.sftp_meta["batch_exists_after"])
 
     def test_sftp_exp_exits_nonzero_when_session_fails_before_prompt(self):
         result = self._run_sftp_with_fake_binary("connect_fail")
@@ -702,7 +716,7 @@ exit 0
         self.assertEqual(upload.sftp_meta["batch_mode"], "0600")
         self.assertEqual(
             upload.sftp_meta["batch_content"],
-            'put "local.txt" "/tmp/remote.txt"\n',
+            'progress\nput "local.txt" "/tmp/remote.txt"\n',
         )
         self.assertFalse(upload.sftp_meta["batch_exists_after"])
 
@@ -715,7 +729,7 @@ exit 0
         self.assertEqual(download.returncode, 0, download.stdout + download.stderr)
         self.assertEqual(
             download.sftp_meta["batch_content"],
-            'get "/tmp/remote.txt" "local.txt"\n',
+            'progress\nget "/tmp/remote.txt" "local.txt"\n',
         )
         self.assertFalse(download.sftp_meta["batch_exists_after"])
 
@@ -729,7 +743,7 @@ exit 0
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(
             result.sftp_meta["batch_content"],
-            'put "./测试文件.zip" "/remote/测试文件.zip"\n',
+            'progress\nput "./测试文件.zip" "/remote/测试文件.zip"\n',
         )
 
     def test_sftp_exp_removes_stale_batch_files_before_transfer(self):

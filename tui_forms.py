@@ -310,6 +310,14 @@ def host_form_fields(
     fields.extend(
         [
             {
+                "label": i18n.get("shortcuts_node_enable"),
+                "type": "toggle",
+                "name": "session_shortcuts_enabled",
+                "checkbox": True,
+                "advanced": True,
+                "value": values.get("session_shortcuts_enabled", False),
+            },
+            {
                 "label": i18n.get("ssh_jump_mode"),
                 "type": "radio",
                 "name": "ssh_jump_mode",
@@ -386,6 +394,8 @@ def host_node_from_form(final_data):
     }
     if port != DEFAULT_PORT:
         node["port"] = port
+    if data.get("session_shortcuts_enabled"):
+        node["session_shortcuts_enabled"] = True
     for key in ("ssh_jump_mode", "transfer_jump_mode"):
         if data.get(key) != "default":
             node[key] = data.get(key)

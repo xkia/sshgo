@@ -128,6 +128,53 @@ sshgo
     ```
     该命令会使用 sshgo 的主机解析、认证、MFA、host key 策略以及 direct/tunnel 跳板规划打开标准 OpenSSH `sftp>` 提示符。位置参数形式 `sshgo <主机别名> sftp` 仍然表示通过 SSH 执行远端命令 `sftp`。
 
+### 在远端 shell 内快捷传输
+
+```bash
+sshgo --session-shortcuts <主机别名>
+# 登录后自动初始化，远端提示符出现后直接输入命令，无须额外回车确认。
+sget app.log                  # 下载到本地启动 sshgo 时的目录
+sget app.log '~/Downloads/'    # 本地 ~ 加引号，避免在远端展开
+sput                          # 在本地输入文件路径，再确认上传
+sput '~/build/app.zip'         # 上传到当前远端目录
+```
+
+每次传输都会显示两端路径并在本地确认。上传或本地下载目标已存在时必须输入
+`y`，直接回车取消覆盖。Esc 或 Ctrl+C 取消本次本地操作并返回 SSH。SFTP 显示原生传输进度；完成或取消后
+自动显示远端提示符，无须额外回车。空格和中文
+路径可以加 shell 引号使用；仅支持单个普通文件，不支持目录、通配符或多文件。
+
+可在全局 `config` 或单个 host 节点设置 `session_shortcuts_enabled: true`。
+全局为 true 时所有受支持节点启用；全局为 false（默认）时，仅节点明确为 true
+才启用。节点 false 不能覆盖全局 true，父节点设置不向子节点继承。CLI 与 TUI
+Enter 共用这一规则；TUI 主机编辑的“高级”区域提供节点复选框。
+`--session-shortcuts` / `--no-session-shortcuts` 优先级最高，仅影响本次运行。
+
+```json
+{
+  "config": {"session_shortcuts_enabled": false},
+  "hosts": [
+    {"type": "host", "name": "server", "host": "server.example.com",
+     "user": "alice", "session_shortcuts_enabled": true}
+  ]
+}
+```
+
+普通 sh/dash、bash（含 3.2）、zsh 登录后自动初始化。路径编码只使用 shell 内建
+能力，无须 `od`/`tr`/`hexdump`；私有临时文本启动文件在正常退出时清理。远端不安装二进制、不修改用户 profile，函数
+只存在于当前 shell。登录时准备私有 OpenSSH master，传输复用已有认证；master
+消失时直接失败，不重新认证。
+
+支持 direct/SFTP、tunnel/SFTP、shell/SFTP 和 shell/relay。shell/SFTP 使用跳板
+exec 通道，无须 TCP forwarding；独立传输命令仍使用原逻辑。此入口不支持
+tunnel/relay。仍要求相应 exec/subsystem 权限及已有 OpenSSH 工具。菜单型或
+受限 shell、特殊启动脚本可能无法启用快捷功能。手动 `ssh`、`su` 或 `sudo -s`
+不会改变绑定的主机和身份。不能与初始远端命令或 `--sftp` 组合。
+
+函数只提交请求，其 shell 返回值不代表传输成功；请以本地完成/失败提示为准。
+正常退出会清理私有 master 和上下文；突然断网或 SIGKILL 可能留下资源，需要
+检查提示位置。ControlPersist 的 30 秒超时只在连接空闲时生效。
+
 ### 全局选项
 
 | 选项 | 用途 |
@@ -138,6 +185,7 @@ sshgo
 | `--list-backups` | 列出当前配置文件的轮转备份。 |
 | `--restore-backup <index>` | 按索引恢复 `hosts.json.bak`、`.bak.1` 或 `.bak.2`。 |
 | `--print-command <主机别名> ...` | 打印解析后的 SSH/SFTP/传输移交命令, 不发起连接。 |
+| `--session-shortcuts` / `--no-session-shortcuts` | 本次启用/关闭会话文件快捷操作，覆盖配置；放在主机别名前。 |
 | `--sftp <主机别名>` | 为 direct 或 tunnel 主机打开交互式 `sftp>` 提示符。 |
 | `--audit-full` | 对当前进程启用完整审计记录。记录中可能包含命令/路径上下文。 |
 | `-e <路径>, --extra-config <路径>` | 仅当前进程使用其他配置文件或配置目录。 |
@@ -223,6 +271,7 @@ sshgo 会自动为已保存的主机和分组节点维护内部 `id` 字段, 用
 | `default_ssh_jump_mode` | 嵌套 SSH 默认模式: `shell` 或 `tunnel`。 |
 | `default_transfer_jump_mode` | 嵌套传输默认模式: `tunnel` 或 `relay`。 |
 | `relay_temp_dir` | relay 传输在跳板机上的绝对临时目录。 |
+| `session_shortcuts_enabled` | 默认 `false`；为 CLI/TUI SSH 登录启用远端 sget/sput 入口。 |
 | `relay_transfer_timeout` | relay 文件复制阶段的 Expect timeout 秒数；`0` 表示禁用该传输 timeout。 |
 | `placeholders` | 可在部分连接字段中以 `{{name}}` 使用的字符串占位符。 |
 | `theme` | 可选 TUI 颜色: `black`、`red`、`green`、`yellow`、`blue`、`magenta`、`cyan`、`white`、`default`。 |

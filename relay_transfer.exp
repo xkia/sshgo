@@ -32,6 +32,7 @@ set local_path ""
 set remote_path ""
 set temp_path ""
 set print_command ""
+set reuse_context ""
 set jumper_proxy_command ""
 set command_timeout 30
 set transfer_timeout 1800
@@ -49,6 +50,7 @@ while {$i < $argc} {
     set value [lindex $argv $i]
     incr i
     switch -exact -- $arg {
+        "-reuse-context" { set reuse_context $value }
         "-h" { set host $value }
         "-u" { set user $value }
         "-P" { set port $value }
@@ -105,6 +107,8 @@ if {[info exists env(SSHGO_PYTHON_EXECUTABLE)]} {
 
 set script_dir [file dirname [file normalize [info script]]]
 set auth_py [file join $script_dir "auth.py"]
+if {$reuse_context != ""} {source [file join $script_dir session_reuse.exp]}
+if {$reuse_context != ""} {reuse_relay_init}
 set timeout $command_timeout
 
 proc cleanup_tty {} {
@@ -256,6 +260,7 @@ proc common_ssh_options {host_key_checking} {
 }
 
 proc auth_response {stage kind} {
+    if {$::reuse_context != ""} {reuse_auth_error}
     global jumper_pass target_pass jumper_mfa_secret mfa_secret auth_py python_executable
     if {$kind == "password"} {
         if {$stage == "jump"} {
@@ -356,6 +361,7 @@ proc expect_auth_until_eof {stage {fatal 1} {timeout_message "\nRelay transfer t
             if {!$output_visible} {
                 puts -nonewline $expect_out(0,string)
             }
+            if {$::reuse_context != ""} {reuse_auth_error}
             send -i $expect_out(spawn_id) "yes\r"
             exp_continue
         }
@@ -438,6 +444,7 @@ proc run_jump_command {command expects_target_auth fatal {timeout_context ""}} {
     global jump_host jump_user jump_port jumper_id_file host_key_checking jumper_proxy_command timeout command_timeout spawn_id
     set jump_target [target_string $jump_user $jump_host]
     set cmd [list ssh]
+    if {$::reuse_context != ""} {set cmd [reuse_args local ssh]}
     foreach opt [common_ssh_options $host_key_checking] {
         lappend cmd $opt
     }
@@ -476,6 +483,7 @@ proc run_jump_command {command expects_target_auth fatal {timeout_context ""}} {
             if {!$output_visible} {
                 puts -nonewline $expect_out(0,string)
             }
+            if {$::reuse_context != ""} {reuse_auth_error}
             send -i $expect_out(spawn_id) "yes\r"
             exp_continue
         }
@@ -573,6 +581,7 @@ proc build_local_scp_to_jump {source dest {legacy 0}} {
     global jump_host jump_user jump_port jumper_id_file host_key_checking jumper_proxy_command
     set jump_target [scp_target_string $jump_user $jump_host]
     set cmd [list scp]
+    if {$::reuse_context != ""} {set cmd [reuse_args local scp]}
     if {$legacy} {
         lappend cmd -O
     }
@@ -596,6 +605,7 @@ proc build_local_scp_from_jump {source dest {legacy 0}} {
     global jump_host jump_user jump_port jumper_id_file host_key_checking jumper_proxy_command
     set jump_target [scp_target_string $jump_user $jump_host]
     set cmd [list scp]
+    if {$::reuse_context != ""} {set cmd [reuse_args local scp]}
     if {$legacy} {
         lappend cmd -O
     }
@@ -619,6 +629,7 @@ proc build_local_sftp_to_jump {} {
     global jump_host jump_user jump_port jumper_id_file host_key_checking jumper_proxy_command
     set jump_target [target_string $jump_user $jump_host]
     set cmd [list sftp]
+    if {$::reuse_context != ""} {set cmd [reuse_args local sftp]}
     foreach opt [common_ssh_options $host_key_checking] {
         lappend cmd $opt
     }
@@ -661,6 +672,7 @@ proc run_local_sftp_transfer {cmd transfer_command stage timeout_context} {
             if {!$output_visible} {
                 puts -nonewline $expect_out(0,string)
             }
+            if {$::reuse_context != ""} {reuse_auth_error}
             send -i $expect_out(spawn_id) "yes\r"
             exp_continue
         }
@@ -738,7 +750,24 @@ proc target_scp_spec {path} {
 
 proc target_scp_command {source dest {legacy 0}} {
     global port id_file host_key_checking
+    if {$::reuse_context != "" && $legacy} {
+        # Legacy SCP passes the remote path through a second shell. Preserve its
+        # quoting there as well as in the jump-host command assembled below.
+        set prefix "[scp_target_string $::user $::host]:"
+        foreach name {source dest} {
+            set value [set $name]
+            if {[string first $prefix $value] == 0} {
+                # Backslash quoting survives the remote shell and SCP's own
+                # fnmatch filename check; surrounding quotes become part of that
+                # check's pattern and incorrectly reject downloads with spaces.
+                set path [string range $value [string length $prefix] end]
+                regsub -all {([^[:alnum:]_./-])} $path {\\\1} path
+                set $name "$prefix$path"
+            }
+        }
+    }
     set parts [list scp]
+    if {$::reuse_context != ""} {set parts [reuse_args remote scp]}
     if {$legacy} {
         lappend parts -O
     }
@@ -817,6 +846,22 @@ proc run_jump_scp_with_protocol_fallback {legacy_command default_command timeout
 
 if {![string is integer -strict $transfer_timeout] || $transfer_timeout < 0} {
     fail "\nInvalid relay transfer timeout: $transfer_timeout\n" 1
+}
+
+proc reuse_cancel {code} {
+    global temp_path reuse_cancelling
+    if {[info exists reuse_cancelling]} {exit $code}
+    set reuse_cancelling 1
+    catch {exec kill -TERM [exp_pid]}
+    catch {close}
+    catch {cleanup_temp_path $temp_path}
+    cleanup_tty
+    exit $code
+}
+if {$reuse_context != ""} {
+    trap {reuse_cancel 130} INT
+    trap {reuse_cancel 143} TERM
+    trap {reuse_cancel 129} HUP
 }
 
 if {$print_command != ""} {
