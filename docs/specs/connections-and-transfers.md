@@ -4,7 +4,7 @@
 
 - slug: connections-and-transfers
 - status: approved
-- last_updated: 2026-10-12
+- last_updated: 2026-10-16
 - related_roadmap: docs/roadmap.md
 
 ## Scope
@@ -202,6 +202,14 @@ produce a notice. Failed probes also show a bounded diagnostic with control
 characters escaped (at most 1024 displayed characters); successful probe output
 remains hidden. Channel errors and probe timeouts are distinguished.
 Prompt glyphs and command echo are not readiness proof.
+Shortcut sessions use the same explicit output renderer during authentication and
+interaction; Expect automatic logging remains off. Incoming chunks are rendered
+immediately without waiting for newline or a recognized prompt. A separate 8192-character
+recognition tail drives login events; trimming it never drops displayed text.
+The existing bounded OSC parser handles split READY frames independently of that
+tail. READY and a prompt arriving together are displayed/processed only once.
+The shortcut login loop reuses the existing credential selection, MFA generation,
+target launch and interactive loop. Ordinary SSH retains its existing login flow.
 No target initialization program is typed into the terminal, including ForceCommand
 menus. Missing tools, name conflicts, unavailable channels and timeout disable only
 the shortcut. Input remains ordinary SSH; there is no manual init shortcut.
@@ -233,9 +241,13 @@ known-hosts storage remains on the jump host.
 Manual authentication monitors both keyboard input and the SSH channel. SSH/terminal
 EOF, cancellation or a 120-second per-prompt deadline restores terminal state and
 uses normal session cleanup; remote output or partial typing does not reset the deadline.
-Asynchronous completion (for example, push MFA) returns READY, initialization failure,
-shell readiness and login-error events to the main login state machine without
-consuming them or requiring Enter. Fragmented events remain in Expect's buffer.
+Ctrl+C and terminal EOF are also handled while waiting for connection or automatic
+authentication; ordinary keystrokes stay queued until manual input is needed.
+Asynchronous completion (for example, push MFA) produces READY, initialization failure,
+shell readiness and login-error events without requiring Enter. Fragmented events
+are recognized across incoming chunks; banner output and partial typing do not
+extend the active deadline. Verification must cover unterminated prompts, long
+unbroken output, split events, manual input, handoff and terminal restoration.
 
 `login.exp` owns keyboard routing, bounded terminal metadata parsing, one pending
 request and one helper. Each transfer requires local confirmation; remote output is

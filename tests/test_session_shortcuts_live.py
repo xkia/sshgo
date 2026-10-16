@@ -153,6 +153,11 @@ class LiveSessionTests(unittest.TestCase):
         profile.write_text("printf 'MFA: approve on phone\\n'; sleep 0.3\n" + profile.read_text())
         self.login_roundtrip('direct', 'tunnel')
 
+    def test_cancel_while_waiting_for_login(self):
+        profile = self.dir / '.bash_profile'
+        profile.write_text("printf 'WAITING_FOR_LOGIN\\n'; read -r waiting\n" + profile.read_text())
+        self.login_roundtrip('direct', 'tunnel', cancel_login=True)
+
     def test_input_at_prompt_during_startup_probe(self):
         (self.dir/'delay-subsystem').touch()
         self.login_roundtrip('direct', 'tunnel')
@@ -197,7 +202,7 @@ class LiveSessionTests(unittest.TestCase):
     def test_target_exit_cancels_pending_confirmation(self):
         self.login_roundtrip('shell', 'tunnel', close_pending=True)
 
-    def login_roundtrip(self, mode, transfer, close_pending=False, manual_key=False, active=False, terminate=False, menu=False):
+    def login_roundtrip(self, mode, transfer, close_pending=False, manual_key=False, active=False, terminate=False, menu=False, cancel_login=False):
         if manual_key:
             subprocess.run(['ssh-keygen', '-q', '-p', '-P', '', '-N', 'fixture-pass', '-f', str(self.dir/'key')], check=True, capture_output=True)
         path,data=self.context(mode,transfer)
@@ -231,8 +236,23 @@ class LiveSessionTests(unittest.TestCase):
                     except OSError: break
                     output+=chunk
             self.assertIn(token,output,output.decode(errors='replace'))
-            output=output.split(token,1)[1]
-        until(b'sget/sput will initialize automatically after login; only file transfers require confirmation.')
+            before, output = output.split(token, 1)
+            return before
+        until(b'File shortcuts: sget / sput')
+        if cancel_login:
+            until(b'WAITING_FOR_LOGIN')
+            os.write(fd, b'\x03')
+            until(b'Transfer cancelled.', timeout=15)
+            self.assertEqual(130, proc.wait(timeout=5))
+            self.assertFalse(Path(path).exists())
+            startup_dir = Path('/tmp/sg-init-' + data['session'])
+            for _ in range(20):
+                if not startup_dir.exists(): break
+                time.sleep(.05)
+            self.assertFalse(startup_dir.exists())
+            mask = termios.ICANON | termios.ECHO
+            self.assertEqual(initial_terminal[3] & mask, termios.tcgetattr(fd)[3] & mask)
+            return
         if menu:
             until(b'MENU $ ')
             time.sleep(.5)
@@ -253,7 +273,9 @@ class LiveSessionTests(unittest.TestCase):
         self.assertEqual(0o700, startup_dir.stat().st_mode & 0o777)
         self.assertTrue(all(p.stat().st_mode & 0o777 == 0o600 for p in startup_dir.iterdir()))
         os.write(fd, b"printf 'PROFILE_%s\\n' \"$SSHGO_TEST_PROFILE\"; umask\r")
-        until(b'PROFILE_loaded')
+        before_profile = until(b'PROFILE_loaded')
+        self.assertNotIn(b'SSHGO_TEST_PROMPT> ', before_profile,
+                         'Initial prompt was displayed twice before the first command completed')
         until(b'022')
         os.write(fd,f'cd {remote_directory}; sget ./良渚密码.pdf\r'.encode())
         until(b'Start transfer?')

@@ -149,67 +149,122 @@ log_user 0
         self.assertEqual(0, result.returncode, result.stderr.decode())
 
     @unittest.skipUnless(shutil.which('expect'), 'Expect required')
-    def test_manual_auth_handles_remote_eof_and_restores_terminal(self):
+    def test_login_stream_displays_unterminated_text_before_input(self):
         self.run_expect_case(r'''
+set ss_login_scan ""
 spawn /bin/cat
 set user_spawn_id $spawn_id
 set keyboard $spawn_id
-spawn /bin/sh -c {printf disconnected; exit 0}
-proc fail {message code} {set ::failed $message; error handled}
-check {[catch {ss_manual_auth}] == 1}
-check {$restored && $failed == [dict get $ss_data shortcuts_auth_closed]}
+spawn $python_executable -c {import sys,time; sys.stdout.write(' Approve sign-in on your phone'); sys.stdout.flush(); time.sleep(5)}
+set remote $spawn_id
+after 150 {check {$rendered == " Approve sign-in on your phone"}; send -i $keyboard -- "\r"}
+check {[lindex [ss_login_event 1 2] 0] == "submitted"}
+catch {close -i $remote}
 catch {close -i $keyboard}
 ''')
 
     @unittest.skipUnless(shutil.which('expect'), 'Expect required')
-    def test_manual_auth_timeout_restores_terminal(self):
+    def test_login_cancel_before_auth_restores_terminal_without_forwarding_keys(self):
         self.run_expect_case(r'''
-spawn /bin/cat
+set connection_stage target
+proc fail {message code} {set ::exit_code $code; error $message}
+spawn $python_executable -c {import sys,time; time.sleep(.1); sys.stdout.write('queued\x03'); sys.stdout.flush(); time.sleep(5)}
 set user_spawn_id $spawn_id
 set keyboard $spawn_id
 spawn /bin/cat
 set remote $spawn_id
-rename expect original_expect
-proc expect args {
-    uplevel 1 {set timeout 0}
-    uplevel 1 [list original_expect {*}$args]
-}
-proc fail {message code} {set ::failed $message; error handled}
-check {[catch {ss_manual_auth}] == 1}
-check {$restored && $failed == [dict get $ss_data shortcuts_auth_timeout]}
-catch {close -i $keyboard}
+set started [clock milliseconds]
+check {[catch {ss_login}] == 1}
+check {$exit_code == 130 && $restored && $rendered == ""}
+check {[clock milliseconds]-$started < 1500}
 catch {close -i $remote}
+catch {close -i $keyboard}
 ''')
 
     @unittest.skipUnless(shutil.which('expect'), 'Expect required')
-    def test_manual_auth_preserves_async_login_events_without_keyboard_input(self):
-        for event in ('ready', 'unavailable', 'prompt', 'denied'):
+    def test_login_ordinary_keys_remain_queued_until_auth(self):
+        self.run_expect_case(r'''
+set ss_login_scan ""
+spawn $python_executable -c {import sys,time; sys.stdout.write('queued'); sys.stdout.flush(); time.sleep(5)}
+set user_spawn_id $spawn_id
+set keyboard $spawn_id
+spawn /bin/sh -c {sleep .2; printf 'Password: '; sleep 5}
+set remote $spawn_id
+check {[lindex [ss_login_event 0 2] 0] == "password"}
+set timeout 0
+expect {
+    -i $keyboard -exact queued {}
+    timeout {error "ordinary input was consumed before authentication"}
+}
+catch {close -i $remote}
+catch {close -i $keyboard}
+''')
+
+    @unittest.skipUnless(shutil.which('expect'), 'Expect required')
+    def test_login_stream_preserves_long_text_and_split_events(self):
+        self.run_expect_case(r'''
+set ss_login_scan ""
+spawn /bin/cat
+set user_spawn_id $spawn_id
+set keyboard $spawn_id
+set wire "${ss_prefix}ready;[dict get $ss_data ready_nonce]\007"
+spawn $python_executable -c {import sys,time; sys.stdout.write('x'*20000); sys.stdout.flush(); time.sleep(.1); sys.stdout.write(sys.argv[1][:9]); sys.stdout.flush(); time.sleep(.1); sys.stdout.write(sys.argv[1][9:]+'PROMPT> '); sys.stdout.flush(); time.sleep(5)} $wire
+check {[lindex [ss_login_event 0 2] 0] == "ready"}
+check {$rendered == "[string repeat x 20000]PROMPT> "}
+check {[string length $ss_login_scan] <= 8192}
+catch {close}
+catch {close -i $keyboard}
+''')
+
+    @unittest.skipUnless(shutil.which('expect'), 'Expect required')
+    def test_login_stream_handles_manual_eof_timeout_and_events(self):
+        for event in ('eof', 'timeout', 'ready', 'unavailable', 'shell', 'error'):
             with self.subTest(event=event):
                 self.run_expect_case('set event ' + event + '\n' + r'''
+set ss_login_scan ""
 spawn /bin/cat
 set user_spawn_id $spawn_id
 set keyboard $spawn_id
 switch $event {
-    ready {set wire "\033\]777;sshgo;ready;nonce\007"}
-    unavailable {set wire "\033\]777;sshgo;unavailable;session\007"}
-    prompt {set wire "REMOTE_PROMPT> "}
-    denied {set wire "Permission denied"}
+    eof {set wire ""}
+    timeout {set wire ""}
+    ready {set wire "${ss_prefix}ready;[dict get $ss_data ready_nonce]\007"}
+    unavailable {set wire "${ss_prefix}unavailable;[dict get $ss_data session]\007"}
+    shell {set wire "REMOTE_PROMPT> "}
+    error {set wire "Permission denied"}
 }
-# Fragment the event across reads to catch accidental partial-frame consumption.
-spawn $python_executable -c {import sys,time; s=sys.argv[1]; print('MFA: approve on phone', flush=True); time.sleep(.1); sys.stdout.write(s[:10]); sys.stdout.flush(); time.sleep(.1); sys.stdout.write(s[10:]); sys.stdout.flush(); time.sleep(5)} $wire
+spawn $python_executable -c {import sys,time; sys.stdout.write(sys.argv[1]); sys.stdout.flush(); time.sleep(0 if sys.argv[2]=='eof' else 5)} $wire $event
 set remote $spawn_id
+set seconds [expr {$event == "timeout" ? 0 : 2}]
+set expected [expr {$event == "unavailable" ? "ready" : $event}]
+check {[lindex [ss_login_event 1 $seconds] 0] == $expected}
+catch {close -i $remote}
+catch {close -i $keyboard}
+''')
+
+    @unittest.skipUnless(shutil.which('expect'), 'Expect required')
+    def test_stream_login_restores_terminal_on_async_success_and_disconnect(self):
+        for outcome in ('ready', 'eof'):
+            with self.subTest(outcome=outcome):
+                self.run_expect_case('set outcome ' + outcome + '\n' + r'''
+set connection_stage target
+proc prompt_line text {return $text}
+proc prompt_auth_stage text {return target}
+proc auth_response {stage kind} {return ""}
 proc fail {message code} {error $message}
-set timeout 2
-expect {
-    -i $remote -exact "MFA: approve on phone" {
-        ss_manual_auth
-        check {$restored}
-        exp_continue
-    }
-    -i $remote -exact $wire {set received 1}
-    timeout {error "login event was consumed"}
-}
-check {$received == 1}
+rename ss_interact original_ss_interact
+proc ss_interact {} {check {$::restored}; set ::interactive 1}
+spawn /bin/cat
+set user_spawn_id $spawn_id
+set keyboard $spawn_id
+set wire "${ss_prefix}ready;[dict get $ss_data ready_nonce]\007"
+spawn $python_executable -c {import sys,time; print('MFA: approve on phone',end='',flush=True); time.sleep(.1); print(sys.argv[1] if sys.argv[2]=='ready' else '',end='',flush=True); time.sleep(.1)} $wire $outcome
+set remote $spawn_id
+set status [catch {ss_login} result]
+check {$restored}
+if {$outcome == "ready"} {
+    check {$status == 0 && $interactive}
+} else {check {$status == 1 && $result == [dict get $ss_data shortcuts_auth_closed]}}
 catch {close -i $remote}
 catch {close -i $keyboard}
 ''')

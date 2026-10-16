@@ -28,8 +28,6 @@ set target_pass ""
 set remote_command ""
 set print_command ""
 set session_context ""
-set session_ready_re {a^}
-set session_unavailable_re {a^}
 set custom_proxy_command ""
 set jumper_proxy_command ""
 set tunnel_proxy_command ""
@@ -273,7 +271,6 @@ proc handle_auth_prompt {kind} {
     set stage [prompt_auth_stage [prompt_line $expect_out(buffer)]]
     set response [auth_response $stage $kind]
     if {$response == ""} {
-        if {$::session_context != ""} {ss_manual_auth; return 1}
         interact
         return 0
     }
@@ -308,8 +305,6 @@ proc target_ssh_command {host port user id_file} {
 
 if {$session_context != ""} {
     source [file join $script_dir session_shortcuts.exp]
-    set session_ready_re "\\x1b\\]777;sshgo;ready;[dict get $ss_data ready_nonce]\\x07"
-    set session_unavailable_re "\\x1b\\]777;sshgo;unavailable;[dict get $ss_data session]\\x07"
     trap {cleanup; exit 143} TERM
     trap {cleanup; exit 129} HUP
 }
@@ -398,20 +393,17 @@ if {$session_context != ""} {puts [dict get $ss_data shortcuts_login_hint]}
 log_user 0
 spawn {*}$cmd
 configure_utf8_channel $spawn_id
-# Re-enable logging to show the user the remote shell
+# Shortcut sessions render consumed output explicitly, including authentication.
+# Ordinary SSH keeps Expect's automatic output handling.
+if {$session_context != ""} {
+    if {[catch {ss_login} message]} {fail $message 1}
+    cleanup
+    exit 0
+}
 log_user 1
 
 # Main expect loop
 expect {
-    -re $session_ready_re {
-        set ss_state announced
-        ss_interact; cleanup; exit 0
-    }
-    -re $session_unavailable_re {
-        set ss_state disabled
-        ss_message shortcuts_disabled
-        ss_interact; cleanup; exit 0
-    }
     -re {Are you sure you want to continue connecting.*yes/no} {
         send "yes\r"
         exp_continue
@@ -442,15 +434,8 @@ expect {
     -re $shell_ready_re {
         if {$connection_stage == "jumper"} {
             set connection_stage "target"
-            if {$session_context != ""} {ss_prepare_target}
             set target_cmd [target_ssh_command $host $port $user $id_file]
-            if {$session_context != ""} {
-                if {[catch {ss_wrap_target $target_cmd} wrapped]} {fail $wrapped 1}
-                set target_cmd $wrapped
-            }
-            if {$session_context != "" && $ss_state != "disabled"} {
-                ss_launch_target $target_cmd
-            } else {send "$target_cmd\r"}
+            send "$target_cmd\r"
             exp_continue
         }
 
@@ -477,7 +462,6 @@ expect {
             }
         } else {
             # Scenario: No initial command, go straight to interactive.
-            if {$session_context != ""} {ss_interact; cleanup; exit 0}
             interact {
                 eof {
                     return
@@ -487,7 +471,6 @@ expect {
     }
     timeout {
         if {$remote_command == "" && $connection_stage != "jumper"} {
-            if {$session_context != ""} {ss_interact; cleanup; exit 0}
             cleanup
             interact {
                 eof {

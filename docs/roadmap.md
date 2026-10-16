@@ -3,7 +3,7 @@
 ## Metadata
 
 - status: current baseline complete
-- last_reviewed: 2026-10-12
+- last_reviewed: 2026-10-16
 - active_work: none
 
 ## Delivered Baseline
@@ -12,7 +12,7 @@
 |---|---|---|---|
 | Configuration and data | done | JSONC-only config, strict saved-node schema, stable IDs, atomic conflict-aware saves, three rotated backups, restore commands, one always-on `history.jsonl` recording every operation (starts and exec failures), optional full-audit context, and Recent resolution | [configuration-and-data.md](specs/configuration-and-data.md) |
 | Connections and transfers | done with manual-smoke residual | Independent jump/target auth, strict host keys, shell/tunnel SSH, tunnel/relay transfer, custom proxies, batch SFTP, interactive SFTP, and optional terminal titles | [connections-and-transfers.md](specs/connections-and-transfers.md) |
-| Session file shortcuts | done with live-environment residual | Global/node opt-in CLI/TUI sget/sput, automatic sh/dash/bash/zsh initialization using private temporary text files, local confirmation, private SSH reuse and existing SFTP/relay runners; 318 regular tests and 21 isolated SSH tests passed on 2026-10-12 | [connections-and-transfers.md](specs/connections-and-transfers.md) |
+| Session file shortcuts | done with live-environment residual | Global/node opt-in CLI/TUI sget/sput, automatic sh/dash/bash/zsh initialization using private temporary text files, local confirmation, private SSH reuse and existing SFTP/relay runners; streaming login output and bounded event recognition; 321 regular tests and 22 isolated SSH tests passed on 2026-10-16; QNAP password login and single initial prompt verified | [connections-and-transfers.md](specs/connections-and-transfers.md) |
 | CLI and TUI | done | Ambiguity-safe aliases, safe previews, local diagnostics, save-time validation, wide-text editing, resolved details, and explicit terminal screen policy | [cli-and-tui.md](specs/cli-and-tui.md) |
 | Architecture and reliability | done | Focused stdlib modules, Expect handoff, start-oriented audit, defensive validation, executable checks, and one repository verification command | [architecture-and-reliability.md](specs/architecture-and-reliability.md) |
 | Documentation consolidation | done | Current behavior is owned by four domain specs; completed process records remain available through Git history | [documentation-structure.md](specs/documentation-structure.md) |

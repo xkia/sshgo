@@ -58,14 +58,24 @@ proc ss_wrap_target {command} {
     return "printf '\\033\]777;sshgo;launch;$sid\\007'; $command; printf '\\033\]777;sshgo;closed;$sid\\007'"
 }
 proc ss_launch_target {command} {
-    global spawn_id ss_data
+    global spawn_id ss_data expect_out ss_login_scan
     # Drain the echoed wrapper before normal prompt matching. A split echo ending
     # in %, $, # or > is not evidence that the target is authenticated and ready.
     send -i $spawn_id -- "$command\r"
     set timeout 10
     set marker "\033\]777;sshgo;launch;[dict get $ss_data session]\007"
+    set scan ""
     expect {
-        -i $spawn_id -exact $marker {}
+        -i $spawn_id -re {(?s).+} {
+            ss_output $expect_out(0,string)
+            append scan $expect_out(0,string)
+            set at [string first $marker $scan]
+            if {$at < 0} {
+                set scan [string range $scan end-[string length $marker] end]
+                exp_continue -continue_timer
+            }
+            set ss_login_scan [string range $scan [expr {$at+[string length $marker]}] end]
+        }
         -i $spawn_id eof {fail [dict get $ss_data shortcuts_launch_failed] 1}
         timeout {fail [dict get $ss_data shortcuts_launch_failed] 1}
     }
@@ -224,37 +234,101 @@ proc ss_diagnostic {text} {
     }
     send_user -- "\r\n[string range $safe 0 1023]\r\n"
 }
-proc ss_manual_auth {} {
-    global spawn_id user_spawn_id expect_out ss_terminal
-    global session_ready_re session_unavailable_re shell_ready_re
+# The recognition tail is independent of terminal output. Every received chunk
+# is rendered immediately; retaining only the tail never discards visible text.
+proc ss_login_event {manual seconds} {
+    global spawn_id user_spawn_id expect_out ss_state shell_ready_re ss_login_scan
+    set deadline [expr {[clock milliseconds]+$seconds*1000}]
+    set keyboard [expr {$manual ? $user_spawn_id : ""}]
+    while {1} {
+        if {$ss_state == "announced" || $ss_state == "closed"} {
+            return [list ready ""]
+        }
+        foreach {event pattern} [list \
+            hostkey {Are you sure you want to continue connecting.*yes/no} \
+            password {(?i)((password|passphrase)[: ]*|enter passphrase for key [^\r\n]*:) *$} \
+            mfa {(?i)(MFA|OTP|Verification code)[^\r\n]*:} \
+            error {(?i)Permission denied|Connection timed out|Operation timed out} \
+            shell $shell_ready_re] {
+            if {[regexp -indices -- $pattern $ss_login_scan match]} {
+                set end [lindex $match 1]
+                set text [string range $ss_login_scan 0 $end]
+                set ss_login_scan [string range $ss_login_scan [expr {$end+1}] end]
+                return [list $event $text]
+            }
+        }
+        if {[clock milliseconds] >= $deadline} {return [list timeout ""]}
+        set timeout 1
+        expect {
+            # Raw mode turns Ctrl+C into a byte. Always handle cancellation,
+            # while ordinary keys stay queued until a prompt needs input.
+            -i $user_spawn_id -exact "\003" {return [list cancel ""]}
+            -i $user_spawn_id eof {return [list eof ""]}
+            -i $spawn_id -re {(?s).+} {
+                set chunk $expect_out(0,string)
+                set previous_state $ss_state
+                ss_output $chunk
+                if {$previous_state != "disabled" && $ss_state == "disabled"} {return [list ready ""]}
+                append ss_login_scan $chunk
+                set ss_login_scan [string range $ss_login_scan end-8191 end]
+            }
+            -i $spawn_id eof {return [list eof ""]}
+            -i $keyboard -re {(?s).} {
+                set key $expect_out(0,string)
+                if {[catch {send -i $spawn_id -- $key}]} {return [list eof ""]}
+                if {$key == "\r" || $key == "\n"} {return [list submitted ""]}
+            }
+            timeout {}
+        }
+    }
+}
+proc ss_login {} {
+    global spawn_id ss_terminal ss_login_scan connection_stage host port user id_file ss_state
     set saved [stty -g]
     set ss_terminal $saved
     stty raw -echo
-    set timeout 120
-    set failure ""
-    set code 1
-    # Leave completion events in Expect's buffer for the main login state
-    # machine. In particular, push MFA may finish without a keyboard response.
-    set completed_re "(?:$session_ready_re)|(?:$session_unavailable_re)|(?:$shell_ready_re)"
-    expect {
-            -i $spawn_id -notransfer -re $completed_re {}
-            -i $spawn_id -notransfer -re {Permission denied|Connection timed out} {}
-            -i $spawn_id -notransfer -re {(?i)Operation timed out} {}
-            -i $spawn_id eof {set failure shortcuts_auth_closed}
-            -i $user_spawn_id -re {(?s).} {
-                set key $expect_out(0,string)
-                if {$key == "\003"} {
-                    set failure shortcuts_cancelled
-                    set code 130
-                } elseif {[catch {send -i $spawn_id -- $key}]} {
-                    set failure shortcuts_auth_closed
-                } elseif {$key != "\r" && $key != "\n"} {exp_continue -continue_timer}
+    set ss_login_scan ""
+    set manual 0
+    # Restore the terminal before handing off to the interactive loop, and on
+    # errors as well. fail() owns the existing master/context cleanup.
+    set status [catch {
+        set done 0
+        while {!$done} {
+            lassign [ss_login_event $manual [expr {$manual ? 120 : 20}]] event text
+            switch -- $event {
+                ready {set done 1}
+                shell {
+                    if {$connection_stage == "jumper"} {
+                        set connection_stage target
+                        ss_prepare_target
+                        set command [target_ssh_command $host $port $user $id_file]
+                        set command [ss_wrap_target $command]
+                        set ss_login_scan ""
+                        if {$ss_state != "disabled"} {ss_launch_target $command} else {send -- "$command\r"}
+                        set manual 0
+                    } else {set done 1}
+                }
+                hostkey {send -- "yes\r"; set manual 0}
+                password - mfa {
+                    set response [auth_response [prompt_auth_stage [prompt_line $text]] $event]
+                    set manual [expr {$response == ""}]
+                    if {!$manual} {send -- "$response\r"}
+                }
+                submitted {set manual 0; set ss_login_scan ""}
+                cancel {fail [dict get $::ss_data shortcuts_cancelled] 130}
+                eof {fail [dict get $::ss_data shortcuts_auth_closed] 1}
+                error {fail "" 1}
+                timeout {
+                    if {$manual} {fail [dict get $::ss_data shortcuts_auth_timeout] 1}
+                    if {$connection_stage == "jumper"} {fail [dict get $::ss_data shortcuts_launch_failed] 1}
+                    set done 1
+                }
             }
-            -i $user_spawn_id eof {set failure shortcuts_auth_closed}
-            timeout {set failure shortcuts_auth_timeout}
-    }
+        }
+    } result options]
     catch {stty $saved}
-    if {$failure != ""} {fail [dict get $::ss_data $failure] $code}
+    if {$status} {return -options $options $result}
+    ss_interact
 }
 proc ss_keyboard {key} {
     global ss_main
